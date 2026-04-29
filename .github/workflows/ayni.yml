@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./target/debug/ayni install --repo-root .
+          ./target/debug/ayni install --repo-root . --apply
           code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
