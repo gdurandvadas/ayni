@@ -1,0 +1,32 @@
+use crate::catalog::CatalogEntry;
+use crate::language::Language;
+use crate::runtime::{AdapterError, RunContext};
+use crate::signal::{SignalKind, SignalRow};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DetectResult {
+    pub detected: bool,
+    pub confidence: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanguageProfile {
+    pub language: Language,
+    pub default_file_globs: Vec<String>,
+}
+
+pub trait SignalCollector: Send + Sync {
+    fn collect(&self, kind: SignalKind, context: &RunContext) -> Result<SignalRow, AdapterError>;
+}
+
+pub trait LanguageAdapter: Send + Sync {
+    fn language(&self) -> Language;
+    fn detect(&self, root: &Path) -> DetectResult;
+    fn profile(&self) -> LanguageProfile;
+    fn catalog(&self) -> &'static [CatalogEntry];
+    fn collector(&self) -> &dyn SignalCollector;
+}

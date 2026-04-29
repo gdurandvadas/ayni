@@ -1,0 +1,48 @@
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["rust"]
+
+[concurrency]
+amount = 1
+
+[rust]
+roots = [
+  "core",
+  "adapters/rust",
+  "adapters/go",
+  "adapters/node",
+  "cli",
+]
+# Optional tool override examples:
+# [rust.tooling.test]
+# command = "cargo"
+# args = ["test"]
+#
+# [rust.tooling.coverage]
+# command = "cargo"
+# args = ["llvm-cov", "--workspace", "--json", "--summary-only"]
+#
+# [rust.tooling.mutation]
+# command = "cargo"
+# args = ["mutants", "--list"]
+
+[rust.size]
+"*.rs" = { warn = 1000, fail = 1600, exclude = ["target/**"] }
+
+[rust.complexity]
+fn_cyclomatic = { warn = 10, fail = 15 }
+fn_cognitive   = { warn = 20, fail = 30 }
+
+[rust.coverage]
+line_percent = { warn = 40, fail = 35 }
+
+[rust.deps.forbidden]
+"core"          = ["adapters/*", "cli"]
+"adapters/*"    = ["cli"]

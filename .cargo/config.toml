@@ -1,0 +1,2 @@
+[alias]
+doc-cli = "run -p ayni-cli -- generate-docs"

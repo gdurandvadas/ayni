@@ -1,0 +1,28 @@
+[package]
+name = "ayni-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ayni"
+path = "src/main.rs"
+
+[dependencies]
+ayni-core = { path = "../core" }
+ayni-adapters-go = { path = "../adapters/go" }
+ayni-adapters-node = { path = "../adapters/node" }
+ayni-adapters-rust = { path = "../adapters/rust" }
+clap = { version = "4", features = ["derive"] }
+clap-markdown = "0.1"
+crossterm = "0.29"
+owo-colors = "4"
+ratatui = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+unicode-width = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
