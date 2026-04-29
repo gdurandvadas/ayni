@@ -263,35 +263,43 @@ fn installer_summary(inst: &Installer) -> String {
         Installer::Cargo {
             crate_name,
             version,
-        } => match version {
-            Some(v) => format!("install: cargo install {crate_name} --version {v}"),
-            None => format!("install: cargo install {crate_name}"),
-        },
-        Installer::Rustup { component } => {
-            format!("install: rustup component add {component}")
-        }
-        Installer::GoInstall { module, version } => match version {
-            Some(v) => format!("install: go install {module}@{v}"),
-            None => format!("install: go install {module}@latest"),
-        },
-        Installer::NpmGlobal { package, version } => match version {
-            Some(v) => format!("install: npm install -g {package}@{v}"),
-            None => format!("install: npm install -g {package}"),
-        },
+        } => fmt_cargo_install(crate_name, *version),
+        Installer::Rustup { component } => format!("install: rustup component add {component}"),
+        Installer::GoInstall { module, version } => fmt_go_install(module, *version),
+        Installer::NpmGlobal { package, version } => fmt_npm_global(package, *version),
         Installer::NodePackage {
             package,
             version,
             dev,
-        } => {
-            let scope = if *dev { "devDependency" } else { "dependency" };
-            match version {
-                Some(v) => format!("install: add {scope} {package}@{v} via package manager"),
-                None => format!("install: add {scope} {package} via package manager"),
-            }
-        }
-        Installer::Custom { program, args } => {
-            format!("install: {} {}", program, args.join(" "))
-        }
+        } => fmt_node_package(package, *version, *dev),
+        Installer::Custom { program, args } => format!("install: {} {}", program, args.join(" ")),
+    }
+}
+
+fn fmt_cargo_install(crate_name: &str, version: Option<&str>) -> String {
+    match version {
+        Some(v) => format!("install: cargo install {crate_name} --version {v}"),
+        None => format!("install: cargo install {crate_name}"),
+    }
+}
+
+fn fmt_go_install(module: &str, version: Option<&str>) -> String {
+    let ver = version.unwrap_or("latest");
+    format!("install: go install {module}@{ver}")
+}
+
+fn fmt_npm_global(package: &str, version: Option<&str>) -> String {
+    match version {
+        Some(v) => format!("install: npm install -g {package}@{v}"),
+        None => format!("install: npm install -g {package}"),
+    }
+}
+
+fn fmt_node_package(package: &str, version: Option<&str>, dev: bool) -> String {
+    let scope = if dev { "devDependency" } else { "dependency" };
+    match version {
+        Some(v) => format!("install: add {scope} {package}@{v} via package manager"),
+        None => format!("install: add {scope} {package} via package manager"),
     }
 }
 

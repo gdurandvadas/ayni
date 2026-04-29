@@ -6,6 +6,10 @@ quality in a repository.
 It installs agent-facing repository guidance and analyzes codebases for
 structure, boundaries, maintainability, and clarity.
 
+**Project status:** Ayni is in very early development—not yet alpha. Expect APIs,
+behavior, and workflows to change quickly; pin versions or vendor carefully if
+you depend on it today.
+
 ## Why
 
 AI agents need clear signals about how a codebase is organized, what quality

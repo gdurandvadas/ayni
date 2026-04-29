@@ -31,7 +31,7 @@ fn render_target_progress_list(frame: &mut Frame<'_>, area: Rect, targets: &[Tar
     let visible = &targets[start..];
     let rows = Layout::vertical(vec![Constraint::Length(1); visible.len()]).split(area);
 
-    for (target, row) in visible.iter().zip(rows.into_iter()) {
+    for (target, row) in visible.iter().zip(rows.iter()) {
         render_target_row(frame, *row, target);
     }
 }
@@ -63,7 +63,10 @@ struct TargetSummary {
 fn build_targets(tools: &[ToolView]) -> Vec<TargetSummary> {
     let mut targets = Vec::<TargetSummary>::new();
     for tool in tools {
-        if let Some(target) = targets.iter_mut().find(|target| target.label == tool.language) {
+        if let Some(target) = targets
+            .iter_mut()
+            .find(|target| target.label == tool.language)
+        {
             target.total += 1;
             if matches!(tool.state, ToolState::Done | ToolState::Failed) {
                 target.done += 1;
