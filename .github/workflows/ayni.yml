@@ -4,7 +4,7 @@ on:
   pull_request:
 
 jobs:
-  run-ayni:
+  run:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -103,16 +103,16 @@ jobs:
               });
             }
 
-  ayni-status:
+  status:
     runs-on: ubuntu-latest
-    needs: run-ayni
+    needs: run
     if: always()
     steps:
       - name: Evaluate ayni command status
         shell: bash
         run: |
-          install_code="${{ needs.run-ayni.outputs.install_exit_code }}"
-          analyze_code="${{ needs.run-ayni.outputs.analyze_exit_code }}"
+          install_code="${{ needs.run.outputs.install_exit_code }}"
+          analyze_code="${{ needs.run.outputs.analyze_exit_code }}"
 
           echo "install exit code: ${install_code:-unset}"
           echo "analyze exit code: ${analyze_code:-unset}"
