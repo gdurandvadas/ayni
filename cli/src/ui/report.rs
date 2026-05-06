@@ -13,7 +13,7 @@ use ayni_core::{
 use owo_colors::OwoColorize;
 use serde_json::Value;
 
-use crate::ui::color_enabled;
+use crate::ui::{FAIL_RGB, PASS_RGB, WARN_RGB, color_enabled};
 
 pub fn render_from_rows(rows: &[SignalRow], offenders_limit: usize, color: bool) -> String {
     build_report_text(rows, color, offenders_limit)
@@ -524,17 +524,24 @@ fn stylize(color_enabled: bool, value: &str, palette: Palette, bold: bool) -> St
     if !color_enabled {
         return value.to_owned();
     }
+    let apply_rgb = |text: &str, rgb: (u8, u8, u8), bold: bool| {
+        if bold {
+            text.bold().truecolor(rgb.0, rgb.1, rgb.2).to_string()
+        } else {
+            text.truecolor(rgb.0, rgb.1, rgb.2).to_string()
+        }
+    };
     match (palette, bold) {
         (Palette::Heading, true) => value.bold().bright_blue().to_string(),
         (Palette::Section, true) => value.bold().bright_white().to_string(),
-        (Palette::Success, true) => value.bold().green().to_string(),
-        (Palette::Failure, true) => value.bold().red().to_string(),
-        (Palette::Warning, true) => value.bold().yellow().to_string(),
+        (Palette::Success, true) => apply_rgb(value, PASS_RGB, true),
+        (Palette::Failure, true) => apply_rgb(value, FAIL_RGB, true),
+        (Palette::Warning, true) => apply_rgb(value, WARN_RGB, true),
         (Palette::Heading, false) => value.bright_blue().to_string(),
         (Palette::Section, false) => value.bright_white().to_string(),
-        (Palette::Success, false) => value.green().to_string(),
-        (Palette::Failure, false) => value.red().to_string(),
-        (Palette::Warning, false) => value.yellow().to_string(),
+        (Palette::Success, false) => apply_rgb(value, PASS_RGB, false),
+        (Palette::Failure, false) => apply_rgb(value, FAIL_RGB, false),
+        (Palette::Warning, false) => apply_rgb(value, WARN_RGB, false),
     }
 }
 
