@@ -7,7 +7,32 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
     let mut out = String::new();
     let total = artifact.rows.len();
     let passing = artifact.rows.iter().filter(|row| row.pass).count();
+    let grouped_targets = artifact
+        .rows
+        .iter()
+        .map(|row| row.scope.path.as_deref().unwrap_or("."))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let all_pass = passing == total;
     out.push_str("# ayni analyze\n\n");
+    out.push_str(&format!(
+        "> [!{}]\n> {} ({} / {} checks passing)\n\n",
+        if all_pass { "IMPORTANT" } else { "WARNING" },
+        if all_pass {
+            "All checks passed."
+        } else {
+            "Some checks failed."
+        },
+        passing,
+        total
+    ));
+    out.push_str(&format!(
+        "> [!NOTE]\n> Summary: total checks={}, passing checks={}, schema version=`{}`, grouped targets={}\n\n",
+        total, passing, artifact.schema_version, grouped_targets
+    ));
+    out.push_str(
+        "> [!TIP]\n> Delta meanings: `changed` = metrics changed vs previous run, `unchanged` = no metric change, `new` = no previous target/run, `—` = delta unavailable. Use Offenders sections to locate failing or warning items.\n\n",
+    );
     out.push_str(&format!(
         "**{}** / **{}** checks passing · schema `{}`\n\n",
         passing, total, artifact.schema_version
@@ -35,6 +60,11 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
             group_pass,
             rows.len()
         ));
+        if rows.iter().any(|row| has_fail_offenders(&row.offenders)) {
+            out.push_str(
+                "> [!CAUTION]\n> Action required: fail-level offenders detected in this group; review Offenders details and address before merge.\n\n",
+            );
+        }
 
         out.push_str("| # | Status | Signal | Summary | Delta |\n");
         out.push_str("|---|--------|--------|---------|-------|\n");
@@ -249,6 +279,17 @@ fn has_warn_offenders(offenders: &Offenders) -> bool {
         Offenders::Deps(items) => items.iter().any(|item| item.level == Level::Warn),
         Offenders::Mutation(items) => items.iter().any(|item| item.level == Level::Warn),
         Offenders::Test(_) => false,
+    }
+}
+
+fn has_fail_offenders(offenders: &Offenders) -> bool {
+    match offenders {
+        Offenders::Coverage(items) => items.iter().any(|item| item.level == Level::Fail),
+        Offenders::Size(items) => items.iter().any(|item| item.level == Level::Fail),
+        Offenders::Complexity(items) => items.iter().any(|item| item.level == Level::Fail),
+        Offenders::Deps(items) => items.iter().any(|item| item.level == Level::Fail),
+        Offenders::Mutation(items) => items.iter().any(|item| item.level == Level::Fail),
+        Offenders::Test(items) => !items.is_empty(),
     }
 }
 
