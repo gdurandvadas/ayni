@@ -113,8 +113,7 @@ Artifact layout:
 ```text
 .ayni/
 ├── last/
-│   ├── signals.json
-│   └── summary.llm.md
+│   └── signals.json
 └── history/
     └── previous-signals.jsonl
 ```

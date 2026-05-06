@@ -62,7 +62,7 @@ cargo doc-cli > docs/cli.md
 - `cargo test -p <pkg>` runs package-scoped tests.
 - `cargo run -p ayni-cli -- analyze --config ./.ayni.toml --package <pkg>`
   runs scoped analysis.
-- Artifact output: `.ayni/last/signals.json` and `.ayni/last/summary.llm.md`.
+- Artifact output: `.ayni/last/signals.json`.
 
 <!-- AYNI:BEGIN -->
 ## Code quality guidance for AI agents

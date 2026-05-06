@@ -40,7 +40,7 @@ Analyze the local repository and print a quality report
 
   Possible values: `rust`, `go`, `node`
 
-* `--output <OUTPUT>` — Report format: `stdout` (default, coloured console) or `md` (markdown tables)
+* `--output <OUTPUT>` — Report format: `stdout` (default, coloured console) or `md` (markdown report)
 
   Default value: `stdout`
 
@@ -48,7 +48,7 @@ Analyze the local repository and print a quality report
   - `stdout`:
     Coloured console report (default)
   - `md`:
-    Markdown tables written to `.ayni/last/summary.llm.md` and printed to stdout
+    Markdown report printed to stdout
 
 
 
