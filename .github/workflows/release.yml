@@ -22,10 +22,19 @@ jobs:
       release_version: ${{ steps.version.outputs.next_version }}
 
     steps:
+      - name: Create release app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Calculate next release tag
         id: version
