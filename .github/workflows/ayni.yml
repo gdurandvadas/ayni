@@ -3,6 +3,10 @@ name: ayni
 on:
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -41,8 +45,13 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./target/debug/ayni analyze --config ./.ayni.toml --output md
+          summary="$(./target/debug/ayni analyze --config ./.ayni.toml --output md)"
           code=$?
+          {
+            echo "summary<<EOF"
+            printf '%s\n' "$summary"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -51,25 +60,18 @@ jobs:
         uses: actions/github-script@v7
         env:
           AYNI_BRANCH: ${{ github.head_ref || github.ref_name }}
+          SUMMARY: ${{ steps.analyze.outputs.summary }}
         with:
           script: |
-            const fs = require("fs");
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const issue_number = context.issue.number;
             const branch = process.env.AYNI_BRANCH || "unknown";
             const marker = `<!-- ayni:md branch=${branch} -->`;
-            const summaryPath = ".ayni/last/summary.llm.md";
-            const summary = fs.existsSync(summaryPath)
-              ? fs.readFileSync(summaryPath, "utf8").trim()
-              : "_No markdown summary output found._";
+            const summary = process.env.SUMMARY?.trim() || "_No markdown summary output found._";
 
             const body = [
               marker,
-              `## Ayni (md)`,
-              ``,
-              `Branch: \`${branch}\``,
-              ``,
               summary
             ].join("\n");
 

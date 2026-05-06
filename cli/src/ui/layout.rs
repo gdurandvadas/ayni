@@ -5,6 +5,9 @@ use ratatui::widgets::{Gauge, Paragraph};
 
 use crate::ui::runner::{DashboardView, ToolState, ToolView};
 
+const PROGRESS_BAR_GRAY: Color = Color::Rgb(0x5c, 0x63, 0x70);
+const PROGRESS_LABEL_WHITE: Color = Color::Rgb(0xff, 0xff, 0xff);
+
 pub fn render(frame: &mut Frame<'_>, view: &DashboardView) {
     let targets = build_targets(&view.tools);
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(frame.area());
@@ -40,12 +43,15 @@ fn render_target_row(frame: &mut Frame<'_>, area: Rect, target: &TargetSummary) 
     let ratio = progress_ratio(target.done, target.total);
     let percent = (ratio * 100.0).round() as usize;
     let state = target_state_label(target);
-    let color = target_color(target);
     let label = format!("{}: {:>3}% ({state})", target.label, percent);
     let gauge = Gauge::default()
         .ratio(ratio)
         .label(label)
-        .gauge_style(Style::default().fg(color))
+        .gauge_style(
+            Style::default()
+                .fg(PROGRESS_LABEL_WHITE)
+                .bg(PROGRESS_BAR_GRAY),
+        )
         .use_unicode(true);
     frame.render_widget(gauge, area);
 }
@@ -105,16 +111,6 @@ fn target_state_label(target: &TargetSummary) -> &'static str {
         "pending"
     } else {
         "queued"
-    }
-}
-
-fn target_color(target: &TargetSummary) -> Color {
-    match target_state_label(target) {
-        "failed" => Color::Red,
-        "running" => Color::Cyan,
-        "done" => Color::Green,
-        "pending" => Color::Yellow,
-        _ => Color::DarkGray,
     }
 }
 

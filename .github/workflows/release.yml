@@ -19,6 +19,7 @@ jobs:
       contents: write
     outputs:
       release_tag: ${{ steps.version.outputs.next_tag }}
+      release_version: ${{ steps.version.outputs.next_version }}
 
     steps:
       - name: Checkout
@@ -77,7 +78,38 @@ jobs:
           fi
 
           echo "next_tag=${next_tag}" >> "${GITHUB_OUTPUT}"
+          echo "next_version=${next_tag#v}" >> "${GITHUB_OUTPUT}"
           echo "Calculated next tag: ${next_tag}"
+
+      - name: Bump workspace version
+        env:
+          NEXT_VERSION: ${{ steps.version.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          perl -0pi -e 's/^version = "\d+\.\d+\.\d+"$/version = "'${NEXT_VERSION}'"/m' Cargo.toml
+          echo "Updated Cargo.toml workspace version to ${NEXT_VERSION}"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Refresh lockfile
+        run: cargo check --workspace --all-features
+
+      - name: Commit release version bump
+        env:
+          NEXT_VERSION: ${{ steps.version.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add Cargo.toml Cargo.lock
+          if git diff --cached --quiet; then
+            echo "No version change to commit."
+          else
+            git commit -m "chore(release): v${NEXT_VERSION}"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi
 
       - name: Create and push release tag
         env:
@@ -90,7 +122,7 @@ jobs:
             exit 1
           fi
 
-          git tag "${TAG}" "${GITHUB_SHA}"
+          git tag "${TAG}" HEAD
           git push origin "${TAG}"
 
   build-macos:
@@ -106,6 +138,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.release_tag }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

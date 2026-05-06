@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use owo_colors::OwoColorize;
 
-use crate::ui::color_enabled;
 use crate::ui::runner::{ExecContext, Plan, ProgressEvent, ToolState, run_plain};
+use crate::ui::{FAIL_RGB, PASS_RGB, color_enabled};
 
 pub fn run<F>(plan: &Plan, exec: F) -> Result<(), String>
 where
@@ -53,8 +53,12 @@ fn print_status(color: bool, state: &str, language: &str, name: &str, detail: Op
     let line = detail.map_or(base.clone(), |d| format!("{base} {d}"));
     if color {
         let styled = match state {
-            "passed" => line.green().to_string(),
-            "failed" => line.red().to_string(),
+            "passed" => line
+                .truecolor(PASS_RGB.0, PASS_RGB.1, PASS_RGB.2)
+                .to_string(),
+            "failed" => line
+                .truecolor(FAIL_RGB.0, FAIL_RGB.1, FAIL_RGB.2)
+                .to_string(),
             "running" => line.cyan().to_string(),
             _ => line,
         };

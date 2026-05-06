@@ -23,7 +23,6 @@ const ARTIFACTS_DIR: &str = ".ayni/last";
 const HISTORY_DIR: &str = ".ayni/history";
 const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
 const PREVIOUS_SIGNALS_SNAPSHOT: &str = ".ayni/history/previous-signals.jsonl";
-const LLM_SUMMARY_ARTIFACT: &str = ".ayni/last/summary.llm.md";
 const AGENTS_MANAGED_BEGIN: &str = "<!-- AYNI:BEGIN -->";
 const AGENTS_MANAGED_END: &str = "<!-- AYNI:END -->";
 
@@ -47,7 +46,7 @@ enum Commands {
         package: Option<String>,
         #[arg(long, value_enum)]
         language: Option<LanguageArg>,
-        /// Report format: `stdout` (default, coloured console) or `md` (markdown tables).
+        /// Report format: `stdout` (default, coloured console) or `md` (markdown report).
         #[arg(long, value_enum, default_value = "stdout")]
         output: OutputArg,
     },
@@ -78,7 +77,7 @@ enum LanguageArg {
 enum OutputArg {
     /// Coloured console report (default).
     Stdout,
-    /// Markdown tables written to `.ayni/last/summary.llm.md` and printed to stdout.
+    /// Markdown report printed to stdout.
     Md,
 }
 
@@ -873,7 +872,7 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<AnalyzeOut
     let previous_artifact = load_previous_artifact(&workspace_root);
     annotate_deltas_vs_previous(&mut artifact, previous_artifact.as_ref());
     persist_artifact(&workspace_root, &artifact)?;
-    emit_analyze_outputs(output_mode, &policy, &workspace_root, &artifact)?;
+    emit_analyze_outputs(output_mode, &policy, &artifact)?;
 
     Ok(AnalyzeOutcome::Completed {
         has_failures: artifact.rows.iter().any(|row| !row.pass),
@@ -940,7 +939,6 @@ fn take_collected_artifact(
 fn emit_analyze_outputs(
     output_mode: OutputArg,
     policy: &AyniPolicy,
-    workspace_root: &Path,
     artifact: &RunArtifact,
 ) -> Result<(), String> {
     match output_mode {
@@ -949,7 +947,6 @@ fn emit_analyze_outputs(
         }
         OutputArg::Md => {
             let summary = ui::md_report::build_markdown(artifact, policy.report.offenders_limit);
-            persist_llm_summary(workspace_root, &summary)?;
             println!("{summary}");
         }
     }
@@ -1538,11 +1535,6 @@ fn persist_artifact(repo_root: &Path, artifact: &RunArtifact) -> Result<(), Stri
         format!("failed to write previous signals snapshot {PREVIOUS_SIGNALS_SNAPSHOT}: {error}")
     })?;
     Ok(())
-}
-
-fn persist_llm_summary(repo_root: &Path, summary: &str) -> Result<(), String> {
-    fs::write(repo_root.join(LLM_SUMMARY_ARTIFACT), format!("{summary}\n"))
-        .map_err(|error| format!("failed to write {LLM_SUMMARY_ARTIFACT}: {error}"))
 }
 
 #[cfg(test)]
