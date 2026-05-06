@@ -3,6 +3,13 @@ use std::collections::BTreeMap;
 use ayni_core::{Level, Offenders, RunArtifact, SignalResult, SignalRow};
 use serde_json::Value;
 
+const PASS_IMAGE_URL: &str =
+    "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg";
+const WARN_IMAGE_URL: &str =
+    "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/warn.svg";
+const FAIL_IMAGE_URL: &str =
+    "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/fail.svg";
+
 pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String {
     let mut out = String::new();
     let total = artifact.rows.len();
@@ -42,7 +49,7 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
             out.push_str(&format!(
                 "| {} | {} | {} | {} | {} |\n",
                 index + 1,
-                row_status_label(row),
+                row_status_badge(row),
                 signal_kind_label(row),
                 summarize_row(row),
                 delta_label(row),
@@ -112,6 +119,17 @@ fn row_status_label(row: &SignalRow) -> &'static str {
     } else {
         "pass"
     }
+}
+
+fn row_status_badge(row: &SignalRow) -> String {
+    let label = row_status_label(row);
+    let image_url = match label {
+        "pass" => PASS_IMAGE_URL,
+        "warn" => WARN_IMAGE_URL,
+        "fail" => FAIL_IMAGE_URL,
+        _ => unreachable!("row_status_label returns a closed set"),
+    };
+    format!(r#"<img src="{image_url}" alt="{label}" width="20" height="20"> {label}"#)
 }
 
 fn signal_kind_label(row: &SignalRow) -> &'static str {
@@ -298,7 +316,9 @@ mod tests {
         assert!(text.contains("# ayni analyze"));
         assert!(text.contains("## rust (workspace)"));
         assert!(text.contains("| # | Status | Signal | Summary | Delta |"));
-        assert!(text.contains("| 1 | fail | coverage |"));
+        assert!(text.contains(
+            r#"| 1 | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/fail.svg" alt="fail" width="20" height="20"> fail | coverage |"#
+        ));
         assert!(text.contains("| changed |"));
         assert!(text.contains("FAIL src/lib.rs 41.0%"));
     }
