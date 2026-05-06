@@ -27,3 +27,4 @@ target
 # Ayni
 **/*.rs.bk
 .ayni/
+.DS_Store
