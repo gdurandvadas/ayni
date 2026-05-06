@@ -106,7 +106,7 @@ End-to-end flow:
 2. `ayni analyze` executes enabled signal kinds per adapter.
 3. Results are merged into one `RunArtifact`.
 4. Ayni writes `.ayni/last/signals.json`.
-5. Output mode controls report rendering (`human`, `llm-md`, `both`).
+5. Output mode controls report rendering (`stdout` or `md`).
 
 Artifact layout:
 

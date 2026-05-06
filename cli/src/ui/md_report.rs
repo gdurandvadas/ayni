@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use ayni_core::{Level, Offenders, RunArtifact, SignalResult, SignalRow};
-use serde_json::Value;
 
 const PASS_IMAGE_URL: &str =
     "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg";
@@ -43,16 +42,15 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
             rows.len()
         ));
 
-        out.push_str("| # | Status | Signal | Summary | Delta |\n");
-        out.push_str("|---|--------|--------|---------|-------|\n");
+        out.push_str("| # | Signal | Summary | Status |\n");
+        out.push_str("|---|--------|---------|--------|\n");
         for (index, row) in rows.iter().enumerate() {
             out.push_str(&format!(
-                "| {} | {} | {} | {} | {} |\n",
+                "| **{}** | **{}** | `{}` | {} |\n",
                 index + 1,
-                row_status_badge(row),
                 signal_kind_label(row),
                 summarize_row(row),
-                delta_label(row),
+                row_status_badge(row),
             ));
         }
         out.push('\n');
@@ -65,7 +63,7 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
         if !offenders.is_empty() {
             out.push_str("<details>\n<summary>Offenders</summary>\n\n");
             for (row, lines) in offenders {
-                out.push_str(&format!("**{}**\n\n", signal_kind_label(row)));
+                out.push_str(&format!("{}\n", signal_kind_label(row)));
                 for line in lines {
                     out.push_str(&format!("- {line}\n"));
                 }
@@ -75,40 +73,6 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
         }
     }
     out
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DeltaStatus {
-    Changed,
-    Unchanged,
-    NoPrevious,
-    Unknown,
-}
-
-fn delta_status(row: &SignalRow) -> DeltaStatus {
-    let Some(changes) = row
-        .delta_vs_previous
-        .as_ref()
-        .and_then(|delta| delta.changes.as_object())
-    else {
-        return DeltaStatus::Unknown;
-    };
-    let status = changes.get("status").and_then(Value::as_str);
-    match status {
-        Some("changed") => DeltaStatus::Changed,
-        Some("unchanged") => DeltaStatus::Unchanged,
-        Some("no_previous_target" | "no_previous_run") => DeltaStatus::NoPrevious,
-        _ => DeltaStatus::Unknown,
-    }
-}
-
-fn delta_label(row: &SignalRow) -> &'static str {
-    match delta_status(row) {
-        DeltaStatus::Changed => "changed",
-        DeltaStatus::Unchanged => "unchanged",
-        DeltaStatus::NoPrevious => "new",
-        DeltaStatus::Unknown => "—",
-    }
 }
 
 fn row_status_label(row: &SignalRow) -> &'static str {
@@ -186,8 +150,14 @@ fn offender_lines(row: &SignalRow, offenders_limit: usize) -> Vec<String> {
     match &row.offenders {
         Offenders::Test(items) => {
             for item in items.iter().take(offenders_limit) {
+                let location = item
+                    .file
+                    .as_deref()
+                    .map(|file| format!("`{file}`"))
+                    .unwrap_or_else(|| String::from("`<unnamed-test>`"));
                 lines.push(format!(
-                    "FAIL {} {}",
+                    "**FAIL** {} {} {}",
+                    location,
                     item.test_name.as_deref().unwrap_or("<unnamed-test>"),
                     item.message
                 ));
@@ -196,7 +166,7 @@ fn offender_lines(row: &SignalRow, offenders_limit: usize) -> Vec<String> {
         Offenders::Coverage(items) => {
             for item in items.iter().take(offenders_limit) {
                 lines.push(format!(
-                    "{} {} {:.1}%",
+                    "**{}** `{}` {:.1}%",
                     level_label(item.level),
                     item.file,
                     item.value
@@ -206,7 +176,7 @@ fn offender_lines(row: &SignalRow, offenders_limit: usize) -> Vec<String> {
         Offenders::Size(items) => {
             for item in items.iter().take(offenders_limit) {
                 lines.push(format!(
-                    "{} {} lines={} warn={} fail={}",
+                    "**{}** `{}` lines={} warn={} fail={}",
                     level_label(item.level),
                     item.file,
                     item.value,
@@ -218,7 +188,7 @@ fn offender_lines(row: &SignalRow, offenders_limit: usize) -> Vec<String> {
         Offenders::Complexity(items) => {
             for item in items.iter().take(offenders_limit) {
                 lines.push(format!(
-                    "{} {}:{} {} cyclo={:.1}",
+                    "**{}** `{}:{}` {} cyclo={:.1}",
                     level_label(item.level),
                     item.file,
                     item.line,
@@ -230,7 +200,7 @@ fn offender_lines(row: &SignalRow, offenders_limit: usize) -> Vec<String> {
         Offenders::Deps(items) => {
             for item in items.iter().take(offenders_limit) {
                 lines.push(format!(
-                    "{} {} -> {} (rule={})",
+                    "**{}** `{}` -> {} (rule={})",
                     level_label(item.level),
                     item.from,
                     item.to,
@@ -241,7 +211,7 @@ fn offender_lines(row: &SignalRow, offenders_limit: usize) -> Vec<String> {
         Offenders::Mutation(items) => {
             for item in items.iter().take(offenders_limit) {
                 lines.push(format!(
-                    "{} {} {}",
+                    "**{}** `{}` {}",
                     level_label(item.level),
                     item.mutation_kind,
                     item.message
@@ -315,11 +285,12 @@ mod tests {
         let text = build_markdown(&artifact, 3);
         assert!(text.contains("# ayni analyze"));
         assert!(text.contains("## rust (workspace)"));
-        assert!(text.contains("| # | Status | Signal | Summary | Delta |"));
+        assert!(text.contains("| # | Signal | Summary | Status |"));
         assert!(text.contains(
-            r#"| 1 | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/fail.svg" alt="fail" width="20" height="20"> fail | coverage |"#
+            r#"| **1** | **coverage** | `percent=41.0% status=ok` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/fail.svg" alt="fail" width="20" height="20"> fail |"#
         ));
-        assert!(text.contains("| changed |"));
-        assert!(text.contains("FAIL src/lib.rs 41.0%"));
+        assert!(text.contains("<details>\n<summary>Offenders</summary>\n\n"));
+        assert!(text.contains("\ncoverage\n- "));
+        assert!(text.contains("**FAIL** `src/lib.rs` 41.0%"));
     }
 }

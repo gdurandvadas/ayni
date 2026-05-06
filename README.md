@@ -6,7 +6,7 @@ quality in a repository.
 It installs agent-facing repository guidance and analyzes codebases for
 structure, boundaries, maintainability, and clarity.
 
-**Project status:** Ayni is in very early development—not yet alpha. Expect APIs,
+**Project status:** Ayni is in early development. Expect APIs,
 behavior, and workflows to change quickly; pin versions or vendor carefully if
 you depend on it today.
 
@@ -43,6 +43,8 @@ cargo run -p ayni-cli -- --help
 ayni install
 ayni install --apply
 ayni analyze
+ayni analyze --output md
+ayni version
 ```
 
 During development, the same commands can be run through Cargo:
@@ -51,6 +53,7 @@ During development, the same commands can be run through Cargo:
 cargo run -p ayni-cli -- install --repo-root .
 cargo run -p ayni-cli -- install --repo-root . --apply
 cargo run -p ayni-cli -- analyze --config ./.ayni.toml
+cargo run -p ayni-cli -- analyze --config ./.ayni.toml --output md
 ```
 
 ## Commands
@@ -69,19 +72,28 @@ Updates local scaffolding and prints the external tools each adapter expects
 
 ### `analyze`
 
-Analyzes the local repository and prints a quality report. Ayni writes generated
-artifacts under `.ayni/`, which should stay out of source control.
+Analyzes the local repository and prints a quality report. Scope can be narrowed
+with `--file`, `--package`, and `--language`.
 
 Output modes:
 
-- `human`: terminal report
-- `llm-md`: markdown summary for AI agents
-- `both`: both outputs
+- `stdout`: colored terminal report, the default
+- `md`: markdown tables written to `.ayni/last/summary.llm.md` and printed to stdout
+
+Ayni always writes `.ayni/last/signals.json` and
+`.ayni/history/previous-signals.jsonl` for local delta comparison. Generated
+artifacts under `.ayni/` should stay out of source control.
+
+### `version`
+
+Prints the Ayni CLI version.
 
 ## Local-First
 
-The default workflow does not require login, accounts, or remote services. It
-reads local files, runs local tooling, and writes local output only.
+The default `install` and `analyze` workflow does not require login, accounts,
+or remote services. It reads local files, runs local tooling, and writes local
+output only. `ayni install --apply` may download tools from language package
+registries.
 
 ## Architecture
 
@@ -91,13 +103,28 @@ The workspace is organized around one-way dependencies:
 core <- adapters <- cli
 ```
 
-- `core/`: policy, language, runtime, registry, and signal domain types
+- `core/`: policy, language, runtime, adapter contracts, and signal domain types
 - `adapters/rust/`: Rust signal collectors
 - `adapters/go/`: Go signal collectors
 - `adapters/node/`: Node.js and TypeScript signal collectors
 - `cli/`: command-line orchestration and output
 - `.ayni.toml`: repository policy configuration
 - `.ayni/`: generated local artifacts
+
+## Artifacts
+
+```txt
+.ayni/
+├── last/
+│   ├── signals.json
+│   └── summary.llm.md
+└── history/
+    └── previous-signals.jsonl
+```
+
+`signals.json` is the typed run artifact. `summary.llm.md` is produced by
+`ayni analyze --output md`. `previous-signals.jsonl` stores the previous local
+run snapshot used for deltas.
 
 ## Development
 

@@ -3,6 +3,10 @@ name: ayni
 on:
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -66,10 +70,6 @@ jobs:
 
             const body = [
               marker,
-              `## Ayni (md)`,
-              ``,
-              `Branch: \`${branch}\``,
-              ``,
               summary
             ].join("\n");
 
