@@ -10,8 +10,8 @@ pub mod signal;
 
 pub use adapter::{DetectResult, LanguageAdapter, LanguageProfile, SignalCollector};
 pub use catalog::{
-    CatalogEntry, InstallContext, Installer, NodePackageManager, ToolStatus, VersionCheck,
-    detect_node_package_manager,
+    CatalogEntry, InstallContext, Installer, NodePackageManager, PythonPackageManager, ToolStatus,
+    VersionCheck, detect_node_package_manager, detect_python_package_manager,
 };
 pub use language::Language;
 pub use policy::{

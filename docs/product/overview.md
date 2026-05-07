@@ -91,7 +91,7 @@ At a glance:
 
 - `[checks]` controls which signal kinds run.
 - `[languages]` selects enabled languages.
-- `[rust.size]`, `[node.size]`, and similar tables define glob-keyed line-count
+- `[rust.size]`, `[node.size]`, `[python.size]`, and similar tables define glob-keyed line-count
   budgets.
 - `[rust.complexity]`, `[rust.coverage]`, `[rust.deps.forbidden]`, and similar
   sections define language-scoped thresholds and rules.

@@ -63,6 +63,8 @@ pub struct AyniPolicy {
     pub go: LanguageTooling,
     #[serde(default)]
     pub node: LanguageTooling,
+    #[serde(default)]
+    pub python: LanguageTooling,
     #[serde(flatten)]
     pub extras: BTreeMap<String, toml::Value>,
 }
@@ -132,7 +134,7 @@ impl AyniPolicy {
             out.push(
                 Language::from_str(value).map_err(|_| {
                     format!(
-                        "languages.enabled contains unsupported language '{value}'; expected rust, go, or node"
+                        "languages.enabled contains unsupported language '{value}'; expected rust, go, node, or python"
                     )
                 })?,
             );
@@ -146,6 +148,7 @@ impl AyniPolicy {
             Language::Rust => &self.rust,
             Language::Go => &self.go,
             Language::Node => &self.node,
+            Language::Python => &self.python,
         }
     }
 
@@ -189,13 +192,14 @@ impl AyniPolicy {
             }
             Language::from_str(value).map_err(|_| {
                 format!(
-                    "languages.enabled contains unsupported language '{value}'; expected rust, go, or node"
+                    "languages.enabled contains unsupported language '{value}'; expected rust, go, node, or python"
                 )
             })?;
         }
         self.rust.roots = normalize_roots("rust", &self.rust.roots)?;
         self.go.roots = normalize_roots("go", &self.go.roots)?;
         self.node.roots = normalize_roots("node", &self.node.roots)?;
+        self.python.roots = normalize_roots("python", &self.python.roots)?;
         if self.concurrency.amount == 0 {
             return Err(String::from("concurrency.amount must be at least 1"));
         }
@@ -558,6 +562,86 @@ enabled = ["rust"]
         assert_eq!(policy.roots_for(Language::Rust), ["."]);
         assert_eq!(policy.roots_for(Language::Go), ["."]);
         assert_eq!(policy.roots_for(Language::Node), ["."]);
+        assert_eq!(policy.roots_for(Language::Python), ["."]);
+    }
+
+    #[test]
+    fn python_policy_sections_parse() {
+        let document = r#"
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["python"]
+
+[python]
+roots = ["src"]
+
+[python.size]
+"**/*.py" = { warn = 400, fail = 800, exclude = [".venv/**"] }
+
+[python.complexity]
+fn_cognitive = { warn = 10, fail = 15 }
+
+[python.coverage]
+line_percent = { warn = 80, fail = 60 }
+
+[python.deps.forbidden]
+"src/domain/**" = ["src/presentation/**"]
+"#;
+        let mut policy: AyniPolicy = toml::from_str(document).expect("parse");
+        policy.normalize_and_validate().expect("valid");
+        assert_eq!(
+            policy.enabled_languages().expect("languages"),
+            [Language::Python]
+        );
+        assert_eq!(policy.roots_for(Language::Python), ["src"]);
+        assert_eq!(
+            policy
+                .size_rules_for(Language::Python)
+                .get("**/*.py")
+                .expect("size")
+                .fail,
+            800
+        );
+        assert_eq!(
+            policy
+                .python
+                .complexity
+                .as_ref()
+                .expect("complexity")
+                .fn_cognitive
+                .expect("cognitive")
+                .fail,
+            15.0
+        );
+        assert_eq!(
+            policy
+                .python
+                .coverage
+                .as_ref()
+                .expect("coverage")
+                .line_percent
+                .expect("coverage threshold")
+                .warn,
+            80.0
+        );
+        assert_eq!(
+            policy
+                .python
+                .deps
+                .as_ref()
+                .expect("deps")
+                .forbidden
+                .get("src/domain/**")
+                .expect("rule"),
+            &vec![String::from("src/presentation/**")]
+        );
     }
 
     #[test]

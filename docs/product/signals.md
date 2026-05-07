@@ -9,7 +9,7 @@ Repository policy lives in `.ayni.toml`; for checks, languages, thresholds, and 
 Every signal row includes:
 
 - `kind`: one of `test`, `coverage`, `size`, `complexity`, `deps`, `mutation`
-- `language`: one of `rust`, `go`, `node` (expandable)
+- `language`: one of `rust`, `go`, `node`, `python` (expandable)
 - `scope`: measurement target (`workspace`, `path`, optional `package`, optional `file`)
 - `pass`: whether the row is within policy budget
 - `result`: typed payload for the signal kind

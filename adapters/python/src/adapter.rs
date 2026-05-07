@@ -1,52 +1,57 @@
-use crate::catalog::NODE_CATALOG;
-use crate::collectors::NodeCollector;
+use crate::catalog::PYTHON_CATALOG;
+use crate::collectors::PythonCollector;
 use crate::discovery;
 use ayni_core::{
     CatalogEntry, DetectResult, Language, LanguageAdapter, LanguageProfile, SignalCollector,
-    detect_node_package_manager,
+    detect_python_package_manager,
 };
 use std::path::Path;
 
 #[derive(Debug, Default)]
-pub struct NodeAdapter {
-    collector: NodeCollector,
+pub struct PythonAdapter {
+    collector: PythonCollector,
 }
 
-impl NodeAdapter {
+impl PythonAdapter {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            collector: NodeCollector,
+            collector: PythonCollector,
         }
     }
 }
 
-impl LanguageAdapter for NodeAdapter {
+impl LanguageAdapter for PythonAdapter {
     fn language(&self) -> Language {
-        Language::Node
+        Language::Python
     }
 
     fn detect(&self, root: &Path) -> DetectResult {
-        let manifest = root.join("package.json");
-        if !manifest.is_file() {
+        let has_manifest = root.join("pyproject.toml").is_file()
+            || root.join("requirements.txt").is_file()
+            || root.join("Pipfile").is_file();
+        if !has_manifest {
             return DetectResult {
                 detected: false,
                 confidence: 0,
-                reason: Some(format!("package.json not found at {}", root.display())),
+                reason: Some(format!(
+                    "pyproject.toml, requirements.txt, or Pipfile not found at {}",
+                    root.display()
+                )),
             };
         }
 
-        let pm = detect_node_package_manager(root);
+        let pm = detect_python_package_manager(root);
         let confidence = if pm.is_some() { 100 } else { 60 };
         let reason = if let Some(pm) = pm {
             format!(
-                "package.json found at {}; package manager resolved as {}",
+                "python project found at {}; package manager resolved as {}",
                 root.display(),
                 pm.executable()
             )
         } else {
             format!(
-                "package.json found at {}; no lockfile/packageManager field (default runtime fallback)",
+                "python project found at {}; no lockfile/manager marker (default runtime fallback)",
                 root.display()
             )
         };
@@ -64,20 +69,13 @@ impl LanguageAdapter for NodeAdapter {
 
     fn profile(&self) -> LanguageProfile {
         LanguageProfile {
-            language: Language::Node,
-            default_file_globs: vec![
-                String::from("*.js"),
-                String::from("*.jsx"),
-                String::from("*.ts"),
-                String::from("*.tsx"),
-                String::from("*.mjs"),
-                String::from("*.cjs"),
-            ],
+            language: Language::Python,
+            default_file_globs: vec![String::from("*.py")],
         }
     }
 
     fn catalog(&self) -> &'static [CatalogEntry] {
-        NODE_CATALOG
+        PYTHON_CATALOG
     }
 
     fn collector(&self) -> &dyn SignalCollector {

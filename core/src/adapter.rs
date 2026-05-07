@@ -26,6 +26,7 @@ pub trait SignalCollector: Send + Sync {
 pub trait LanguageAdapter: Send + Sync {
     fn language(&self) -> Language;
     fn detect(&self, root: &Path) -> DetectResult;
+    fn discover_roots(&self, repo_root: &Path) -> Vec<String>;
     fn profile(&self) -> LanguageProfile;
     fn catalog(&self) -> &'static [CatalogEntry];
     fn collector(&self) -> &dyn SignalCollector;

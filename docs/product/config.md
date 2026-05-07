@@ -14,7 +14,7 @@ For the signal vocabulary and JSON artifact fields, see [`signals.md`](signals.m
 | `[languages]` | Explicit language list, for example `enabled = ["rust", "node"]`. |
 | `[concurrency]` | Scheduler settings for running independent analyze roots in parallel. |
 | `[report]` | Console report rendering settings such as offender list limits. |
-| `[rust.*]`, `[go.*]`, `[node.*]` | Per-language settings (roots, thresholds, and optional tooling command overrides). |
+| `[rust.*]`, `[go.*]`, `[node.*]`, `[python.*]` | Per-language settings (roots, thresholds, and optional tooling command overrides). |
 
 Everything under a language key uses normal TOML **single-bracket** tables and inline tables. There are no `[[array.of.tables]]` blocks in the policy model.
 
@@ -70,7 +70,7 @@ Matching uses the map’s key order (sorted lexicographically). If two keys coul
 
 ## Other languages
 
-Use the same shape for Node when that adapter is enabled:
+Use the same shape for Node and Python when those adapters are enabled:
 
 ```toml
 [node.size]
@@ -87,6 +87,20 @@ line_percent = { warn = 70, fail = 50 }
 
 [node.deps.forbidden]
 "apps/web" = ["apps/legacy-*"]
+```
+
+```toml
+[python.size]
+"**/*.py" = { warn = 400, fail = 800, exclude = [".venv/**", "venv/**", "__pycache__/**", ".git/**", ".ayni/**"] }
+
+[python.complexity]
+fn_cognitive = { warn = 10, fail = 15 }
+
+[python.coverage]
+line_percent = { warn = 80, fail = 60 }
+
+[python.deps.forbidden]
+"src/domain/**" = ["src/presentation/**"]
 ```
 
 Note: Ayni uses Rust `glob` matching. Brace expansion like `*.{ts,tsx}` is not supported; use separate entries per extension.
@@ -107,6 +121,10 @@ args = ["test", "./..."]
 [node.tooling.mutation]
 command = "pnpm"
 args = ["exec", "stryker", "run", "--logLevel", "error"]
+
+[python.tooling.test]
+command = "uv"
+args = ["run", "pytest", "--json-report", "--json-report-file", ".ayni/pytest-report.json"]
 ```
 
 Notes:
@@ -128,6 +146,9 @@ roots = [".", "crates/api"]
 
 [node]
 roots = ["apps/web"]
+
+[python]
+roots = ["services/api"]
 ```
 
 Rules:
