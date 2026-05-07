@@ -81,21 +81,6 @@ fn language_arg_accepts_python() {
 }
 
 #[test]
-fn discover_python_roots_excludes_environment_dirs() {
-    let dir = TempDir::new().expect("tempdir");
-    fs::write(dir.path().join("pyproject.toml"), "").expect("root pyproject");
-    fs::create_dir_all(dir.path().join("packages/api")).expect("api dir");
-    fs::write(dir.path().join("packages/api/pyproject.toml"), "").expect("api pyproject");
-    fs::create_dir_all(dir.path().join(".venv/lib")).expect("venv dir");
-    fs::write(dir.path().join(".venv/lib/pyproject.toml"), "").expect("venv pyproject");
-
-    assert_eq!(
-        super::discover_python_roots(dir.path()),
-        vec![String::from("."), String::from("packages/api")]
-    );
-}
-
-#[test]
 fn python_analyze_targets_are_built_when_enabled() {
     let dir = TempDir::new().expect("tempdir");
     fs::write(dir.path().join("pyproject.toml"), "").expect("pyproject");

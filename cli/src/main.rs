@@ -6,6 +6,7 @@ use std::process::{Command, ExitCode};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+mod discovery;
 mod ui;
 
 use ayni_adapters_node::NodeAdapter;
@@ -19,6 +20,7 @@ use ayni_core::{
     detect_python_package_manager,
 };
 use clap::{Parser, Subcommand, ValueEnum};
+use discovery::discover_language_roots;
 
 const AYNI_POLICY_TOML: &str = include_str!("../../.ayni.toml");
 const ARTIFACTS_DIR: &str = ".ayni/last";
@@ -27,12 +29,6 @@ const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
 const PREVIOUS_SIGNALS_SNAPSHOT: &str = ".ayni/history/previous-signals.jsonl";
 const AGENTS_MANAGED_BEGIN: &str = "<!-- AYNI:BEGIN -->";
 const AGENTS_MANAGED_END: &str = "<!-- AYNI:END -->";
-const ALL_LANGUAGES: [Language; 4] = [
-    Language::Rust,
-    Language::Go,
-    Language::Node,
-    Language::Python,
-];
 
 #[derive(Parser, Debug)]
 #[command(name = "ayni")]
@@ -481,7 +477,9 @@ fn prepare_install_policy(
     let policy = AyniPolicy::load(root)?;
     if scaffold.policy_created {
         let enabled_languages = policy.enabled_languages()?;
-        let discovered_roots = discover_language_roots(root, &enabled_languages, language_filter);
+        let registry = build_registry();
+        let discovered_roots =
+            discover_language_roots(root, &enabled_languages, language_filter, &registry);
         update_policy_roots(root, &discovered_roots)?;
     }
     AyniPolicy::load(root)
@@ -1022,7 +1020,12 @@ fn build_analyze_targets(
     let enabled_set: BTreeSet<Language> = enabled_languages.into_iter().collect();
     let registry = build_registry();
     let mut targets = Vec::new();
-    for language in ALL_LANGUAGES {
+    for language in [
+        Language::Rust,
+        Language::Go,
+        Language::Node,
+        Language::Python,
+    ] {
         if let Some(filter) = language_filter
             && filter != language
         {
@@ -1250,157 +1253,6 @@ fn signal_result_metrics(result: &SignalResult) -> HashMap<&'static str, f64> {
         }
     }
     metrics
-}
-
-fn discover_language_roots(
-    repo_root: &Path,
-    enabled_languages: &[Language],
-    language_filter: Option<Language>,
-) -> BTreeMap<Language, Vec<String>> {
-    let enabled_set: BTreeSet<Language> = enabled_languages.iter().copied().collect();
-    let mut discovered = BTreeMap::new();
-    for language in ALL_LANGUAGES {
-        if let Some(filter) = language_filter
-            && filter != language
-        {
-            continue;
-        }
-        if !enabled_set.contains(&language) {
-            continue;
-        }
-        let roots = match language {
-            Language::Rust => discover_rust_roots(repo_root),
-            Language::Go => discover_go_roots(repo_root),
-            Language::Node => discover_node_roots(repo_root),
-            Language::Python => discover_python_roots(repo_root),
-        };
-        let selected = if roots.is_empty() {
-            vec![String::from(".")]
-        } else {
-            roots
-        };
-        discovered.insert(language, selected);
-    }
-    discovered
-}
-
-fn discover_rust_roots(repo_root: &Path) -> Vec<String> {
-    discover_file_parent_roots(repo_root, "Cargo.toml", |parts| {
-        parts.contains(&"target") || parts.contains(&".git") || parts.contains(&"node_modules")
-    })
-}
-
-fn discover_go_roots(repo_root: &Path) -> Vec<String> {
-    discover_file_parent_roots(repo_root, "go.mod", |_| false)
-}
-
-fn discover_node_roots(repo_root: &Path) -> Vec<String> {
-    let mut roots = discover_file_parent_roots(repo_root, "package.json", |parts| {
-        parts.contains(&"node_modules")
-    });
-
-    let root_package_json = repo_root.join("package.json");
-    if root_package_json.is_file()
-        && let Ok(content) = fs::read_to_string(&root_package_json)
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&content)
-    {
-        let mut patterns = Vec::new();
-        if let Some(array) = value.get("workspaces").and_then(|v| v.as_array()) {
-            patterns.extend(array.iter().filter_map(|item| item.as_str()));
-        }
-        if let Some(array) = value
-            .get("workspaces")
-            .and_then(|v| v.get("packages"))
-            .and_then(|v| v.as_array())
-        {
-            patterns.extend(array.iter().filter_map(|item| item.as_str()));
-        }
-        for pattern in patterns {
-            if !pattern.ends_with("/*") {
-                continue;
-            }
-            let base = pattern.trim_end_matches("/*").trim_matches('/');
-            if base.is_empty() {
-                continue;
-            }
-            let base_path = repo_root.join(base);
-            if let Ok(entries) = fs::read_dir(base_path) {
-                for entry in entries.flatten() {
-                    let candidate_dir = entry.path();
-                    if !candidate_dir.is_dir() {
-                        continue;
-                    }
-                    if candidate_dir.join("package.json").is_file()
-                        && let Ok(relative) = candidate_dir.strip_prefix(repo_root)
-                    {
-                        roots.push(canonicalize_relative_posix(&relative.to_string_lossy()));
-                    }
-                }
-            }
-        }
-    }
-
-    dedupe_and_sort_roots(roots)
-}
-
-fn discover_python_roots(repo_root: &Path) -> Vec<String> {
-    let mut roots = Vec::new();
-    for marker in ["pyproject.toml", "requirements.txt", "Pipfile"] {
-        roots.extend(discover_file_parent_roots(repo_root, marker, |parts| {
-            parts.iter().any(|part| is_python_excluded_root(part))
-        }));
-    }
-    dedupe_and_sort_roots(roots)
-}
-
-fn is_python_excluded_root(part: &str) -> bool {
-    matches!(
-        part,
-        ".venv" | "venv" | "env" | "__pycache__" | ".tox" | ".nox" | ".git" | ".ayni"
-    )
-}
-
-fn discover_file_parent_roots<F>(repo_root: &Path, file_name: &str, exclude: F) -> Vec<String>
-where
-    F: Fn(&[&str]) -> bool,
-{
-    let mut found = Vec::new();
-    let mut stack = vec![repo_root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Ok(relative) = path.strip_prefix(repo_root) {
-                    let text = canonicalize_relative_posix(&relative.to_string_lossy());
-                    let parts: Vec<&str> = text.split('/').collect();
-                    if exclude(&parts) {
-                        continue;
-                    }
-                }
-                stack.push(path);
-                continue;
-            }
-            if path.file_name().and_then(|v| v.to_str()) != Some(file_name) {
-                continue;
-            }
-            if let Some(parent) = path.parent()
-                && let Ok(relative) = parent.strip_prefix(repo_root)
-            {
-                found.push(canonicalize_relative_posix(&relative.to_string_lossy()));
-            }
-        }
-    }
-    dedupe_and_sort_roots(found)
-}
-
-fn dedupe_and_sort_roots(mut roots: Vec<String>) -> Vec<String> {
-    roots.sort();
-    roots.dedup();
-    roots
 }
 
 fn update_policy_roots(

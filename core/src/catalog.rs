@@ -380,9 +380,13 @@ fn install_with(
             crate_name,
             version,
         } => install_cargo(crate_name, *version, tool_name),
-        Installer::Rustup { component } => run_cmd("rustup", &["component", "add", component], tool_name),
+        Installer::Rustup { component } => {
+            run_cmd("rustup", &["component", "add", component], tool_name)
+        }
         Installer::GoInstall { module, version } => install_go(module, *version, tool_name),
-        Installer::NpmGlobal { package, version } => install_npm_global(package, *version, tool_name),
+        Installer::NpmGlobal { package, version } => {
+            install_npm_global(package, *version, tool_name)
+        }
         Installer::NodePackage {
             package,
             version,
@@ -414,7 +418,10 @@ fn install_go(module: &str, version: Option<&str>, tool_name: &str) -> Result<()
 }
 
 fn install_npm_global(package: &str, version: Option<&str>, tool_name: &str) -> Result<(), String> {
-    let target = version.map_or_else(|| package.to_owned(), |version| format!("{package}@{version}"));
+    let target = version.map_or_else(
+        || package.to_owned(),
+        |version| format!("{package}@{version}"),
+    );
     run_cmd("npm", &["install", "-g", target.as_str()], tool_name)
 }
 
@@ -431,7 +438,10 @@ fn install_node_package(
     let manager = ctx
         .node_package_manager
         .ok_or_else(|| format!("missing package manager for local node package {tool_name}"))?;
-    let target = version.map_or_else(|| package.to_string(), |version| format!("{package}@{version}"));
+    let target = version.map_or_else(
+        || package.to_string(),
+        |version| format!("{package}@{version}"),
+    );
     let args = manager.add_dependency_args(&target, dev);
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     run_cmd_in(manager.executable(), &arg_refs, tool_name, Some(cwd))
@@ -447,15 +457,23 @@ fn install_python_package(
     let cwd = ctx
         .cwd
         .ok_or_else(|| format!("missing install root for local python package {tool_name}"))?;
-    let manager = ctx.python_package_manager.unwrap_or(PythonPackageManager::Pip);
-    let target = version.map_or_else(|| package.to_string(), |version| format!("{package}=={version}"));
+    let manager = ctx
+        .python_package_manager
+        .unwrap_or(PythonPackageManager::Pip);
+    let target = version.map_or_else(
+        || package.to_string(),
+        |version| format!("{package}=={version}"),
+    );
     let args = manager.add_dependency_args(&target, dev);
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     run_cmd_in(manager.executable(), &arg_refs, tool_name, Some(cwd))
 }
 
 fn install_uv_tool(package: &str, version: Option<&str>, tool_name: &str) -> Result<(), String> {
-    let target = version.map_or_else(|| package.to_string(), |version| format!("{package}=={version}"));
+    let target = version.map_or_else(
+        || package.to_string(),
+        |version| format!("{package}=={version}"),
+    );
     run_cmd("uv", &["tool", "install", target.as_str()], tool_name)
 }
 

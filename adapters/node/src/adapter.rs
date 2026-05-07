@@ -1,5 +1,6 @@
 use crate::catalog::NODE_CATALOG;
 use crate::collectors::NodeCollector;
+use crate::discovery;
 use ayni_core::{
     CatalogEntry, DetectResult, Language, LanguageAdapter, LanguageProfile, SignalCollector,
     detect_node_package_manager,
@@ -55,6 +56,10 @@ impl LanguageAdapter for NodeAdapter {
             confidence,
             reason: Some(reason),
         }
+    }
+
+    fn discover_roots(&self, repo_root: &Path) -> Vec<String> {
+        discovery::discover_roots(repo_root)
     }
 
     fn profile(&self) -> LanguageProfile {

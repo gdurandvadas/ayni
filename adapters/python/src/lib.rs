@@ -3,5 +3,6 @@
 pub mod adapter;
 pub mod catalog;
 pub mod collectors;
+mod discovery;
 
 pub use adapter::PythonAdapter;

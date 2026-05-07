@@ -27,6 +27,10 @@ cargo doc-cli > docs/cli.md
 ## Invariants
 
 - Keep one-way dependency flow: `core` <- `adapters` <- `cli`.
+- Keep language-specific detection, root discovery, package-manager resolution,
+  tool catalogs, and collector behavior inside the owning language adapter.
+  The CLI may orchestrate adapters but must not hard-code language-specific
+  root markers, lockfiles, package managers, or tool behavior.
 - Keep `install` and `analyze` local-first and runnable without login, tokens,
   servers, or remote state.
 - Keep repository policy configuration in `.ayni.toml` at repo root.

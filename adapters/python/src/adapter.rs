@@ -1,5 +1,6 @@
 use crate::catalog::PYTHON_CATALOG;
 use crate::collectors::PythonCollector;
+use crate::discovery;
 use ayni_core::{
     CatalogEntry, DetectResult, Language, LanguageAdapter, LanguageProfile, SignalCollector,
     detect_python_package_manager,
@@ -60,6 +61,10 @@ impl LanguageAdapter for PythonAdapter {
             confidence,
             reason: Some(reason),
         }
+    }
+
+    fn discover_roots(&self, repo_root: &Path) -> Vec<String> {
+        discovery::discover_roots(repo_root)
     }
 
     fn profile(&self) -> LanguageProfile {

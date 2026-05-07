@@ -1,5 +1,6 @@
 use crate::catalog::RUST_CATALOG;
 use crate::collectors::RustCollector;
+use crate::discovery;
 use ayni_core::{
     CatalogEntry, DetectResult, Language, LanguageAdapter, LanguageProfile, SignalCollector,
 };
@@ -35,6 +36,10 @@ impl LanguageAdapter for RustAdapter {
                 Some(format!("Cargo.toml not found at {}", root.display()))
             },
         }
+    }
+
+    fn discover_roots(&self, repo_root: &Path) -> Vec<String> {
+        discovery::discover_roots(repo_root)
     }
 
     fn profile(&self) -> LanguageProfile {
