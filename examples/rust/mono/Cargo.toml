@@ -1,0 +1,3 @@
+[workspace]
+members = ["libs/math", "libs/greeting", "services/greeting-service"]
+resolver = "2"

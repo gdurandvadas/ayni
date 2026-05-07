@@ -1,0 +1,10 @@
+export const add=(a:number,b:number)=>a+b;
+export const sub=(a:number,b:number)=>a-b;
+export const mul=(a:number,b:number)=>a*b;
+export const div=(a:number,b:number)=>a/b;
+export const mod=(a:number,b:number)=>a%b;
+export const square=(a:number)=>a*a;
+export const cube=(a:number)=>a*a*a;
+export const max=(a:number,b:number)=>a>b?a:b;
+export const min=(a:number,b:number)=>a<b?a:b;
+export const abs=(a:number)=>a<0?-a:a;
