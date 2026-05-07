@@ -18,6 +18,7 @@ roots = [
   "adapters/rust",
   "adapters/go",
   "adapters/node",
+  "adapters/python",
   "cli",
 ]
 # Optional tool override examples:

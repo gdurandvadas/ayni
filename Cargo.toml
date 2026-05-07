@@ -4,6 +4,7 @@ members = [
   "adapters/go",
   "adapters/rust",
   "adapters/node",
+  "adapters/python",
   "cli",
 ]
 resolver = "3"

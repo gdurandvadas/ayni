@@ -9,12 +9,14 @@ use std::thread;
 mod ui;
 
 use ayni_adapters_node::NodeAdapter;
+use ayni_adapters_python::PythonAdapter;
 use ayni_adapters_rust::RustAdapter;
 use ayni_core::{
     AYNI_POLICY_FILE, AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, AyniPolicy, Budget,
     CatalogEntry, ConcurrencyPolicy, Delta, InstallContext, Installer, Language,
-    NodePackageManager, RunArtifact, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    ToolStatus, VersionCheck, detect_node_package_manager,
+    NodePackageManager, PythonPackageManager, RunArtifact, RunContext, Scope, SignalKind,
+    SignalResult, SignalRow, ToolStatus, VersionCheck, detect_node_package_manager,
+    detect_python_package_manager,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -25,6 +27,12 @@ const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
 const PREVIOUS_SIGNALS_SNAPSHOT: &str = ".ayni/history/previous-signals.jsonl";
 const AGENTS_MANAGED_BEGIN: &str = "<!-- AYNI:BEGIN -->";
 const AGENTS_MANAGED_END: &str = "<!-- AYNI:END -->";
+const ALL_LANGUAGES: [Language; 4] = [
+    Language::Rust,
+    Language::Go,
+    Language::Node,
+    Language::Python,
+];
 
 #[derive(Parser, Debug)]
 #[command(name = "ayni")]
@@ -71,6 +79,7 @@ enum LanguageArg {
     Rust,
     Go,
     Node,
+    Python,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
@@ -87,6 +96,7 @@ impl LanguageArg {
             Self::Rust => Language::Rust,
             Self::Go => Language::Go,
             Self::Node => Language::Node,
+            Self::Python => Language::Python,
         }
     }
 }
@@ -129,6 +139,7 @@ fn build_registry() -> AdapterRegistry {
     registry.register(Arc::new(GoAdapter::new()));
     registry.register(Arc::new(RustAdapter::new()));
     registry.register(Arc::new(NodeAdapter::new()));
+    registry.register(Arc::new(PythonAdapter::new()));
     registry
 }
 
@@ -195,9 +206,15 @@ fn print_install_requirements(
             } else {
                 None
             };
+            let python_manager = if language == Language::Python {
+                detect_python_package_manager(&root_path).or(Some(PythonPackageManager::Pip))
+            } else {
+                None
+            };
             let install_context = InstallContext {
                 cwd: Some(root_path.as_path()),
                 node_package_manager: node_manager,
+                python_package_manager: python_manager,
             };
             for entry in adapter.catalog() {
                 if entry.opt_in && !check_enabled_for_entry(policy, entry) {
@@ -271,6 +288,14 @@ fn installer_summary(inst: &Installer) -> String {
             version,
             dev,
         } => fmt_node_package(package, *version, *dev),
+        Installer::PythonPackage {
+            package,
+            version,
+            dev,
+            ..
+        } => fmt_python_package(package, *version, *dev),
+        Installer::UvTool { package, version } => fmt_uv_tool(package, *version),
+        Installer::PythonRuntime => String::from("install: (python runtime on PATH)"),
         Installer::Custom { program, args } => format!("install: {} {}", program, args.join(" ")),
     }
 }
@@ -299,6 +324,21 @@ fn fmt_node_package(package: &str, version: Option<&str>, dev: bool) -> String {
     match version {
         Some(v) => format!("install: add {scope} {package}@{v} via package manager"),
         None => format!("install: add {scope} {package} via package manager"),
+    }
+}
+
+fn fmt_python_package(package: &str, version: Option<&str>, dev: bool) -> String {
+    let scope = if dev { "devDependency" } else { "dependency" };
+    match version {
+        Some(v) => format!("install: add Python {scope} {package}=={v} via package manager"),
+        None => format!("install: add Python {scope} {package} via package manager"),
+    }
+}
+
+fn fmt_uv_tool(package: &str, version: Option<&str>) -> String {
+    match version {
+        Some(v) => format!("install: uv tool install {package}=={v}"),
+        None => format!("install: uv tool install {package}"),
     }
 }
 
@@ -350,9 +390,15 @@ fn install_for_root(
 
     let mut failures = Vec::new();
     let node_manager = prepare_node_manager(language, root_entry, &root_path, &mut failures);
+    let python_manager = if language == Language::Python {
+        detect_python_package_manager(&root_path).or(Some(PythonPackageManager::Pip))
+    } else {
+        None
+    };
     let install_context = InstallContext {
         cwd: Some(&root_path),
         node_package_manager: node_manager,
+        python_package_manager: python_manager,
     };
 
     for entry in adapter.catalog() {
@@ -976,7 +1022,7 @@ fn build_analyze_targets(
     let enabled_set: BTreeSet<Language> = enabled_languages.into_iter().collect();
     let registry = build_registry();
     let mut targets = Vec::new();
-    for language in [Language::Rust, Language::Go, Language::Node] {
+    for language in ALL_LANGUAGES {
         if let Some(filter) = language_filter
             && filter != language
         {
@@ -1213,7 +1259,7 @@ fn discover_language_roots(
 ) -> BTreeMap<Language, Vec<String>> {
     let enabled_set: BTreeSet<Language> = enabled_languages.iter().copied().collect();
     let mut discovered = BTreeMap::new();
-    for language in [Language::Rust, Language::Go, Language::Node] {
+    for language in ALL_LANGUAGES {
         if let Some(filter) = language_filter
             && filter != language
         {
@@ -1226,6 +1272,7 @@ fn discover_language_roots(
             Language::Rust => discover_rust_roots(repo_root),
             Language::Go => discover_go_roots(repo_root),
             Language::Node => discover_node_roots(repo_root),
+            Language::Python => discover_python_roots(repo_root),
         };
         let selected = if roots.is_empty() {
             vec![String::from(".")]
@@ -1294,6 +1341,23 @@ fn discover_node_roots(repo_root: &Path) -> Vec<String> {
     }
 
     dedupe_and_sort_roots(roots)
+}
+
+fn discover_python_roots(repo_root: &Path) -> Vec<String> {
+    let mut roots = Vec::new();
+    for marker in ["pyproject.toml", "requirements.txt", "Pipfile"] {
+        roots.extend(discover_file_parent_roots(repo_root, marker, |parts| {
+            parts.iter().any(|part| is_python_excluded_root(part))
+        }));
+    }
+    dedupe_and_sort_roots(roots)
+}
+
+fn is_python_excluded_root(part: &str) -> bool {
+    matches!(
+        part,
+        ".venv" | "venv" | "env" | "__pycache__" | ".tox" | ".nox" | ".git" | ".ayni"
+    )
 }
 
 fn discover_file_parent_roots<F>(repo_root: &Path, file_name: &str, exclude: F) -> Vec<String>

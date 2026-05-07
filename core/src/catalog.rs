@@ -96,10 +96,123 @@ impl NodePackageManager {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PythonPackageManager {
+    Uv,
+    Poetry,
+    Pdm,
+    Pipenv,
+    Hatch,
+    Pip,
+}
+
+impl PythonPackageManager {
+    #[must_use]
+    pub fn executable(self) -> &'static str {
+        match self {
+            Self::Uv => "uv",
+            Self::Poetry => "poetry",
+            Self::Pdm => "pdm",
+            Self::Pipenv => "pipenv",
+            Self::Hatch => "hatch",
+            Self::Pip => "python",
+        }
+    }
+
+    #[must_use]
+    pub fn run_command(self, module: &str, args: &[&str]) -> (String, Vec<String>) {
+        match self {
+            Self::Uv => python_prefixed("uv", &["run"], module, args),
+            Self::Poetry => python_prefixed("poetry", &["run"], module, args),
+            Self::Pdm => python_prefixed("pdm", &["run"], module, args),
+            Self::Pipenv => python_prefixed("pipenv", &["run"], module, args),
+            Self::Hatch => python_prefixed("hatch", &["run"], module, args),
+            Self::Pip => {
+                let mut command = vec![String::from("-m"), module_name_for_python_m(module)];
+                command.extend(args.iter().map(|value| (*value).to_string()));
+                (String::from("python"), command)
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn add_dependency_args(self, package: &str, dev: bool) -> Vec<String> {
+        match self {
+            Self::Uv => {
+                let mut args = vec![String::from("add")];
+                if dev {
+                    args.push(String::from("--dev"));
+                }
+                args.push(package.to_string());
+                args
+            }
+            Self::Poetry => {
+                let mut args = vec![String::from("add")];
+                if dev {
+                    args.push(String::from("--group"));
+                    args.push(String::from("dev"));
+                }
+                args.push(package.to_string());
+                args
+            }
+            Self::Pdm => {
+                let mut args = vec![String::from("add")];
+                if dev {
+                    args.push(String::from("--dev"));
+                }
+                args.push(package.to_string());
+                args
+            }
+            Self::Pipenv => {
+                let mut args = vec![String::from("install")];
+                if dev {
+                    args.push(String::from("--dev"));
+                }
+                args.push(package.to_string());
+                args
+            }
+            Self::Hatch | Self::Pip => {
+                vec![
+                    String::from("-m"),
+                    String::from("pip"),
+                    String::from("install"),
+                    package.to_string(),
+                ]
+            }
+        }
+    }
+}
+
+fn python_prefixed(
+    program: &str,
+    prefix: &[&str],
+    module: &str,
+    args: &[&str],
+) -> (String, Vec<String>) {
+    let mut command = prefix
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect::<Vec<_>>();
+    command.push(module.to_string());
+    command.extend(args.iter().map(|value| (*value).to_string()));
+    (program.to_string(), command)
+}
+
+fn module_name_for_python_m(module: &str) -> String {
+    match module {
+        "pytest" => String::from("pytest"),
+        "coverage" => String::from("coverage"),
+        "complexipy" => String::from("complexipy"),
+        "mutmut" => String::from("mutmut"),
+        value => value.replace('-', "_"),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct InstallContext<'a> {
     pub cwd: Option<&'a Path>,
     pub node_package_manager: Option<NodePackageManager>,
+    pub python_package_manager: Option<PythonPackageManager>,
 }
 
 #[must_use]
@@ -117,6 +230,29 @@ pub fn detect_node_package_manager(root: &Path) -> Option<NodePackageManager> {
         return Some(NodePackageManager::Bun);
     }
     parse_package_manager_from_manifest(&root.join("package.json"))
+}
+
+#[must_use]
+pub fn detect_python_package_manager(root: &Path) -> Option<PythonPackageManager> {
+    if root.join("uv.lock").is_file() {
+        return Some(PythonPackageManager::Uv);
+    }
+    if root.join("poetry.lock").is_file() {
+        return Some(PythonPackageManager::Poetry);
+    }
+    if root.join("pdm.lock").is_file() {
+        return Some(PythonPackageManager::Pdm);
+    }
+    if root.join("Pipfile.lock").is_file() {
+        return Some(PythonPackageManager::Pipenv);
+    }
+    if root.join("hatch.toml").is_file() {
+        return Some(PythonPackageManager::Hatch);
+    }
+    if root.join("pyproject.toml").is_file() || root.join("requirements.txt").is_file() {
+        return Some(PythonPackageManager::Pip);
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +284,17 @@ pub enum Installer {
         version: Option<&'static str>,
         dev: bool,
     },
+    PythonPackage {
+        package: &'static str,
+        import_name: &'static str,
+        version: Option<&'static str>,
+        dev: bool,
+    },
+    UvTool {
+        package: &'static str,
+        version: Option<&'static str>,
+    },
+    PythonRuntime,
     Bundled,
     Custom {
         program: &'static str,
@@ -176,6 +323,13 @@ impl CatalogEntry {
                     package, version, ..
                 } => node_package_status(ctx.cwd, package, version),
                 Installer::Rustup { component } => rustup_component_status(component),
+                Installer::PythonPackage {
+                    import_name,
+                    version,
+                    ..
+                } => python_package_status(ctx, import_name, version),
+                Installer::UvTool { package, version } => uv_tool_status(package, version),
+                Installer::PythonRuntime => python_runtime_status(),
                 _ => ToolStatus::Missing,
             };
         };
@@ -211,64 +365,98 @@ impl CatalogEntry {
     }
 
     pub fn install_in(&self, ctx: InstallContext<'_>) -> Result<(), String> {
-        match self.installer {
-            Installer::Bundled => Ok(()),
-            Installer::Cargo {
-                crate_name,
-                version,
-            } => {
-                let mut args = vec!["install", "--locked", crate_name];
-                if let Some(version) = version {
-                    args.push("--version");
-                    args.push(version);
-                }
-                run_cmd("cargo", &args, self.name)
-            }
-            Installer::Rustup { component } => {
-                run_cmd("rustup", &["component", "add", component], self.name)
-            }
-            Installer::GoInstall { module, version } => {
-                let target = if let Some(version) = version {
-                    format!("{module}@{version}")
-                } else {
-                    format!("{module}@latest")
-                };
-                run_cmd("go", &["install", target.as_str()], self.name)
-            }
-            Installer::NpmGlobal { package, version } => {
-                let target = if let Some(version) = version {
-                    format!("{package}@{version}")
-                } else {
-                    package.to_owned()
-                };
-                run_cmd("npm", &["install", "-g", target.as_str()], self.name)
-            }
-            Installer::NodePackage {
-                package,
-                version,
-                dev,
-            } => {
-                let cwd = ctx.cwd.ok_or_else(|| {
-                    format!("missing install root for local node package {}", self.name)
-                })?;
-                let manager = ctx.node_package_manager.ok_or_else(|| {
-                    format!(
-                        "missing package manager for local node package {}",
-                        self.name
-                    )
-                })?;
-                let target = if let Some(version) = version {
-                    format!("{package}@{version}")
-                } else {
-                    package.to_string()
-                };
-                let args = manager.add_dependency_args(&target, dev);
-                let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-                run_cmd_in(manager.executable(), &arg_refs, self.name, Some(cwd))
-            }
-            Installer::Custom { program, args } => run_cmd_in(program, args, self.name, ctx.cwd),
-        }
+        install_with(&self.installer, self.name, ctx)
     }
+}
+
+fn install_with(
+    installer: &Installer,
+    tool_name: &str,
+    ctx: InstallContext<'_>,
+) -> Result<(), String> {
+    match installer {
+        Installer::Bundled | Installer::PythonRuntime => Ok(()),
+        Installer::Cargo {
+            crate_name,
+            version,
+        } => install_cargo(crate_name, *version, tool_name),
+        Installer::Rustup { component } => run_cmd("rustup", &["component", "add", component], tool_name),
+        Installer::GoInstall { module, version } => install_go(module, *version, tool_name),
+        Installer::NpmGlobal { package, version } => install_npm_global(package, *version, tool_name),
+        Installer::NodePackage {
+            package,
+            version,
+            dev,
+        } => install_node_package(ctx, package, *version, *dev, tool_name),
+        Installer::PythonPackage {
+            package,
+            version,
+            dev,
+            ..
+        } => install_python_package(ctx, package, *version, *dev, tool_name),
+        Installer::UvTool { package, version } => install_uv_tool(package, *version, tool_name),
+        Installer::Custom { program, args } => run_cmd_in(program, args, tool_name, ctx.cwd),
+    }
+}
+
+fn install_cargo(crate_name: &str, version: Option<&str>, tool_name: &str) -> Result<(), String> {
+    let mut args = vec!["install", "--locked", crate_name];
+    if let Some(version) = version {
+        args.push("--version");
+        args.push(version);
+    }
+    run_cmd("cargo", &args, tool_name)
+}
+
+fn install_go(module: &str, version: Option<&str>, tool_name: &str) -> Result<(), String> {
+    let target = format!("{}@{}", module, version.unwrap_or("latest"));
+    run_cmd("go", &["install", target.as_str()], tool_name)
+}
+
+fn install_npm_global(package: &str, version: Option<&str>, tool_name: &str) -> Result<(), String> {
+    let target = version.map_or_else(|| package.to_owned(), |version| format!("{package}@{version}"));
+    run_cmd("npm", &["install", "-g", target.as_str()], tool_name)
+}
+
+fn install_node_package(
+    ctx: InstallContext<'_>,
+    package: &str,
+    version: Option<&str>,
+    dev: bool,
+    tool_name: &str,
+) -> Result<(), String> {
+    let cwd = ctx
+        .cwd
+        .ok_or_else(|| format!("missing install root for local node package {tool_name}"))?;
+    let manager = ctx
+        .node_package_manager
+        .ok_or_else(|| format!("missing package manager for local node package {tool_name}"))?;
+    let target = version.map_or_else(|| package.to_string(), |version| format!("{package}@{version}"));
+    let args = manager.add_dependency_args(&target, dev);
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_cmd_in(manager.executable(), &arg_refs, tool_name, Some(cwd))
+}
+
+fn install_python_package(
+    ctx: InstallContext<'_>,
+    package: &str,
+    version: Option<&str>,
+    dev: bool,
+    tool_name: &str,
+) -> Result<(), String> {
+    let cwd = ctx
+        .cwd
+        .ok_or_else(|| format!("missing install root for local python package {tool_name}"))?;
+    let manager = ctx.python_package_manager.unwrap_or(PythonPackageManager::Pip);
+    let target = version.map_or_else(|| package.to_string(), |version| format!("{package}=={version}"));
+    let args = manager.add_dependency_args(&target, dev);
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_cmd_in(manager.executable(), &arg_refs, tool_name, Some(cwd))
+}
+
+fn install_uv_tool(package: &str, version: Option<&str>, tool_name: &str) -> Result<(), String> {
+    let target = version.map_or_else(|| package.to_string(), |version| format!("{package}=={version}"));
+    run_cmd("uv", &["tool", "install", target.as_str()], tool_name)
 }
 
 fn run_cmd(program: &str, args: &[&str], tool_name: &str) -> Result<(), String> {
@@ -351,6 +539,85 @@ fn rustup_component_list_prefixes(component: &str) -> Vec<&str> {
     out
 }
 
+fn python_runtime_status() -> ToolStatus {
+    for program in ["python3", "python"] {
+        let Ok(output) = Command::new(program)
+            .arg("--version")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+        else {
+            continue;
+        };
+        if output.status.success() {
+            return ToolStatus::Current;
+        }
+    }
+    ToolStatus::Missing
+}
+
+fn python_package_status(
+    ctx: InstallContext<'_>,
+    import_name: &str,
+    _version: Option<&str>,
+) -> ToolStatus {
+    let manager = ctx
+        .python_package_manager
+        .unwrap_or(PythonPackageManager::Pip);
+    let script = format!(
+        "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('{import_name}') else 1)"
+    );
+    let (program, args) = if manager == PythonPackageManager::Pip {
+        (String::from("python"), vec![String::from("-c"), script])
+    } else {
+        let script_ref = script.as_str();
+        manager.run_command("python", &["-c", script_ref])
+    };
+    let mut command = Command::new(program);
+    command
+        .args(args.iter().map(String::as_str))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(cwd) = ctx.cwd {
+        command.current_dir(cwd);
+    }
+    let Ok(output) = command.output() else {
+        return ToolStatus::Missing;
+    };
+    if output.status.success() {
+        ToolStatus::Current
+    } else {
+        ToolStatus::Missing
+    }
+}
+
+fn uv_tool_status(package: &str, version: Option<&str>) -> ToolStatus {
+    let output = Command::new("uv")
+        .args(["tool", "list"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+    let Ok(output) = output else {
+        return ToolStatus::Missing;
+    };
+    if !output.status.success() {
+        return ToolStatus::Missing;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some(line) = stdout
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some(package))
+    else {
+        return ToolStatus::Missing;
+    };
+    if let Some(required) = version
+        && !line.contains(required)
+    {
+        return ToolStatus::Outdated;
+    }
+    ToolStatus::Current
+}
+
 fn node_package_status(cwd: Option<&Path>, package: &str, version: Option<&str>) -> ToolStatus {
     let Some(cwd) = cwd else {
         return ToolStatus::Missing;
@@ -416,7 +683,8 @@ fn parse_package_manager_from_manifest(manifest_path: &Path) -> Option<NodePacka
 #[cfg(test)]
 mod tests {
     use super::{
-        NodePackageManager, detect_node_package_manager, node_package_status,
+        NodePackageManager, PythonPackageManager, detect_node_package_manager,
+        detect_python_package_manager, node_package_status,
         rustup_installed_lines_contain_component,
     };
     use std::fs;
@@ -499,6 +767,49 @@ mod tests {
         assert_eq!(
             node_package_status(Some(dir.path()), "vitest", Some("2.1.8")),
             super::ToolStatus::Current
+        );
+    }
+
+    #[test]
+    fn detects_python_manager_from_lockfile_precedence() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(dir.path().join("pyproject.toml"), "").expect("pyproject");
+        fs::write(dir.path().join("poetry.lock"), "").expect("poetry lock");
+        assert_eq!(
+            detect_python_package_manager(dir.path()),
+            Some(PythonPackageManager::Poetry)
+        );
+
+        fs::write(dir.path().join("uv.lock"), "").expect("uv lock");
+        assert_eq!(
+            detect_python_package_manager(dir.path()),
+            Some(PythonPackageManager::Uv)
+        );
+    }
+
+    #[test]
+    fn python_manager_builds_run_commands() {
+        assert_eq!(
+            PythonPackageManager::Uv.run_command("pytest", &["-q"]),
+            (
+                String::from("uv"),
+                vec![
+                    String::from("run"),
+                    String::from("pytest"),
+                    String::from("-q")
+                ]
+            )
+        );
+        assert_eq!(
+            PythonPackageManager::Pip.run_command("pytest", &["-q"]),
+            (
+                String::from("python"),
+                vec![
+                    String::from("-m"),
+                    String::from("pytest"),
+                    String::from("-q")
+                ]
+            )
         );
     }
 }

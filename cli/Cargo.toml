@@ -13,6 +13,7 @@ path = "src/main.rs"
 ayni-core = { path = "../core" }
 ayni-adapters-go = { path = "../adapters/go" }
 ayni-adapters-node = { path = "../adapters/node" }
+ayni-adapters-python = { path = "../adapters/python" }
 ayni-adapters-rust = { path = "../adapters/rust" }
 clap = { version = "4", features = ["derive"] }
 clap-markdown = "0.1"

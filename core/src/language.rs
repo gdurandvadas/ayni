@@ -9,6 +9,7 @@ pub enum Language {
     Rust,
     Go,
     Node,
+    Python,
 }
 
 impl Language {
@@ -18,6 +19,7 @@ impl Language {
             Self::Rust => "rust",
             Self::Go => "go",
             Self::Node => "node",
+            Self::Python => "python",
         }
     }
 }
@@ -36,7 +38,21 @@ impl FromStr for Language {
             "rust" => Ok(Self::Rust),
             "go" => Ok(Self::Go),
             "node" | "nodejs" | "javascript" | "typescript" => Ok(Self::Node),
+            "python" | "py" => Ok(Self::Python),
             _ => Err(format!("unsupported language: {value}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Language;
+    use std::str::FromStr;
+
+    #[test]
+    fn parses_python_aliases() {
+        assert_eq!(Language::from_str("python"), Ok(Language::Python));
+        assert_eq!(Language::from_str("py"), Ok(Language::Python));
+        assert_eq!(Language::Python.as_str(), "python");
     }
 }

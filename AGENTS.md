@@ -14,6 +14,7 @@ decisions that are not visible in the code.
 - `docs/adapters/rust.md` — Rust adapter module layout and collector mapping
 - `docs/adapters/node.md` — Node adapter toolchain, lockfile manager resolution, and collector mapping
 - `docs/adapters/go.md` — Go adapter collectors, tool catalog, and policy mapping
+- `docs/adapters/python.md` — Python adapter package managers, collectors, and policy mapping
 - `docs/adapters/template.md` — how to build a new language adapter
 - `docs/cli.md` — CLI reference; regenerate after CLI changes
 
