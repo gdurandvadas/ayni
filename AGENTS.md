@@ -69,6 +69,15 @@ cargo doc-cli > docs/cli.md
   runs scoped analysis.
 - Artifact output: `.ayni/last/signals.json`.
 
+## Example Workspaces
+
+- Use `install` bootstrap checks only on `examples/<language>/single`; monorepo
+  examples already include `.ayni.toml`.
+- Example install command:
+  `cargo run -p ayni-cli -- install --repo-root examples/go/single --language go --apply`
+- Remove installed single-fixture files with:
+  `rm -rf examples/go/single/.ayni.toml examples/go/single/.gitignore examples/go/single/AGENTS.md`
+
 <!-- AYNI:BEGIN -->
 ## Code quality guidance for AI agents
 
