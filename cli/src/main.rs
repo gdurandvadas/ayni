@@ -32,7 +32,7 @@ const AGENTS_MANAGED_END: &str = "<!-- AYNI:END -->";
 
 #[derive(Parser, Debug)]
 #[command(name = "ayni")]
-#[command(version, about = "Local-first code quality signals for AI agents")]
+#[command(version, about = "Open-source code quality signals for AI agents")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

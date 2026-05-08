@@ -1,6 +1,6 @@
 # Ayni — Agent Rules
 
-Ayni is a local-first code-quality signal tool for AI agents.
+Ayni is an open-source code-quality signal tool for AI agents.
 
 ## Documentation
 
@@ -31,8 +31,8 @@ cargo doc-cli > docs/cli.md
   tool catalogs, and collector behavior inside the owning language adapter.
   The CLI may orchestrate adapters but must not hard-code language-specific
   root markers, lockfiles, package managers, or tool behavior.
-- Keep `install` and `analyze` local-first and runnable without login, tokens,
-  servers, or remote state.
+- Keep `install` and `analyze` runnable from the repository checkout with local
+  artifacts.
 - Keep repository policy configuration in `.ayni.toml` at repo root.
 - Keep `.ayni/` generated artifacts out of source control.
 - Keep workspace checks runnable from repository root.

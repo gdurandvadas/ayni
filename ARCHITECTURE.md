@@ -1,6 +1,6 @@
 # Architecture
 
-Ayni is a local-first, multi-language signal tool with strict layer boundaries.
+Ayni is an open-source, multi-language signal tool with strict layer boundaries.
 
 ## Dependency Flow
 
@@ -17,7 +17,7 @@ collection, and the CLI orchestrates user intent and output.
 | --- | --- | --- |
 | `core/` | Signal schema, policy model, adapter traits, runtime context | Tool invocation, CLI ergonomics, persistence |
 | `adapters/` | Local tool execution, output parsing, normalization to core types | New signal kinds, untyped payloads, CLI coupling |
-| `cli/` | User interface, orchestration, argument parsing, local output | Product semantics, adapter internals, remote state |
+| `cli/` | User interface, orchestration, argument parsing, local output | Product semantics, adapter internals |
 
 ## Dependency Rules
 
@@ -25,7 +25,7 @@ collection, and the CLI orchestrates user intent and output.
 2. `adapters/*` depend only on `core`.
 3. `cli` depends on `core` and `adapters/*`.
 4. No reverse dependencies are permitted.
-5. Default commands do not perform network calls.
+5. Default analysis runs from the repository checkout and writes local artifacts.
 
 ## Decision Guide
 
@@ -48,7 +48,7 @@ collection, and the CLI orchestrates user intent and output.
 | Adapter emits untyped payloads | All output must conform to the core schema |
 | CLI directly invokes language analysis tools | Tool invocation belongs in adapters |
 | Adapter couples to CLI argument types | Adapters depend only on core |
-| Default commands add HTTP or remote service integration beyond local tooling | Breaks the local-first guarantee |
+| Default analysis bypasses repository files or adapter tooling | Breaks the local workflow contract |
 
 ## Change Checklist
 
@@ -59,7 +59,7 @@ Before proposing edits:
 - [ ] If touching core: change is product-semantic, not CLI ergonomics
 - [ ] If touching adapters: output conforms to core signal schema
 - [ ] If adding signal kind: defined in core first, then adapter implements
-- [ ] Confirmed `install` and `analyze` still work offline
+- [ ] Confirmed `install` and `analyze` still work from the repository root
 - [ ] Ran `cargo check --workspace --all-features`
 - [ ] Ran `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 

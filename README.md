@@ -1,10 +1,10 @@
 # Ayni
 
-Ayni is a local-first code quality signal tool for repositories that use AI
+Ayni is an open-source code quality signal tool for repositories that use AI
 agents.
 
 Ayni installs agent-facing repository guidance and runs language-specific
-analysis, then normalizes the results into a single local report.
+analysis locally, then normalizes the results into a single report.
 
 ## Why
 
@@ -93,12 +93,11 @@ complexity
 
 </details>
 
-## Local-First
+## Local Workflow
 
-The default `install` and `analyze` workflow does not require login, accounts,
-or remote services. It reads local files, runs local tooling, and writes local
-output only. `ayni install --apply` may download tools from language package
-registries.
+The default `install` and `analyze` workflow runs from the repository checkout.
+It reads project files, runs configured tooling, and writes artifacts under
+`.ayni/`. `ayni install --apply` uses adapter catalogs to install missing tools.
 
 ## Artifacts
 
