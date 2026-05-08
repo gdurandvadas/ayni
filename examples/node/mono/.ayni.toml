@@ -1,0 +1,38 @@
+# Repository-agent quality contract for the Node monorepo example.
+
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["node"]
+
+[concurrency]
+amount = 1
+
+[report]
+offenders_limit = 8
+
+[node]
+roots = ["."]
+
+[node.size]
+"**/*.ts" = { warn = 120, fail = 200, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+"**/*.tsx" = { warn = 120, fail = 200, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+"**/*.js" = { warn = 120, fail = 200, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+"**/*.jsx" = { warn = 120, fail = 200, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+"**/*.mjs" = { warn = 120, fail = 200, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+"**/*.cjs" = { warn = 120, fail = 200, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+
+[node.complexity]
+fn_cyclomatic = { warn = 8, fail = 12 }
+
+[node.coverage]
+line_percent = { warn = 80, fail = 60 }
+
+[node.deps.forbidden]
+"libs/*" = ["services/*"]
