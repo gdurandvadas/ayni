@@ -1,0 +1,34 @@
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["node"]
+
+[concurrency]
+amount = 1
+
+[node]
+roots = ["."]
+
+[node.size]
+"**/*.ts" = { warn = 300, fail = 600, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+"**/*.tsx" = { warn = 300, fail = 600, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+"**/*.js" = { warn = 300, fail = 600, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+"**/*.jsx" = { warn = 300, fail = 600, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+"**/*.mjs" = { warn = 300, fail = 600, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+"**/*.cjs" = { warn = 300, fail = 600, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
+
+[node.complexity]
+fn_cyclomatic = { warn = 10, fail = 20 }
+
+[node.coverage]
+line_percent = { warn = 70, fail = 50 }
+
+[node.deps.forbidden]
+"apps/web/**" = ["apps/legacy/**"]
+"packages/domain/**" = ["packages/ui/**"]

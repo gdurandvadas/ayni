@@ -1,0 +1,28 @@
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["python"]
+
+[concurrency]
+amount = 1
+
+[python]
+roots = ["."]
+
+[python.size]
+"**/*.py" = { warn = 400, fail = 800, exclude = [".venv/**", "venv/**", "env/**", "__pycache__/**", ".pytest_cache/**", ".ruff_cache/**", ".tox/**", ".nox/**", ".git/**", ".ayni/**"] }
+
+[python.complexity]
+fn_cognitive = { warn = 10, fail = 15 }
+
+[python.coverage]
+line_percent = { warn = 80, fail = 60 }
+
+[python.deps.forbidden]
+"src/domain/**" = ["src/presentation/**"]

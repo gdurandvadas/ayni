@@ -1,0 +1,29 @@
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["go"]
+
+[concurrency]
+amount = 1
+
+[go]
+roots = ["."]
+
+[go.size]
+"**/*.go" = { warn = 300, fail = 600, exclude = ["vendor/**", ".git/**", ".ayni/**"] }
+
+[go.complexity]
+fn_cyclomatic = { warn = 10, fail = 20 }
+
+[go.coverage]
+line_percent = { warn = 70, fail = 50 }
+
+[go.deps.forbidden]
+"internal/domain/**" = ["internal/http/**"]
+"internal/core/**" = ["internal/infra/**"]
