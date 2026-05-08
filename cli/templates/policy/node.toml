@@ -1,3 +1,4 @@
+# Select which signal kinds Ayni should run.
 [checks]
 test = true
 coverage = true
@@ -6,15 +7,38 @@ complexity = true
 deps = true
 mutation = false
 
+# Select the language adapters enabled for this repository.
 [languages]
 enabled = ["node"]
 
+# Control parallel analysis across configured roots.
 [concurrency]
+per_language = false
 amount = 1
 
+# Control console report rendering.
+[report]
+offenders_limit = 8
+
+# Define Node package or workspace roots relative to the repository root.
 [node]
 roots = ["."]
 
+# Override Node tool commands when the defaults do not match this repository.
+#
+# [node.tooling.test]
+# command = "pnpm"
+# args = ["exec", "vitest", "run", "--reporter=json", "--passWithNoTests"]
+#
+# [node.tooling.coverage]
+# command = "pnpm"
+# args = ["exec", "vitest", "run", "--coverage", "--coverage.reporter=json-summary", "--passWithNoTests"]
+#
+# [node.tooling.mutation]
+# command = "pnpm"
+# args = ["exec", "stryker", "run", "--logLevel", "error"]
+
+# Set line-count budgets for Node source files.
 [node.size]
 "**/*.ts" = { warn = 300, fail = 600, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
 "**/*.tsx" = { warn = 300, fail = 600, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
@@ -23,12 +47,16 @@ roots = ["."]
 "**/*.mjs" = { warn = 300, fail = 600, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
 "**/*.cjs" = { warn = 300, fail = 600, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
 
+# Set Node function complexity budgets.
 [node.complexity]
 fn_cyclomatic = { warn = 10, fail = 20 }
 
+# Set Node coverage budgets.
 [node.coverage]
 line_percent = { warn = 70, fail = 50 }
+# branch_percent = { warn = 70, fail = 50 }
 
+# Define forbidden Node workspace dependency edges.
 [node.deps.forbidden]
-"apps/web/**" = ["apps/legacy/**"]
-"packages/domain/**" = ["packages/ui/**"]
+# "apps/web/**" = ["apps/legacy/**"]
+# "packages/domain/**" = ["packages/ui/**"]

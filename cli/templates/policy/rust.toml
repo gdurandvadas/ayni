@@ -1,3 +1,4 @@
+# Select which signal kinds Ayni should run.
 [checks]
 test = true
 coverage = true
@@ -6,25 +7,52 @@ complexity = true
 deps = true
 mutation = false
 
+# Select the language adapters enabled for this repository.
 [languages]
 enabled = ["rust"]
 
+# Control parallel analysis across configured roots.
 [concurrency]
+per_language = false
 amount = 1
 
+# Control console report rendering.
+[report]
+offenders_limit = 8
+
+# Define Rust roots relative to the repository root.
 [rust]
 roots = ["."]
 
+# Override Rust tool commands when the defaults do not match this repository.
+#
+# [rust.tooling.test]
+# command = "cargo"
+# args = ["test"]
+#
+# [rust.tooling.coverage]
+# command = "cargo"
+# args = ["llvm-cov", "--workspace", "--json", "--summary-only"]
+#
+# [rust.tooling.mutation]
+# command = "cargo"
+# args = ["mutants", "--list"]
+
+# Set line-count budgets for Rust source files.
 [rust.size]
 "*.rs" = { warn = 1000, fail = 1600, exclude = ["target/**", ".git/**", ".ayni/**"] }
 
+# Set Rust function complexity budgets.
 [rust.complexity]
 fn_cyclomatic = { warn = 10, fail = 15 }
 fn_cognitive = { warn = 20, fail = 30 }
 
+# Set Rust coverage budgets.
 [rust.coverage]
 line_percent = { warn = 40, fail = 35 }
+# branch_percent = { warn = 40, fail = 35 }
 
+# Define forbidden Rust dependency edges.
 [rust.deps.forbidden]
-"core" = ["adapters/*", "cli"]
-"adapters/*" = ["cli"]
+# "core" = ["adapters/*", "cli"]
+# "adapters/*" = ["cli"]

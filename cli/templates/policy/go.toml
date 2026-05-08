@@ -1,3 +1,4 @@
+# Select which signal kinds Ayni should run.
 [checks]
 test = true
 coverage = true
@@ -6,24 +7,51 @@ complexity = true
 deps = true
 mutation = false
 
+# Select the language adapters enabled for this repository.
 [languages]
 enabled = ["go"]
 
+# Control parallel analysis across configured roots.
 [concurrency]
+per_language = false
 amount = 1
 
+# Control console report rendering.
+[report]
+offenders_limit = 8
+
+# Define Go module roots relative to the repository root.
 [go]
 roots = ["."]
 
+# Override Go tool commands when the defaults do not match this repository.
+#
+# [go.tooling.test]
+# command = "go"
+# args = ["test", "./...", "-json"]
+#
+# [go.tooling.coverage]
+# command = "go"
+# args = ["test", "./...", "-coverprofile=.ayni/go.cover.out"]
+#
+# [go.tooling.mutation]
+# command = "go"
+# args = ["test", "./..."]
+
+# Set line-count budgets for Go source files.
 [go.size]
 "**/*.go" = { warn = 300, fail = 600, exclude = ["vendor/**", ".git/**", ".ayni/**"] }
 
+# Set Go function complexity budgets.
 [go.complexity]
 fn_cyclomatic = { warn = 10, fail = 20 }
 
+# Set Go coverage budgets.
 [go.coverage]
 line_percent = { warn = 70, fail = 50 }
+# branch_percent = { warn = 70, fail = 50 }
 
+# Define forbidden Go dependency edges.
 [go.deps.forbidden]
-"internal/domain/**" = ["internal/http/**"]
-"internal/core/**" = ["internal/infra/**"]
+# "internal/domain/**" = ["internal/http/**"]
+# "internal/core/**" = ["internal/infra/**"]
