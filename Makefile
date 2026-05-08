@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 .PHONY: ayni ayni-sandbox-analyze ayni-sandbox-install \
-	docker-cli docker-build docker-install docker-analyze docker-example docker-examples \
+	docker-build docker-install docker-analyze docker-example docker-examples \
 	docker-build-rust docker-build-go docker-build-node docker-build-python \
 	docker-install-rust-single docker-install-go-single docker-install-node-single docker-install-python-single \
 	docker-analyze-rust-mono docker-analyze-go-mono docker-analyze-node-mono docker-analyze-python-mono \
@@ -12,23 +12,19 @@ LANG ?= go
 FIXTURE ?= single
 APPLY ?= true
 DOCKER_IMAGE_PREFIX ?= ayni-example
-DOCKER_CLI_IMAGE ?= ayni-cli-builder
-DOCKER_OUT ?= .ayni-docker
-DOCKER_CLI = target/docker/ayni
 DOCKER_IMAGE = $(DOCKER_IMAGE_PREFIX)-$(LANG)
 DOCKERFILE = examples/$(LANG)/Dockerfile
 FIXTURE_PATH = examples/$(LANG)/$(FIXTURE)
-OUT_DIR = $(DOCKER_OUT)/$(LANG)-$(FIXTURE)
-WORK_DIR = $(OUT_DIR)/work
 DOCKER_USER = $(shell id -u):$(shell id -g)
 DOCKER_ENV = -e HOME=/tmp/ayni-home \
 	-e GOPATH=/tmp/ayni-go \
 	-e UV_TOOL_DIR=/tmp/ayni-uv-tools \
 	-e UV_TOOL_BIN_DIR=/tmp/ayni-bin
 DOCKER_RUN = docker run --rm \
+	--tmpfs /tmp:rw,exec,nosuid,size=1g \
 	--user $(DOCKER_USER) \
 	$(DOCKER_ENV) \
-	-v "$(CURDIR):/repo" \
+	-v "$(CURDIR):/repo:ro" \
 	-w /repo \
 	$(DOCKER_IMAGE)
 
@@ -41,51 +37,27 @@ ayni-sandbox-analyze:
 ayni-sandbox-install:
 	@cargo run -p ayni-cli -- install --repo-root fixtures/ayni-sandbox
 
-docker-cli:
-	@mkdir -p target/docker
-	@docker build -f Dockerfile.cli -t $(DOCKER_CLI_IMAGE) .
-	@docker run --rm \
-		--user $(DOCKER_USER) \
-		-e HOME=/tmp/ayni-home \
-		-e CARGO_HOME=/tmp/ayni-cargo \
-		-v "$(CURDIR):/repo" \
-		-w /repo \
-		$(DOCKER_CLI_IMAGE) \
-		bash -lc 'cargo build -p ayni-cli && cp target/debug/ayni $(DOCKER_CLI)'
-
 docker-build:
 	@docker build -f $(DOCKERFILE) -t $(DOCKER_IMAGE) .
 
-docker-install: docker-cli
-	@mkdir -p $(OUT_DIR)
-	@$(DOCKER_RUN) bash -lc 'set -euo pipefail; \
-		work=$(WORK_DIR); \
-		rm -rf "$$work"; \
-		mkdir -p "$$(dirname "$$work")"; \
-		cp -a $(FIXTURE_PATH) "$$work"; \
+docker-install:
+	@$(DOCKER_RUN) bash -c 'set -euo pipefail; \
+		work=$$(mktemp -d -t ayni-$(LANG)-$(FIXTURE)-XXXXXX); \
+		cp -a /repo/$(FIXTURE_PATH)/. "$$work"; \
 		if [ "$(FIXTURE)" = "single" ]; then \
 			rm -rf "$$work/.ayni" "$$work/.ayni.toml" "$$work/.gitignore" "$$work/AGENTS.md"; \
 		fi; \
-		mkdir -p $(OUT_DIR); \
 		args=(install --repo-root "$$work" --language $(LANG)); \
 		if [ "$(APPLY)" = "true" ]; then args+=(--apply); fi; \
-		/repo/$(DOCKER_CLI) "$${args[@]}" 2>&1 | tee $(OUT_DIR)/install.log; \
-		for generated in .ayni.toml .gitignore AGENTS.md; do \
-			if [ -f "$$work/$$generated" ]; then cp "$$work/$$generated" "$(OUT_DIR)/$${generated#.}"; fi; \
-		done; \
+		ayni "$${args[@]}"; \
 		rm -rf "$$work"'
 
-docker-analyze: docker-cli
-	@mkdir -p $(OUT_DIR)
-	@$(DOCKER_RUN) bash -lc 'set -euo pipefail; \
-		work=$(WORK_DIR); \
-		rm -rf "$$work"; \
-		mkdir -p "$$(dirname "$$work")"; \
-		cp -a $(FIXTURE_PATH) "$$work"; \
-		mkdir -p $(OUT_DIR); \
-		/repo/$(DOCKER_CLI) install --repo-root "$$work" --language $(LANG) --apply 2>&1 | tee $(OUT_DIR)/install.log; \
-		/repo/$(DOCKER_CLI) analyze --config "$$work/.ayni.toml" --language $(LANG) 2>&1 | tee $(OUT_DIR)/analyze.log; \
-		if [ -f "$$work/.ayni/last/signals.json" ]; then cp "$$work/.ayni/last/signals.json" $(OUT_DIR)/signals.json; fi; \
+docker-analyze:
+	@$(DOCKER_RUN) bash -c 'set -euo pipefail; \
+		work=$$(mktemp -d -t ayni-$(LANG)-$(FIXTURE)-XXXXXX); \
+		cp -a /repo/$(FIXTURE_PATH)/. "$$work"; \
+		ayni install --repo-root "$$work" --language $(LANG) --apply; \
+		ayni analyze --config "$$work/.ayni.toml" --language $(LANG); \
 		rm -rf "$$work"'
 
 docker-example: docker-build

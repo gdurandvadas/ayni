@@ -27,5 +27,4 @@ target
 # Ayni
 **/*.rs.bk
 .ayni/
-.ayni-docker/
 .DS_Store
