@@ -28,7 +28,7 @@ pub static NODE_CATALOG: &[CatalogEntry] = &[
         check: None,
         installer: Installer::NodePackage {
             package: "vitest",
-            version: None,
+            version: Some("3.2.4"),
             dev: true,
         },
         for_signals: &[SignalKind::Test, SignalKind::Coverage],
@@ -39,7 +39,7 @@ pub static NODE_CATALOG: &[CatalogEntry] = &[
         check: None,
         installer: Installer::NodePackage {
             package: "@vitest/coverage-v8",
-            version: None,
+            version: Some("3.2.4"),
             dev: true,
         },
         for_signals: &[SignalKind::Coverage],
