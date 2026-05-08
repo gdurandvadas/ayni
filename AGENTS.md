@@ -33,7 +33,7 @@ cargo doc-cli > docs/cli.md
   root markers, lockfiles, package managers, or tool behavior.
 - Keep `install` and `analyze` runnable from the repository checkout with local
   artifacts.
-- Keep repository policy configuration in `.ayni.toml` at repo root.
+- Keep the repository-agent quality contract in `.ayni.toml` at repo root.
 - Keep `.ayni/` generated artifacts out of source control.
 - Keep workspace checks runnable from repository root.
 

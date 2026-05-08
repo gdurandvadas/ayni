@@ -1,6 +1,12 @@
 # Configuration reference (`.ayni.toml`)
 
-Policy lives at the repository root in **`.ayni.toml`**. It is the contract between your repo and Ayni: which signals run, which languages are active, and per-language thresholds.
+`.ayni.toml` is the quality contract between the repository and the agent. It
+defines what the agent should check, which code is in scope, and which limits
+the code must stay within.
+
+Policy lives at the repository root. It controls enabled signals, active
+languages and roots, per-language thresholds, dependency rules, report settings,
+and tool command overrides.
 
 For the signal vocabulary and JSON artifact fields, see [`signals.md`](signals.md).
 

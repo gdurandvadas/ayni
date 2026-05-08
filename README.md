@@ -14,7 +14,7 @@ coverage, complexity, size, and architectural rules.
 Ayni helps by:
 
 - adding or updating `AGENTS.md`
-- creating `.ayni.toml` policy scaffolding
+- defining the repository-agent contract in `.ayni.toml`
 - collecting `test`, `coverage`, `size`, `complexity`, `deps`, and `mutation` signals
 - producing terminal and Markdown reports
 - writing machine-readable local artifacts for repair loops
@@ -48,6 +48,10 @@ What these do:
 - `ayni install --apply` also installs missing or outdated tools from local language ecosystems.
 - `ayni analyze` prints the stdout report and writes `.ayni/last/signals.json`.
 - `ayni analyze --output md` prints Markdown to stdout and writes `.ayni/last/signals.json`.
+
+`.ayni.toml` is the contract between the repository and the agent: which
+languages and roots are in scope, which signals run, and which limits define
+healthy code.
 
 ## Commands
 

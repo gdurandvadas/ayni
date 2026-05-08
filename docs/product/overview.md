@@ -84,7 +84,11 @@ argument parsing, orchestration, and local output.
 
 ## Configuration Model
 
-`.ayni.toml` is language-aware. The full reference is in
+`.ayni.toml` is the handoff point between humans and agents. Humans encode the
+repository's quality expectations in `.ayni.toml`; agents run Ayni against that
+contract and use failing rows as repair targets.
+
+The file is language-aware. The full reference is in
 [Configuration reference](config.md).
 
 At a glance:
