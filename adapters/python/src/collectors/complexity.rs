@@ -1,4 +1,4 @@
-use super::util::{ensure_ayni_dir, run_python_tool, to_repo_relative_path};
+use super::util::{ensure_ayni_dir, run_command, to_repo_relative_path};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
@@ -22,21 +22,25 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let report_path = artifact_dir.join("complexipy.json");
     let threshold = cognitive.fail.to_string();
     let output_path = report_path.to_string_lossy().to_string();
-    let output = run_python_tool(
-        context,
-        "complexipy",
-        &[
-            ".",
-            "--output-format",
-            "json",
-            "--output",
-            output_path.as_str(),
-            "--max-complexity-allowed",
-            threshold.as_str(),
-            "--ignore-complexity",
-        ],
-    )?;
-    let status_ok = output.status.success();
+    let args = vec![
+        String::from("."),
+        String::from("--output-format"),
+        String::from("json"),
+        String::from("--output"),
+        output_path,
+        String::from("--max-complexity-allowed"),
+        threshold,
+        String::from("--ignore-complexity"),
+    ];
+    let output = run_command(&context.workdir, "complexipy", &args)?;
+    if !output.status.success() {
+        return Err(format!(
+            "complexipy failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
     let value = read_report(&report_path)?;
     let mut entries = Vec::new();
     collect_function_entries(&value, None, &mut entries);
@@ -96,7 +100,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             package: context.scope.package.clone(),
             file: context.scope.file.clone(),
         },
-        pass: status_ok && fail_count == 0,
+        pass: fail_count == 0,
         result: SignalResult::Complexity(ComplexityResult {
             engine: String::from("complexipy"),
             method: String::from("cognitive"),
