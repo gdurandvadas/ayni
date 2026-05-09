@@ -6,6 +6,7 @@ use glob::Pattern;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
+use std::path::Path;
 use walkdir::WalkDir;
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
@@ -24,7 +25,10 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let mut fail_count = 0_u64;
     let mut total_files = 0_u64;
 
-    for entry in WalkDir::new(&context.workdir) {
+    for entry in WalkDir::new(&context.workdir)
+        .into_iter()
+        .filter_entry(|entry| !is_excluded_dir(entry.path()))
+    {
         let entry = match entry {
             Ok(value) => value,
             Err(_) => continue,
@@ -32,14 +36,16 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         if !entry.file_type().is_file() {
             continue;
         }
-        let relative = match entry.path().strip_prefix(&context.repo_root) {
-            Ok(value) => value,
+        let rel_for_match = match entry.path().strip_prefix(&context.workdir) {
+            Ok(value) => value.to_string_lossy().replace('\\', "/"),
             Err(_) => continue,
         };
-        let rel = relative.to_string_lossy().replace('\\', "/");
-
-        let Some(threshold) = first_matching(&compiled, &rel) else {
+        let Some(threshold) = first_matching(&compiled, &rel_for_match) else {
             continue;
+        };
+        let rel = match entry.path().strip_prefix(&context.repo_root) {
+            Ok(value) => value.to_string_lossy().replace('\\', "/"),
+            Err(_) => continue,
         };
 
         total_files += 1;
@@ -92,6 +98,13 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         delta_vs_previous: None,
         delta_vs_baseline: None,
     })
+}
+
+fn is_excluded_dir(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|value| value.to_str()),
+        Some("target" | ".git" | ".ayni")
+    )
 }
 
 struct CompiledRule<'a> {
