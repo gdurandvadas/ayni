@@ -3,7 +3,7 @@ name: publish-ayni-rust-ci
 on:
   push:
     branches:
-      - chore/ci
+      - main
     paths:
       - .github/docker/ayni-rust-ci.Dockerfile
       - .github/workflows/publish-ayni-rust-ci.yml

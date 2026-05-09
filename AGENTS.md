@@ -8,7 +8,7 @@ Read these before implementing anything. They are the source of truth for
 decisions that are not visible in the code.
 
 - `ARCHITECTURE.md` — layer boundaries, dependency rules, and change decision guide
-- `docs/product/overview.md` — product framing, AI feedback loop, and architecture
+- `README.md` — product framing, AI feedback loop, and high-level architecture
 - `docs/product/config.md` — `.ayni.toml` reference
 - `docs/product/signals.md` — canonical signal vocabulary and field-level contract
 - `docs/adapters/rust.md` — Rust adapter module layout and collector mapping
