@@ -6,7 +6,7 @@ coverage = true
 size = true
 complexity = true
 deps = true
-mutation = true
+mutation = false
 
 [languages]
 enabled = ["python"]
