@@ -1,0 +1,78 @@
+name: publish-ayni-rust-ci
+
+on:
+  push:
+    branches:
+      - chore/ci
+    paths:
+      - .github/docker/ayni-rust-ci.Dockerfile
+      - .github/workflows/publish-ayni-rust-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve Rust CI image versions from repo sources
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rust_version="$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          cargo_llvm_cov_version="$(sed -n '/crate_name: "cargo-llvm-cov"/{n;s/.*version: Some("\([^"]*\)").*/\1/p;}' adapters/rust/src/catalog.rs | head -n1)"
+          rust_code_analysis_cli_version="$(sed -n '/crate_name: "rust-code-analysis-cli"/{n;s/.*version: Some("\([^"]*\)").*/\1/p;}' adapters/rust/src/catalog.rs | head -n1)"
+
+          if [ -z "${rust_version}" ]; then
+            echo "Missing workspace rust-version in Cargo.toml" >&2
+            exit 1
+          fi
+
+          if [ -z "${cargo_llvm_cov_version}" ]; then
+            echo "Missing cargo-llvm-cov version in adapters/rust/src/catalog.rs" >&2
+            exit 1
+          fi
+
+          echo "rust_version=${rust_version}" >> "${GITHUB_OUTPUT}"
+          echo "cargo_llvm_cov_version=${cargo_llvm_cov_version}" >> "${GITHUB_OUTPUT}"
+          echo "rust_code_analysis_cli_version=${rust_code_analysis_cli_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/gdurandvadas/ayni-rust-ci
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .github/docker/ayni-rust-ci.Dockerfile
+          push: true
+          build-args: |
+            RUST_VERSION=${{ steps.versions.outputs.rust_version }}
+            CARGO_LLVM_COV_VERSION=${{ steps.versions.outputs.cargo_llvm_cov_version }}
+            RUST_CODE_ANALYSIS_CLI_VERSION=${{ steps.versions.outputs.rust_code_analysis_cli_version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
