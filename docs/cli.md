@@ -11,7 +11,7 @@ This document contains the help content for the `ayni` command-line program.
 
 ## `ayni`
 
-Local-first code quality signals for AI agents
+Open-source code quality signals for AI agents
 
 **Usage:** `ayni <COMMAND>`
 

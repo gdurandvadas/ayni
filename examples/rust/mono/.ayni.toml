@@ -1,0 +1,34 @@
+# Repository-agent quality contract for the Rust monorepo example.
+
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["rust"]
+
+[concurrency]
+amount = 1
+
+[report]
+offenders_limit = 8
+
+[rust]
+roots = ["."]
+
+[rust.size]
+"*.rs" = { warn = 120, fail = 200, exclude = ["target/**", ".git/**", ".ayni/**"] }
+
+[rust.complexity]
+fn_cyclomatic = { warn = 8, fail = 12 }
+fn_cognitive = { warn = 12, fail = 18 }
+
+[rust.coverage]
+line_percent = { warn = 80, fail = 60 }
+
+[rust.deps.forbidden]
+"libs/*" = ["services/*"]

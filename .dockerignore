@@ -1,0 +1,14 @@
+.git
+.ayni
+.ayni-docker
+target
+**/target
+**/node_modules
+**/.venv
+**/venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.tox
+**/.nox
+.DS_Store

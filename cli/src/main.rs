@@ -22,17 +22,20 @@ use ayni_core::{
 use clap::{Parser, Subcommand, ValueEnum};
 use discovery::discover_language_roots;
 
-const AYNI_POLICY_TOML: &str = include_str!("../../.ayni.toml");
 const ARTIFACTS_DIR: &str = ".ayni/last";
 const HISTORY_DIR: &str = ".ayni/history";
 const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
 const PREVIOUS_SIGNALS_SNAPSHOT: &str = ".ayni/history/previous-signals.jsonl";
 const AGENTS_MANAGED_BEGIN: &str = "<!-- AYNI:BEGIN -->";
 const AGENTS_MANAGED_END: &str = "<!-- AYNI:END -->";
+const RUST_POLICY_TEMPLATE: &str = include_str!("../templates/policy/rust.toml");
+const GO_POLICY_TEMPLATE: &str = include_str!("../templates/policy/go.toml");
+const NODE_POLICY_TEMPLATE: &str = include_str!("../templates/policy/node.toml");
+const PYTHON_POLICY_TEMPLATE: &str = include_str!("../templates/policy/python.toml");
 
 #[derive(Parser, Debug)]
 #[command(name = "ayni")]
-#[command(version, about = "Local-first code quality signals for AI agents")]
+#[command(version, about = "Open-source code quality signals for AI agents")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -473,7 +476,7 @@ fn prepare_install_policy(
     root: &Path,
     language_filter: Option<Language>,
 ) -> Result<AyniPolicy, String> {
-    let scaffold = scaffold_files(root)?;
+    let scaffold = scaffold_files(root, language_filter)?;
     let policy = AyniPolicy::load(root)?;
     if scaffold.policy_created {
         let enabled_languages = policy.enabled_languages()?;
@@ -1303,16 +1306,30 @@ struct ScaffoldOutcome {
     policy_created: bool,
 }
 
-fn scaffold_files(repo_root: &Path) -> Result<ScaffoldOutcome, String> {
+fn scaffold_files(
+    repo_root: &Path,
+    language_filter: Option<Language>,
+) -> Result<ScaffoldOutcome, String> {
     let policy_path = repo_root.join(".ayni.toml");
     let policy_created = !policy_path.exists();
     if policy_created {
-        fs::write(&policy_path, AYNI_POLICY_TOML)
+        fs::write(&policy_path, default_policy_toml(language_filter))
             .map_err(|error| format!("failed to create {}: {error}", policy_path.display()))?;
     }
     ensure_ayni_gitignore_entry(&repo_root.join(".gitignore"))?;
     ensure_agents_managed_section(repo_root)?;
     Ok(ScaffoldOutcome { policy_created })
+}
+
+fn default_policy_toml(language_filter: Option<Language>) -> String {
+    let language = language_filter.unwrap_or(Language::Rust);
+    match language {
+        Language::Rust => RUST_POLICY_TEMPLATE,
+        Language::Go => GO_POLICY_TEMPLATE,
+        Language::Node => NODE_POLICY_TEMPLATE,
+        Language::Python => PYTHON_POLICY_TEMPLATE,
+    }
+    .to_string()
 }
 
 fn ensure_agents_managed_section(repo_root: &Path) -> Result<(), String> {

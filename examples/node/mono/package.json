@@ -1,0 +1,1 @@
+{"name":"node-mono","private":true,"workspaces":["libs/*","services/*"]}

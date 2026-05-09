@@ -1,0 +1,56 @@
+# Select which signal kinds Ayni should run.
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+# Select the language adapters enabled for this repository.
+[languages]
+enabled = ["python"]
+
+# Control parallel analysis across configured roots.
+[concurrency]
+per_language = false
+amount = 1
+
+# Control console report rendering.
+[report]
+offenders_limit = 8
+
+# Define Python project roots relative to the repository root.
+[python]
+roots = ["."]
+
+# Override Python tool commands when the defaults do not match this repository.
+#
+# [python.tooling.test]
+# command = "uv"
+# args = ["run", "pytest", "--json-report", "--json-report-file", ".ayni/pytest-report.json"]
+#
+# [python.tooling.coverage]
+# command = "uv"
+# args = ["run", "pytest", "--cov=.", "--cov-report=json:.ayni/coverage.json"]
+#
+# [python.tooling.mutation]
+# command = "uv"
+# args = ["run", "mutmut", "run"]
+
+# Set line-count budgets for Python source files.
+[python.size]
+"**/*.py" = { warn = 400, fail = 800, exclude = [".venv/**", "venv/**", "env/**", "__pycache__/**", ".pytest_cache/**", ".ruff_cache/**", ".tox/**", ".nox/**", ".git/**", ".ayni/**"] }
+
+# Set Python function complexity budgets.
+[python.complexity]
+fn_cognitive = { warn = 10, fail = 15 }
+
+# Set Python coverage budgets.
+[python.coverage]
+line_percent = { warn = 80, fail = 60 }
+# branch_percent = { warn = 80, fail = 60 }
+
+# Define forbidden Python import dependency edges.
+[python.deps.forbidden]
+# "src/domain/**" = ["src/presentation/**"]

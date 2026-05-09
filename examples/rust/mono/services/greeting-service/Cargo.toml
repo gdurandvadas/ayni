@@ -1,0 +1,11 @@
+[package]
+name = "greeting-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4"
+greetinglib = { path = "../../libs/greeting" }
+mathlib = { path = "../../libs/math" }
+# Intentional policy/dependency scenario:
+reqwest = "0.12"

@@ -11,9 +11,9 @@ The open-source version currently supports:
 
 Out of scope:
 
-- Hosted or remote-first workflows
-- External authentication providers
-- Server-side run storage
+- Managed service workflows
+- Managed product features
+- External run storage
 
 ## Development
 
@@ -43,15 +43,14 @@ cargo doc-cli > docs/cli.md
 - CLI handles arguments, orchestration, and local output.
 - Core owns analysis policy, signal types, and adapter contracts.
 - Adapters own language-specific local tool execution.
-- Default commands must not require network access, tokens, accounts, or remote
-  state.
+- Default analysis runs from the repository checkout and writes local artifacts.
 - No reverse dependencies are allowed: `core` <- `adapters` <- `cli`.
 
 ## Pull Request Checklist
 
 - Tests added or updated when behavior changes.
-- No server dependency introduced.
-- No remote accounts, hosted backends, or usage tracking introduced.
+- No managed service dependency introduced.
+- Local artifact behavior preserved.
 - README or docs updated if behavior changed.
 - `AGENTS.md` install behavior remains deterministic and preserves user content.
 - `cargo fmt`, `cargo clippy`, `cargo test`, and `cargo check` pass.

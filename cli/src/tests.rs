@@ -81,6 +81,35 @@ fn language_arg_accepts_python() {
 }
 
 #[test]
+fn default_policy_templates_are_valid_for_each_language() {
+    for language in [
+        Language::Rust,
+        Language::Go,
+        Language::Node,
+        Language::Python,
+    ] {
+        let policy: ayni_core::AyniPolicy =
+            toml::from_str(&super::default_policy_toml(Some(language))).expect("policy");
+
+        assert_eq!(policy.enabled_languages().expect("languages"), [language]);
+        assert_eq!(policy.roots_for(language), ["."]);
+        assert!(!policy.size_rules_for(language).is_empty());
+    }
+}
+
+#[test]
+fn default_policy_template_falls_back_to_rust() {
+    let policy: ayni_core::AyniPolicy =
+        toml::from_str(&super::default_policy_toml(None)).expect("policy");
+
+    assert_eq!(
+        policy.enabled_languages().expect("languages"),
+        [Language::Rust]
+    );
+    assert_eq!(policy.roots_for(Language::Rust), ["."]);
+}
+
+#[test]
 fn python_analyze_targets_are_built_when_enabled() {
     let dir = TempDir::new().expect("tempdir");
     fs::write(dir.path().join("pyproject.toml"), "").expect("pyproject");

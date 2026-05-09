@@ -1,0 +1,33 @@
+# Repository-agent quality contract for the Python monorepo example.
+
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["python"]
+
+[concurrency]
+amount = 1
+
+[report]
+offenders_limit = 8
+
+[python]
+roots = ["libs/greeting", "libs/math", "services/greeting_service"]
+
+[python.size]
+"**/*.py" = { warn = 120, fail = 200, exclude = [".venv/**", "venv/**", "env/**", "__pycache__/**", ".pytest_cache/**", ".ruff_cache/**", ".tox/**", ".nox/**", ".git/**", ".ayni/**"] }
+
+[python.complexity]
+fn_cognitive = { warn = 8, fail = 12 }
+
+[python.coverage]
+line_percent = { warn = 80, fail = 60 }
+
+[python.deps.forbidden]
+"libs/*" = ["services/*"]

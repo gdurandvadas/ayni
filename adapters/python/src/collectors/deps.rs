@@ -78,14 +78,14 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
 
 fn python_files(context: &RunContext) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    for entry in WalkDir::new(&context.workdir) {
+    for entry in WalkDir::new(&context.workdir)
+        .into_iter()
+        .filter_entry(|entry| !is_excluded_dir(entry.path()))
+    {
         let Ok(entry) = entry else {
             continue;
         };
         let path = entry.path();
-        if entry.file_type().is_dir() && is_excluded_dir(path) {
-            continue;
-        }
         if entry.file_type().is_file() && path.extension().and_then(|v| v.to_str()) == Some("py") {
             files.push(path.to_path_buf());
         }

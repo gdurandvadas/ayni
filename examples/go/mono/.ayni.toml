@@ -1,0 +1,33 @@
+# Repository-agent quality contract for the Go monorepo example.
+
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["go"]
+
+[concurrency]
+amount = 1
+
+[report]
+offenders_limit = 8
+
+[go]
+roots = ["."]
+
+[go.size]
+"**/*.go" = { warn = 120, fail = 200, exclude = ["vendor/**", ".git/**", ".ayni/**"] }
+
+[go.complexity]
+fn_cyclomatic = { warn = 8, fail = 12 }
+
+[go.coverage]
+line_percent = { warn = 80, fail = 60 }
+
+[go.deps.forbidden]
+"libs/*" = ["services/*"]
