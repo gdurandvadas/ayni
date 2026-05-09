@@ -10,9 +10,15 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/gdurandvadas/ayni-rust-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
       pull-requests: write
+      packages: read
     outputs:
       install_exit_code: ${{ steps.install.outputs.exit_code }}
       analyze_exit_code: ${{ steps.analyze.outputs.exit_code }}
@@ -20,9 +26,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

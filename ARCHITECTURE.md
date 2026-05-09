@@ -65,7 +65,7 @@ Before proposing edits:
 
 ## See Also
 
-- [Product overview](docs/product/overview.md)
+- [README](README.md)
 - [Signal contract](docs/product/signals.md)
 - [Adapter template](docs/adapters/template.md)
 - [Configuration reference](docs/product/config.md)
