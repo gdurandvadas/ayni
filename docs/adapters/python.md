@@ -5,6 +5,7 @@ contracts as the Rust, Go, and Node adapters.
 
 It detects Python project roots, resolves per-root package manager behavior, and
 emits canonical `SignalRow` values for each enabled `SignalKind`.
+Runtime behavior follows the product-level [runtime and setup rules](../product/runtime.md).
 
 ## Module layout
 

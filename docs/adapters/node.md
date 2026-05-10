@@ -3,6 +3,7 @@
 The Node adapter implements the same `LanguageAdapter` and `SignalCollector` contracts as the Rust and Go adapters.
 
 It detects Node workspaces, resolves per-root package manager behavior, and emits canonical `SignalRow` values for each enabled `SignalKind`.
+Runtime behavior follows the product-level [runtime and setup rules](../product/runtime.md).
 
 ## Module layout
 
@@ -42,13 +43,14 @@ Every collector outputs:
 
 Node roots are discovered from `[node].roots` and adapter detection.
 
-Per root, package manager resolution precedence is:
+Per root, package manager resolution is ancestry-aware. Precedence is:
 
 1. `pnpm-lock.yaml`
 2. `yarn.lock`
 3. `package-lock.json`
 4. `bun.lock` or `bun.lockb`
 5. `packageManager` field in `package.json` (fallback when lockfiles are missing)
+6. workspace ancestor `package.json` with `workspaces` and package-manager markers
 
 When no manager can be confidently inferred, runtime behavior falls back to npm-compatible assumptions.
 

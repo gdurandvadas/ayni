@@ -10,8 +10,11 @@ Each adapter must:
 2. Declare tool requirements in a typed catalog.
 3. Collect enabled signal kinds.
 4. Normalize tool output into Ayni core signal types.
+5. Resolve execution context using the product runtime rules.
 
 Adapters must not define new signal kinds or invent ad-hoc top-level payload shapes.
+For runner resolution, setup validation, and failure categories, see
+[`docs/product/runtime.md`](../product/runtime.md).
 
 ## Required interfaces
 
@@ -19,6 +22,8 @@ Implement `LanguageAdapter` and `SignalCollector` from `ayni-core`.
 
 - `language() -> Language`: language identity.
 - `detect(root) -> DetectResult`: language presence and confidence.
+- `resolve_execution(repo_root, root) -> ExecutionResolution`: ancestry-aware
+  runner and setup context.
 - `catalog() -> &[CatalogEntry]`: install requirements.
 - `collector() -> &dyn SignalCollector`: typed signal collection.
 

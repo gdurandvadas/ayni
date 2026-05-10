@@ -1,6 +1,6 @@
 use crate::catalog::CatalogEntry;
 use crate::language::Language;
-use crate::runtime::{AdapterError, RunContext};
+use crate::runtime::{AdapterError, ExecutionResolution, RunContext};
 use crate::signal::{SignalKind, SignalRow};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -26,6 +26,16 @@ pub trait SignalCollector: Send + Sync {
 pub trait LanguageAdapter: Send + Sync {
     fn language(&self) -> Language;
     fn detect(&self, root: &Path) -> DetectResult;
+    fn resolve_execution(&self, _repo_root: &Path, root: &Path) -> Option<ExecutionResolution> {
+        self.detect(root).detected.then(|| {
+            ExecutionResolution::direct(
+                self.language().as_str(),
+                root.to_path_buf(),
+                format!("{} root", self.language().as_str()),
+                60,
+            )
+        })
+    }
     fn discover_roots(&self, repo_root: &Path) -> Vec<String>;
     fn profile(&self) -> LanguageProfile;
     fn catalog(&self) -> &'static [CatalogEntry];

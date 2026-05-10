@@ -146,6 +146,48 @@ roots = ["."]
     .expect("targets");
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].language, Language::Python);
+    assert_eq!(targets[0].run_context.execution.runner, "python");
+    assert_eq!(targets[0].run_context.execution.kind, "direct_root");
+}
+
+#[test]
+fn foundation_validation_creates_generic_artifact_work_dir() {
+    let dir = TempDir::new().expect("tempdir");
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        r#"[package]
+name = "fixture"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .expect("cargo manifest");
+    let policy: ayni_core::AyniPolicy = toml::from_str(
+        r#"
+[checks]
+test = false
+coverage = false
+size = true
+complexity = false
+deps = false
+mutation = false
+
+[languages]
+enabled = ["rust"]
+
+[rust]
+roots = ["."]
+
+[rust.size]
+"*.rs" = { warn = 400, fail = 800 }
+"#,
+    )
+    .expect("policy");
+
+    let failures = super::validate_install_foundation(dir.path(), &policy, Some(Language::Rust));
+
+    assert!(failures.is_empty());
+    assert!(dir.path().join(".ayni/work/rust/workspace").is_dir());
 }
 
 fn test_row(pass: bool, passed: u64, failed: u64) -> ayni_core::SignalRow {

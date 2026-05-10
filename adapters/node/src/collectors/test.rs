@@ -1,4 +1,6 @@
-use super::util::{package_manager_for_context, run_command, run_tool};
+use super::util::{
+    command_failure_from_output, package_manager_for_context, run_command_for_context, run_tool,
+};
 use ayni_core::{
     Budget, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, TestFailure,
     TestResult,
@@ -8,7 +10,7 @@ use serde_json::json;
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let (output, runner) = if let Some((program, args, runner)) = test_override_command(context) {
-        (run_command(&context.workdir, &program, &args)?, runner)
+        (run_command_for_context(context, &program, &args)?, runner)
     } else {
         let output = run_tool(
             context,
@@ -63,6 +65,19 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
 
     let pass = status_ok && failed == 0;
+    let failure = (!status_ok).then(|| {
+        command_failure_from_output(
+            context,
+            SignalKind::Test,
+            runner.split_whitespace().next().unwrap_or("node"),
+            &runner
+                .split_whitespace()
+                .skip(1)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            &output,
+        )
+    });
     Ok(SignalRow {
         kind: SignalKind::Test,
         language: ayni_core::Language::Node,
@@ -79,7 +94,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             failed,
             duration_ms,
             runner,
-            failure: None,
+            failure,
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
@@ -170,18 +185,19 @@ fn extract_failures(report: &JsonValue) -> Vec<TestFailure> {
 #[cfg(test)]
 mod tests {
     use super::test_override_command;
-    use ayni_core::{AyniPolicy, RunContext, Scope};
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use std::path::PathBuf;
 
     fn context_with_policy(document: &str) -> RunContext {
         let policy: AyniPolicy = toml::from_str(document).expect("policy");
         RunContext {
             repo_root: PathBuf::from("."),
+            target_root: PathBuf::from("."),
             workdir: PathBuf::from("."),
             policy,
             scope: Scope::default(),
             diff: None,
-            python_resolution: None,
+            execution: ExecutionResolution::direct("npm", PathBuf::from("."), "test", 100),
             debug: false,
         }
     }

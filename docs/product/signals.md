@@ -3,6 +3,7 @@
 This document defines the canonical Ayni signal vocabulary. It is the product-level contract used by adapters, the CLI, and AI consumers.
 
 Repository policy lives in `.ayni.toml`; for checks, languages, thresholds, and **excluding paths** (for example skipping `target/**` in the size signal), see **[Configuration reference](config.md)**.
+For command failure categories and runtime diagnostics, see **[Runtime and setup rules](runtime.md)**.
 
 ## Common row shape
 
@@ -17,6 +18,10 @@ Every signal row includes:
 - `offenders`: typed list of violations
 - `delta_vs_previous`: optional change vs previous local run
 - `delta_vs_baseline`: optional change vs baseline run
+
+Rows for command-backed signals may also include `failure` inside the typed
+result. Failure objects use the shared categories defined in
+[`runtime.md`](runtime.md).
 
 ## Signal kinds
 

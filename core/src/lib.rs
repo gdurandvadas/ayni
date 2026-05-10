@@ -21,7 +21,7 @@ pub use policy::{
     ReportPolicy, SizeThreshold, ThresholdFloat, ThresholdInt, ToolCommandOverride,
 };
 pub use registry::AdapterRegistry;
-pub use runtime::{AdapterError, BranchDiff, RunContext, Scope};
+pub use runtime::{AdapterError, BranchDiff, ExecutionResolution, RunContext, Scope};
 pub use signal::{
     AYNI_SIGNAL_SCHEMA_VERSION, Budget, CommandFailure, ComplexityOffender, ComplexityResult,
     CoverageOffender, CoverageResult, Delta, DepsOffender, DepsResult, Level, MutationOffender,

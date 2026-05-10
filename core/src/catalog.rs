@@ -21,6 +21,17 @@ pub enum NodePackageManager {
 
 impl NodePackageManager {
     #[must_use]
+    pub fn from_executable(value: &str) -> Option<Self> {
+        match value {
+            "npm" => Some(Self::Npm),
+            "pnpm" => Some(Self::Pnpm),
+            "yarn" => Some(Self::Yarn),
+            "bun" => Some(Self::Bun),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn executable(self) -> &'static str {
         match self {
             Self::Npm => "npm",
@@ -138,6 +149,19 @@ impl PythonPackageManagerResolution {
 }
 
 impl PythonPackageManager {
+    #[must_use]
+    pub fn from_executable(value: &str) -> Option<Self> {
+        match value {
+            "uv" => Some(Self::Uv),
+            "poetry" => Some(Self::Poetry),
+            "pdm" => Some(Self::Pdm),
+            "pipenv" => Some(Self::Pipenv),
+            "hatch" => Some(Self::Hatch),
+            "python" | "python3" => Some(Self::Pip),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn executable(self) -> &'static str {
         match self {

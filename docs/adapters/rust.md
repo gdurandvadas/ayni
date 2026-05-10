@@ -3,6 +3,7 @@
 The Rust adapter is the reference implementation of the Ayni language adapter contracts.
 
 It detects Cargo workspaces, resolves Rust tooling requirements from a typed catalog, and emits typed `SignalRow` values for each enabled `SignalKind`.
+Runtime behavior follows the product-level [runtime and setup rules](../product/runtime.md).
 
 ## Module layout
 
@@ -37,6 +38,10 @@ Every collector outputs:
 - policy-aware `pass` evaluation
 
 ## Tool catalog
+
+Rust execution resolves `cargo` from the package root or a Cargo workspace
+ancestor. Member crates keep their signal scope while Cargo commands execute
+from the workspace root.
 
 Rust tools are declared in `catalog.rs` using `CatalogEntry` + `Installer`:
 

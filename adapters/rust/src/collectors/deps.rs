@@ -17,12 +17,12 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .map(|value| value.forbidden.clone())
         .unwrap_or_default();
 
-    let metadata = load_metadata(&context.workdir)?;
+    let metadata = load_metadata(&context.execution.exec_cwd)?;
     let analysis = analyze_deps(
         &metadata,
         &context.repo_root,
         &context.scope,
-        &context.workdir,
+        &context.target_root,
         &rules,
     )?;
 

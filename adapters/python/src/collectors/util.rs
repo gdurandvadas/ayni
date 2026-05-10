@@ -1,26 +1,11 @@
-use ayni_core::{
-    CommandFailure, PythonPackageManager, PythonPackageManagerResolution, RunContext, SignalKind,
-    resolve_python_package_manager,
-};
+use ayni_core::{CommandFailure, PythonPackageManager, RunContext, SignalKind};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn package_manager_for_context(context: &RunContext) -> PythonPackageManager {
-    python_resolution_for_context(context).manager
-}
-
-pub fn python_resolution_for_context(context: &RunContext) -> PythonPackageManagerResolution {
-    context.python_resolution.clone().unwrap_or_else(|| {
-        resolve_python_package_manager(&context.repo_root, &context.workdir).unwrap_or(
-            PythonPackageManagerResolution {
-                manager: PythonPackageManager::Pip,
-                resolved_from: context.workdir.clone(),
-                kind: ayni_core::PythonResolutionKind::Fallback,
-                ambiguous: false,
-            },
-        )
-    })
+    PythonPackageManager::from_executable(&context.execution.runner)
+        .unwrap_or(PythonPackageManager::Pip)
 }
 
 pub fn run_python_tool(
@@ -38,19 +23,20 @@ pub fn run_command_for_context(
     program: &str,
     args: &[String],
 ) -> Result<std::process::Output, String> {
-    let output = run_command(&context.workdir, program, args)?;
+    let output = run_command(&context.execution.exec_cwd, program, args)?;
     if context.debug {
-        let resolution = python_resolution_for_context(context);
         eprintln!(
-            "[debug] python_manager={} source={} kind={} ambiguous={}",
-            resolution.manager_label(),
-            resolution.resolved_from.display(),
-            resolution.kind_label(),
-            resolution.ambiguous
+            "[debug] runner={} source={} kind={} resolved_from={} confidence={} ambiguous={}",
+            context.execution.runner,
+            context.execution.source,
+            context.execution.kind,
+            context.execution.resolved_from.display(),
+            context.execution.confidence,
+            context.execution.ambiguous
         );
         eprintln!(
             "[debug] cwd={} command={} {}",
-            context.workdir.display(),
+            context.execution.exec_cwd.display(),
             program,
             args.join(" ")
         );
@@ -115,7 +101,7 @@ pub fn command_failure_from_output(
         category: classify_failure_category(kind).to_string(),
         classification: classify_failure(output).to_string(),
         command: format_command(program, args),
-        cwd: context.workdir.display().to_string(),
+        cwd: context.execution.exec_cwd.display().to_string(),
         exit_code: output.status.code(),
         message: concise_failure_message(output),
     }
@@ -194,17 +180,19 @@ fn classify_failure(output: &std::process::Output) -> &'static str {
 }
 
 pub fn ensure_ayni_dir(context: &RunContext) -> Result<PathBuf, String> {
-    let dir = context.workdir.join(".ayni");
-    let dir = if dir.is_absolute() {
-        dir
-    } else {
-        std::env::current_dir()
-            .map_err(|error| format!("failed to resolve current directory: {error}"))?
-            .join(dir)
-    };
+    let dir = context
+        .repo_root
+        .join(".ayni")
+        .join("work")
+        .join("python")
+        .join(root_slug(context.scope.path.as_deref()));
     fs::create_dir_all(&dir)
         .map_err(|error| format!("failed to create {}: {error}", dir.display()))?;
     Ok(dir)
+}
+
+fn root_slug(root: Option<&str>) -> String {
+    root.unwrap_or("workspace").replace(['/', '\\'], "__")
 }
 
 pub fn to_repo_relative_path(repo_root: &Path, candidate: &Path) -> String {

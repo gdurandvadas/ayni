@@ -9,6 +9,8 @@ languages and roots, per-language thresholds, dependency rules, report settings,
 and tool command overrides.
 
 For the signal vocabulary and JSON artifact fields, see [`signals.md`](signals.md).
+For runner resolution, setup validation, failure categories, and debug
+telemetry, see [`runtime.md`](runtime.md).
 
 ---
 
@@ -145,18 +147,19 @@ Notes:
 
 ## Foundation settings
 
-Python may also define optional foundation settings for install/bootstrap flows:
+Each language may define optional foundation settings for install/bootstrap
+flows:
 
 ```toml
-[python.foundation]
+[node.foundation]
 runner = "workspace"
 validate_install = true
 ```
 
 Notes:
 
-- `runner = "workspace"` pins workspace-style runner behavior when install detects a shared Python workspace manager.
-- `validate_install = true` keeps `ayni install --apply` in bootstrap-and-validate mode for Python. Set it to `false` only when a repository deliberately wants scaffold-plus-install without validation.
+- `runner = "workspace"` pins workspace-style runner behavior when install detects a shared workspace manager.
+- `validate_install = true` keeps `ayni install --apply` in bootstrap-and-validate mode. Set it to `false` only when a repository deliberately wants scaffold-plus-install without validation.
 
 ## Language roots
 
