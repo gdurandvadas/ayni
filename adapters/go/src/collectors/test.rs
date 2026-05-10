@@ -1,4 +1,4 @@
-use super::util::run_tool_owned;
+use super::util::{command_failure_from_output, run_tool_for_context};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
     TestFailure, TestResult,
@@ -23,7 +23,7 @@ struct GoTestEvent {
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let (program, args) = test_command(context);
     let runner = format_command(&program, &args);
-    let output = run_tool_owned(&context.workdir, &program, &args)?;
+    let output = run_tool_for_context(context, &program, &args)?;
     let success = output.status.success();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -103,6 +103,9 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             failed,
             duration_ms: (duration_ms > 0).then_some(duration_ms),
             runner,
+            failure: (!success).then(|| {
+                command_failure_from_output(context, SignalKind::Test, &program, &args, &output)
+            }),
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
@@ -148,17 +151,20 @@ fn format_command(program: &str, args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::test_command;
-    use ayni_core::{AyniPolicy, RunContext, Scope};
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use std::path::PathBuf;
 
     fn context_with_policy(document: &str) -> RunContext {
         let policy: AyniPolicy = toml::from_str(document).expect("policy");
         RunContext {
             repo_root: PathBuf::from("."),
+            target_root: PathBuf::from("."),
             workdir: PathBuf::from("."),
             policy,
             scope: Scope::default(),
             diff: None,
+            execution: ExecutionResolution::direct("go", PathBuf::from("."), "test", 100),
+            debug: false,
         }
     }
 

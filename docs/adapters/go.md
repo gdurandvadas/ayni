@@ -3,6 +3,7 @@
 The Go adapter implements the same `LanguageAdapter` and `SignalCollector` contracts as the Rust and Node adapters.
 
 It detects Go module roots, resolves required tooling from a typed catalog, and emits canonical `SignalRow` values for each enabled `SignalKind`.
+Runtime behavior follows the product-level [runtime and setup rules](../product/runtime.md).
 
 ## Module layout
 
@@ -40,6 +41,7 @@ Every collector outputs:
 ## Detection and roots
 
 - A root is considered Go when `go.mod` is present.
+- `go.work` ancestors are recorded as workspace execution context.
 - `ayni analyze` runs Go collection only for configured and detected `[go].roots`.
 - The default file profile for size checks is Go files (`*.go`) unless narrowed by policy.
 

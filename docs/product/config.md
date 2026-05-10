@@ -9,18 +9,20 @@ languages and roots, per-language thresholds, dependency rules, report settings,
 and tool command overrides.
 
 For the signal vocabulary and JSON artifact fields, see [`signals.md`](signals.md).
+For runner resolution, setup validation, failure categories, and debug
+telemetry, see [`runtime.md`](runtime.md).
 
 ---
 
 ## Layout
 
-| Section | Role |
-| -------- | ----- |
-| `[checks]` | Turn individual signal kinds on or off (`test`, `coverage`, `size`, `complexity`, `deps`, `mutation`). |
-| `[languages]` | Explicit language list, for example `enabled = ["rust", "node"]`. |
-| `[concurrency]` | Scheduler settings for running independent analyze roots in parallel. |
-| `[report]` | Console report rendering settings such as offender list limits. |
-| `[rust.*]`, `[go.*]`, `[node.*]`, `[python.*]` | Per-language settings (roots, thresholds, and optional tooling command overrides). |
+| Section                                        | Role                                                                                                             |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `[checks]`                                     | Turn individual signal kinds on or off (`test`, `coverage`, `size`, `complexity`, `deps`, `mutation`).           |
+| `[languages]`                                  | Explicit language list, for example `enabled = ["rust", "node"]`.                                                |
+| `[concurrency]`                                | Scheduler settings for running independent analyze roots in parallel.                                            |
+| `[report]`                                     | Console report rendering settings such as offender list limits.                                                  |
+| `[rust.*]`, `[go.*]`, `[node.*]`, `[python.*]` | Per-language settings (roots, thresholds, optional foundation settings, and optional tooling command overrides). |
 
 Everything under a language key uses normal TOML **single-bracket** tables and inline tables. There are no `[[array.of.tables]]` blocks in the policy model.
 
@@ -47,12 +49,12 @@ Paths are **repository-relative**, use **forward slashes**, and are matched with
 
 Common patterns:
 
-| Pattern | Meaning |
-| -------- | ------ |
-| `target/**` | Everything under `target/` (Rust build output). |
-| `**/target/**` | `target` anywhere in the path (unusual layouts). |
-| `node_modules/**` | npm dependencies. |
-| `dist/**`, `build/**` | Typical build output folders. |
+| Pattern               | Meaning                                          |
+| --------------------- | ------------------------------------------------ |
+| `target/**`           | Everything under `target/` (Rust build output).  |
+| `**/target/**`        | `target` anywhere in the path (unusual layouts). |
+| `node_modules/**`     | npm dependencies.                                |
+| `dist/**`, `build/**` | Typical build output folders.                    |
 
 `exclude` applies **after** the main glob for that row matches: a file must match the row’s key glob **and** not match any `exclude` pattern.
 
@@ -99,6 +101,10 @@ line_percent = { warn = 70, fail = 50 }
 [python.size]
 "**/*.py" = { warn = 400, fail = 800, exclude = [".venv/**", "venv/**", "__pycache__/**", ".git/**", ".ayni/**"] }
 
+[python.foundation]
+runner = "workspace"
+validate_install = true
+
 [python.complexity]
 fn_cognitive = { warn = 10, fail = 15 }
 
@@ -138,6 +144,22 @@ Notes:
 - `command` is required inside each override table.
 - `args` is optional; when omitted, Ayni uses signal-specific defaults for that language.
 - Overrides are command execution overrides only; result parsing still expects the signal collector’s native output shape.
+
+## Foundation settings
+
+Each language may define optional foundation settings for install/bootstrap
+flows:
+
+```toml
+[node.foundation]
+runner = "workspace"
+validate_install = true
+```
+
+Notes:
+
+- `runner = "workspace"` pins workspace-style runner behavior when install detects a shared workspace manager.
+- `validate_install = true` keeps `ayni install --apply` in bootstrap-and-validate mode. Set it to `false` only when a repository deliberately wants scaffold-plus-install without validation.
 
 ## Language roots
 
@@ -194,10 +216,10 @@ amount = 2
 
 Fields:
 
-| Field | Meaning |
-| ----- | ------- |
+| Field          | Meaning                                                                                                              |
+| -------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `per_language` | `false` means `amount` is a single global worker limit; `true` means each language gets its own `amount`-sized pool. |
-| `amount` | Maximum concurrent analyze targets. Must be at least `1`. |
+| `amount`       | Maximum concurrent analyze targets. Must be at least `1`.                                                            |
 
 Examples:
 

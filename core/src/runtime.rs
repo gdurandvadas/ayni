@@ -25,10 +25,46 @@ pub struct BranchDiff {
 #[derive(Debug, Clone)]
 pub struct RunContext {
     pub repo_root: PathBuf,
+    pub target_root: PathBuf,
     pub workdir: PathBuf,
     pub policy: AyniPolicy,
     pub scope: Scope,
     pub diff: Option<BranchDiff>,
+    pub execution: ExecutionResolution,
+    pub debug: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionResolution {
+    pub runner: String,
+    pub resolved_from: PathBuf,
+    pub kind: String,
+    pub source: String,
+    pub confidence: u8,
+    pub ambiguous: bool,
+    pub install_cwd: PathBuf,
+    pub exec_cwd: PathBuf,
+}
+
+impl ExecutionResolution {
+    #[must_use]
+    pub fn direct(
+        runner: impl Into<String>,
+        root: PathBuf,
+        source: impl Into<String>,
+        confidence: u8,
+    ) -> Self {
+        Self {
+            runner: runner.into(),
+            resolved_from: root.clone(),
+            kind: String::from("direct_root"),
+            source: source.into(),
+            confidence,
+            ambiguous: false,
+            install_cwd: root.clone(),
+            exec_cwd: root,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

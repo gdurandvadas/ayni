@@ -1,6 +1,6 @@
 use ayni_core::{
-    Budget, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, TestFailure,
-    TestResult,
+    Budget, CommandFailure, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
+    TestFailure, TestResult,
 };
 use serde_json::json;
 use std::io::{BufRead, BufReader};
@@ -19,7 +19,7 @@ where
     let runner = format_command(&program, &args);
     let mut command = Command::new(&program);
     command.args(args.iter().map(String::as_str));
-    command.current_dir(&context.workdir);
+    command.current_dir(&context.execution.exec_cwd);
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
@@ -80,6 +80,23 @@ where
     let _ = stderr_thread.join();
 
     let success = child.wait().map(|s| s.success()).unwrap_or(false);
+    if context.debug {
+        eprintln!(
+            "[debug] runner={} source={} kind={} resolved_from={} confidence={} ambiguous={}",
+            context.execution.runner,
+            context.execution.source,
+            context.execution.kind,
+            context.execution.resolved_from.display(),
+            context.execution.confidence,
+            context.execution.ambiguous
+        );
+        eprintln!(
+            "[debug] cwd={} command={}",
+            context.execution.exec_cwd.display(),
+            runner
+        );
+        eprintln!("[debug] exit={}", if success { 0 } else { -1 });
+    }
     Ok(build_test_row(
         context,
         success,
@@ -132,6 +149,14 @@ fn build_test_row(
             failed,
             duration_ms: None,
             runner: runner.to_string(),
+            failure: (!success).then(|| CommandFailure {
+                category: String::from("repo_code_issue"),
+                classification: String::from("command_error"),
+                command: runner.to_string(),
+                cwd: context.execution.exec_cwd.display().to_string(),
+                exit_code: None,
+                message: stderr_tail(stderr, STDERR_TAIL_LINES),
+            }),
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
@@ -220,17 +245,20 @@ fn stderr_tail(stderr: &str, line_count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ayni_core::{AyniPolicy, RunContext, Scope};
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use std::path::PathBuf;
 
     fn context_with_policy(document: &str) -> RunContext {
         let policy: AyniPolicy = toml::from_str(document).expect("policy");
         RunContext {
             repo_root: PathBuf::from("."),
+            target_root: PathBuf::from("."),
             workdir: PathBuf::from("."),
             policy,
             scope: Scope::default(),
             diff: None,
+            execution: ExecutionResolution::direct("cargo", PathBuf::from("."), "test", 100),
+            debug: false,
         }
     }
 

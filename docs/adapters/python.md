@@ -5,6 +5,7 @@ contracts as the Rust, Go, and Node adapters.
 
 It detects Python project roots, resolves per-root package manager behavior, and
 emits canonical `SignalRow` values for each enabled `SignalKind`.
+Runtime behavior follows the product-level [runtime and setup rules](../product/runtime.md).
 
 ## Module layout
 
@@ -44,18 +45,14 @@ Every collector outputs:
 
 Python roots are discovered from `[python].roots` and adapter detection.
 
-Per root, package manager resolution precedence is:
+Per root, package manager resolution is workspace-aware:
 
-1. `uv.lock`
-2. `poetry.lock`
-3. `pdm.lock`
-4. `Pipfile.lock`
-5. `hatch.toml`
-6. `pyproject.toml`
-7. `requirements.txt`
+1. direct root markers such as `uv.lock`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, and `hatch.toml`
+2. ancestor workspace markers, currently `uv.lock` or `[tool.uv.workspace]`
+3. direct manifest fallback (`pyproject.toml` or `requirements.txt`) to `python -m ...`
 
-When no manager can be confidently inferred, runtime behavior falls back to
-`python -m` assumptions.
+This lets member roots inside a shared `uv` workspace execute with `uv run ...`
+instead of falling back to plain `python -m ...`.
 
 ## Tool catalog
 
@@ -72,6 +69,7 @@ Python collectors read these `.ayni.toml` sections:
 
 - `[checks]`
 - `[python]` (`roots = [...]`)
+- optional `[python.foundation]` (`runner`, `validate_install`)
 - `[python.size]` (glob budgets)
 - `[python.complexity]` (`fn_cognitive`)
 - `[python.coverage]` (`line_percent`)
@@ -88,6 +86,10 @@ enabled = ["python"]
 
 [python]
 roots = ["."]
+
+[python.foundation]
+runner = "workspace"
+validate_install = true
 
 [python.tooling.test]
 command = "uv"
@@ -122,7 +124,8 @@ line_percent = { warn = 80, fail = 60 }
 ayni install --language python --repo-root <path>
 ```
 
-The flow is deterministic and idempotent.
+The flow is deterministic and idempotent. `ayni install --apply` also validates
+that the resolved runner can invoke the installed Python tools for each root.
 
 ## `ayni analyze --language python`
 
@@ -144,3 +147,6 @@ ayni analyze --config ./.ayni.toml --language python --output md
 The adapter emits only core-defined signal kinds and typed payloads. It must not
 emit ad-hoc row shapes, so reporting remains stable across languages and output
 formats.
+
+When Python tooling fails for repo code or setup reasons, collectors prefer
+failed signal rows with normalized command diagnostics over adapter aborts.

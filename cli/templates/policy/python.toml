@@ -24,6 +24,11 @@ offenders_limit = 8
 [python]
 roots = ["."]
 
+# Pin workspace runner behavior when the repository uses a shared Python workspace manager.
+# [python.foundation]
+# runner = "workspace"
+# validate_install = true
+
 # Override Python tool commands when the defaults do not match this repository.
 #
 # [python.tooling.test]

@@ -1,4 +1,7 @@
-use super::util::{command_for_override_or_default, ensure_ayni_dir, run_command};
+use super::util::{
+    command_failure_from_output, command_for_override_or_default, ensure_ayni_dir, format_command,
+    run_command_for_context,
+};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
     TestFailure, TestResult,
@@ -52,17 +55,45 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let (program, args) =
         command_for_override_or_default(context, SignalKind::Test, "pytest", &default_args);
     let runner = format_command(&program, &args);
-    let output = run_command(&context.workdir, &program, &args)?;
+    let output = run_command_for_context(context, &program, &args)?;
     let success = output.status.success();
+    let failure = if success {
+        None
+    } else {
+        Some(command_failure_from_output(
+            context,
+            SignalKind::Test,
+            &program,
+            &args,
+            &output,
+        ))
+    };
 
     let report = read_report(&report_path).map_err(|error| {
+        if is_no_tests_collected(&output) {
+            return String::new();
+        }
         if success {
             error
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             format!("{error}; stderr: {}", stderr.trim())
         }
-    })?;
+    });
+    let report = match report {
+        Ok(report) => report,
+        Err(error) if error.is_empty() => PytestReport {
+            duration: None,
+            summary: Some(PytestSummary {
+                total: Some(0),
+                passed: Some(0),
+                failed: Some(0),
+                error: Some(0),
+            }),
+            tests: Some(Vec::new()),
+        },
+        Err(error) => return Err(error),
+    };
 
     let summary = report.summary.unwrap_or(PytestSummary {
         total: None,
@@ -91,19 +122,29 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             package: context.scope.package.clone(),
             file: context.scope.file.clone(),
         },
-        pass: success && failed == 0,
+        pass: success && failed == 0 && total_tests > 0,
         result: SignalResult::Test(TestResult {
             total_tests,
             passed,
             failed,
             duration_ms,
             runner,
+            failure,
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
         delta_vs_previous: None,
         delta_vs_baseline: None,
     })
+}
+
+fn is_no_tests_collected(output: &std::process::Output) -> bool {
+    if output.status.code() == Some(5) {
+        return true;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout.contains("no tests ran") || stderr.contains("no tests ran")
 }
 
 fn read_report(path: &std::path::Path) -> Result<PytestReport, String> {
@@ -135,13 +176,5 @@ fn test_failure(case: PytestCase) -> TestFailure {
         line: crash.and_then(|crash| crash.lineno),
         message,
         test_name: case.nodeid,
-    }
-}
-
-fn format_command(program: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        program.to_string()
-    } else {
-        format!("{program} {}", args.join(" "))
     }
 }

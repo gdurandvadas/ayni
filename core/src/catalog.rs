@@ -1,7 +1,7 @@
 use crate::signal::SignalKind;
 use serde_json::Value as JsonValue;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +20,17 @@ pub enum NodePackageManager {
 }
 
 impl NodePackageManager {
+    #[must_use]
+    pub fn from_executable(value: &str) -> Option<Self> {
+        match value {
+            "npm" => Some(Self::Npm),
+            "pnpm" => Some(Self::Pnpm),
+            "yarn" => Some(Self::Yarn),
+            "bun" => Some(Self::Bun),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn executable(self) -> &'static str {
         match self {
@@ -106,7 +117,51 @@ pub enum PythonPackageManager {
     Pip,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PythonResolutionKind {
+    DirectRoot,
+    WorkspaceAncestor,
+    Fallback,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonPackageManagerResolution {
+    pub manager: PythonPackageManager,
+    pub resolved_from: PathBuf,
+    pub kind: PythonResolutionKind,
+    pub ambiguous: bool,
+}
+
+impl PythonPackageManagerResolution {
+    #[must_use]
+    pub fn manager_label(&self) -> &'static str {
+        self.manager.executable()
+    }
+
+    #[must_use]
+    pub fn kind_label(&self) -> &'static str {
+        match self.kind {
+            PythonResolutionKind::DirectRoot => "direct_root",
+            PythonResolutionKind::WorkspaceAncestor => "workspace_ancestor",
+            PythonResolutionKind::Fallback => "fallback",
+        }
+    }
+}
+
 impl PythonPackageManager {
+    #[must_use]
+    pub fn from_executable(value: &str) -> Option<Self> {
+        match value {
+            "uv" => Some(Self::Uv),
+            "poetry" => Some(Self::Poetry),
+            "pdm" => Some(Self::Pdm),
+            "pipenv" => Some(Self::Pipenv),
+            "hatch" => Some(Self::Hatch),
+            "python" | "python3" => Some(Self::Pip),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn executable(self) -> &'static str {
         match self {
@@ -253,6 +308,88 @@ pub fn detect_python_package_manager(root: &Path) -> Option<PythonPackageManager
         return Some(PythonPackageManager::Pip);
     }
     None
+}
+
+#[must_use]
+pub fn resolve_python_package_manager(
+    repo_root: &Path,
+    workdir: &Path,
+) -> Option<PythonPackageManagerResolution> {
+    let direct =
+        detect_python_package_manager(workdir).map(|manager| PythonPackageManagerResolution {
+            manager,
+            resolved_from: workdir.to_path_buf(),
+            kind: PythonResolutionKind::DirectRoot,
+            ambiguous: false,
+        });
+    let has_manifest = workdir.join("pyproject.toml").is_file()
+        || workdir.join("requirements.txt").is_file()
+        || workdir.join("Pipfile").is_file();
+    let ancestor = find_workspace_ancestor_resolution(repo_root, workdir);
+    match (direct, ancestor) {
+        (Some(direct), Some(ancestor))
+            if direct.manager == PythonPackageManager::Pip
+                && ancestor.manager == PythonPackageManager::Uv =>
+        {
+            Some(PythonPackageManagerResolution {
+                ambiguous: true,
+                ..ancestor
+            })
+        }
+        (Some(direct), Some(mut ancestor))
+            if ancestor.manager != direct.manager
+                && ancestor.kind == PythonResolutionKind::WorkspaceAncestor =>
+        {
+            ancestor.ambiguous = true;
+            Some(direct)
+        }
+        (Some(direct), _) => Some(direct),
+        (None, Some(ancestor)) => Some(ancestor),
+        (None, None) if has_manifest => Some(PythonPackageManagerResolution {
+            manager: PythonPackageManager::Pip,
+            resolved_from: workdir.to_path_buf(),
+            kind: PythonResolutionKind::Fallback,
+            ambiguous: false,
+        }),
+        (None, None) => None,
+    }
+}
+
+fn find_workspace_ancestor_resolution(
+    repo_root: &Path,
+    workdir: &Path,
+) -> Option<PythonPackageManagerResolution> {
+    let mut current = workdir.parent();
+    while let Some(path) = current {
+        if !path.starts_with(repo_root) {
+            break;
+        }
+        if path.join("uv.lock").is_file() || pyproject_has_uv_workspace(path) {
+            return Some(PythonPackageManagerResolution {
+                manager: PythonPackageManager::Uv,
+                resolved_from: path.to_path_buf(),
+                kind: PythonResolutionKind::WorkspaceAncestor,
+                ambiguous: false,
+            });
+        }
+        current = path.parent();
+    }
+    None
+}
+
+fn pyproject_has_uv_workspace(root: &Path) -> bool {
+    let pyproject_path = root.join("pyproject.toml");
+    let Ok(content) = fs::read_to_string(pyproject_path) else {
+        return false;
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(&content) else {
+        return false;
+    };
+    value
+        .get("tool")
+        .and_then(|value| value.get("uv"))
+        .and_then(|value| value.get("workspace"))
+        .is_some()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -474,7 +611,11 @@ fn install_uv_tool(package: &str, version: Option<&str>, tool_name: &str) -> Res
         || package.to_string(),
         |version| format!("{package}=={version}"),
     );
-    run_cmd("uv", &["tool", "install", target.as_str()], tool_name)
+    run_cmd(
+        "uv",
+        &["tool", "install", "--force", "--upgrade", target.as_str()],
+        tool_name,
+    )
 }
 
 fn run_cmd(program: &str, args: &[&str], tool_name: &str) -> Result<(), String> {
@@ -633,7 +774,20 @@ fn uv_tool_status(package: &str, version: Option<&str>) -> ToolStatus {
     {
         return ToolStatus::Outdated;
     }
-    ToolStatus::Current
+    if uv_tool_command_runs(package) {
+        ToolStatus::Current
+    } else {
+        ToolStatus::Missing
+    }
+}
+
+fn uv_tool_command_runs(package: &str) -> bool {
+    Command::new("uv")
+        .args(["tool", "run", package, "--help"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn node_package_status(cwd: Option<&Path>, package: &str, version: Option<&str>) -> ToolStatus {
@@ -702,7 +856,7 @@ fn parse_package_manager_from_manifest(manifest_path: &Path) -> Option<NodePacka
 mod tests {
     use super::{
         NodePackageManager, PythonPackageManager, detect_node_package_manager,
-        detect_python_package_manager, node_package_status,
+        detect_python_package_manager, node_package_status, resolve_python_package_manager,
         rustup_installed_lines_contain_component,
     };
     use std::fs;
@@ -829,5 +983,40 @@ mod tests {
                 ]
             )
         );
+    }
+
+    #[test]
+    fn resolves_python_manager_from_workspace_ancestor_uv_lock() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[tool.uv.workspace]\nmembers = [\"packages/*\"]\n",
+        )
+        .expect("root pyproject");
+        fs::write(dir.path().join("uv.lock"), "").expect("uv lock");
+        let member = dir.path().join("packages/config");
+        fs::create_dir_all(&member).expect("member dir");
+        fs::write(member.join("pyproject.toml"), "[project]\nname='config'\n").expect("member");
+
+        let resolution =
+            resolve_python_package_manager(dir.path(), &member).expect("python resolution");
+        assert_eq!(resolution.manager, PythonPackageManager::Uv);
+        assert_eq!(resolution.kind_label(), "workspace_ancestor");
+        assert!(resolution.ambiguous);
+    }
+
+    #[test]
+    fn resolves_python_manager_fallback_without_lockfile() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\nname='fixture'\n",
+        )
+        .expect("pyproject");
+
+        let resolution =
+            resolve_python_package_manager(dir.path(), dir.path()).expect("python resolution");
+        assert_eq!(resolution.manager, PythonPackageManager::Pip);
+        assert_eq!(resolution.kind_label(), "direct_root");
     }
 }

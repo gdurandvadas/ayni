@@ -50,6 +50,7 @@ Analyze the local repository and print a quality report
   - `md`:
     Markdown report printed to stdout
 
+* `--debug` — Print raw command diagnostics and disable the live dashboard
 
 
 

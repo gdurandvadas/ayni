@@ -1,5 +1,5 @@
-use super::util::run_tool_owned;
 use super::util::to_repo_relative_path;
+use super::util::{command_failure_from_output, run_tool_for_context};
 use ayni_core::{
     Budget, CoverageOffender, CoveragePolicy, CoverageResult, Language, Level, Offenders,
     RunContext, Scope, SignalKind, SignalResult, SignalRow,
@@ -12,7 +12,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let profile_path = context.workdir.join(".ayni-go-cover.out");
     let profile_arg = format!("-coverprofile={}", profile_path.display());
     let (test_program, test_args, test_engine) = coverage_test_command(context, &profile_arg);
-    let test_output = run_tool_owned(&context.workdir, &test_program, &test_args)
+    let test_output = run_tool_for_context(context, &test_program, &test_args)
         .map_err(|error| format!("failed to execute {test_engine}: {error}"))?;
 
     let (status, percent, line_percent) = if test_output.status.success() {
@@ -70,6 +70,15 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             branch_percent: None,
             engine: format!("{test_engine} + go tool cover"),
             status,
+            failure: (!test_output.status.success()).then(|| {
+                command_failure_from_output(
+                    context,
+                    SignalKind::Coverage,
+                    &test_program,
+                    &test_args,
+                    &test_output,
+                )
+            }),
         }),
         budget: Budget::Coverage(coverage_budget),
         offenders: Offenders::Coverage(offenders),
@@ -160,17 +169,20 @@ fn build_offenders(
 #[cfg(test)]
 mod tests {
     use super::{coverage_test_command, parse_total_percent};
-    use ayni_core::{AyniPolicy, RunContext, Scope};
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use std::path::PathBuf;
 
     fn context_with_policy(document: &str) -> RunContext {
         let policy: AyniPolicy = toml::from_str(document).expect("policy");
         RunContext {
             repo_root: PathBuf::from("."),
+            target_root: PathBuf::from("."),
             workdir: PathBuf::from("."),
             policy,
             scope: Scope::default(),
             diff: None,
+            execution: ExecutionResolution::direct("go", PathBuf::from("."), "test", 100),
+            debug: false,
         }
     }
 

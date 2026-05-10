@@ -1,6 +1,6 @@
 use ayni_core::{
-    Budget, CoverageOffender, CoveragePolicy, CoverageResult, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    Budget, CommandFailure, CoverageOffender, CoveragePolicy, CoverageResult, Level, Offenders,
+    RunContext, Scope, SignalKind, SignalResult, SignalRow,
 };
 use serde_json::{Value as JsonValue, json};
 use std::process::Command;
@@ -10,7 +10,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let command_text = format_command(&program, &args);
     let output = Command::new(&program)
         .args(args.iter().map(String::as_str))
-        .current_dir(&context.workdir)
+        .current_dir(&context.execution.exec_cwd)
         .output()
         .map_err(|error| format!("failed to execute {command_text}: {error}"))?;
 
@@ -59,12 +59,42 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             branch_percent,
             engine: engine_label,
             status,
+            failure: (!output.status.success())
+                .then(|| command_failure(context, &program, &args, &output, "repo_code_issue")),
         }),
         budget: Budget::Coverage(coverage_budget),
         offenders: Offenders::Coverage(offenders),
         delta_vs_previous: None,
         delta_vs_baseline: None,
     })
+}
+
+fn command_failure(
+    context: &RunContext,
+    program: &str,
+    args: &[String],
+    output: &std::process::Output,
+    category: &str,
+) -> CommandFailure {
+    CommandFailure {
+        category: category.to_string(),
+        classification: String::from("command_error"),
+        command: format_command(program, args),
+        cwd: context.execution.exec_cwd.display().to_string(),
+        exit_code: output.status.code(),
+        message: concise_failure_message(output),
+    }
+}
+
+fn concise_failure_message(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    format!("{stderr}\n{stdout}")
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| String::from("command failed without stdout/stderr output"))
 }
 
 fn coverage_command(context: &RunContext) -> (String, Vec<String>, String) {
@@ -220,7 +250,9 @@ fn read_percent(
 #[cfg(test)]
 mod tests {
     use super::{build_offenders, coverage_command, find_coverage_percents};
-    use ayni_core::{AyniPolicy, CoveragePolicy, Level, RunContext, Scope, ThresholdFloat};
+    use ayni_core::{
+        AyniPolicy, CoveragePolicy, ExecutionResolution, Level, RunContext, Scope, ThresholdFloat,
+    };
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -228,10 +260,13 @@ mod tests {
         let policy: AyniPolicy = toml::from_str(document).expect("policy");
         RunContext {
             repo_root: PathBuf::from("."),
+            target_root: PathBuf::from("."),
             workdir: PathBuf::from("."),
             policy,
             scope: Scope::default(),
             diff: None,
+            execution: ExecutionResolution::direct("cargo", PathBuf::from("."), "test", 100),
+            debug: false,
         }
     }
 

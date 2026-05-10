@@ -1,5 +1,6 @@
 use super::util::{
-    command_for_override_or_default, ensure_ayni_dir, run_command, to_repo_relative_path,
+    command_failure_from_output, command_for_override_or_default, ensure_ayni_dir, format_command,
+    run_command_for_context, to_repo_relative_path,
 };
 use ayni_core::{
     Budget, CoverageOffender, CoveragePolicy, CoverageResult, Language, Level, Offenders,
@@ -37,14 +38,42 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let (program, args) =
         command_for_override_or_default(context, SignalKind::Coverage, "pytest", &default_args);
     let engine = format_command(&program, &args);
-    let output = run_command(&context.workdir, &program, &args)?;
+    let output = run_command_for_context(context, &program, &args)?;
     let status = if output.status.success() {
         "ok"
     } else {
         "error"
     };
+    let failure = if output.status.success() {
+        None
+    } else {
+        Some(command_failure_from_output(
+            context,
+            SignalKind::Coverage,
+            &program,
+            &args,
+            &output,
+        ))
+    };
 
-    let report = read_report(&report_path)?;
+    let report = match read_report(&report_path) {
+        Ok(report) => report,
+        Err(_) if is_no_tests_collected(&output) => CoverageJson {
+            totals: Some(CoverageSummary {
+                percent_covered: Some(0.0),
+                percent_display: Some(String::from("0")),
+            }),
+            files: Some(BTreeMap::new()),
+        },
+        Err(_) if !output.status.success() => {
+            return Ok(error_row(
+                context,
+                engine,
+                failure.expect("coverage failure details"),
+            ));
+        }
+        Err(error) => return Err(error),
+    };
     let percent = report.totals.as_ref().and_then(percent_from_summary);
     let coverage_config = context.policy.python.coverage.as_ref();
     let coverage_budget = coverage_config
@@ -77,12 +106,52 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             branch_percent: None,
             engine,
             status: status.to_string(),
+            failure,
         }),
         budget: Budget::Coverage(coverage_budget),
         offenders: Offenders::Coverage(offenders),
         delta_vs_previous: None,
         delta_vs_baseline: None,
     })
+}
+
+fn error_row(
+    context: &RunContext,
+    engine: String,
+    failure: ayni_core::CommandFailure,
+) -> SignalRow {
+    SignalRow {
+        kind: SignalKind::Coverage,
+        language: Language::Python,
+        scope: Scope {
+            workspace_root: context.scope.workspace_root.clone(),
+            path: context.scope.path.clone(),
+            package: context.scope.package.clone(),
+            file: context.scope.file.clone(),
+        },
+        pass: false,
+        result: SignalResult::Coverage(CoverageResult {
+            percent: None,
+            line_percent: None,
+            branch_percent: None,
+            engine,
+            status: String::from("error"),
+            failure: Some(failure),
+        }),
+        budget: Budget::Coverage(json!({})),
+        offenders: Offenders::Coverage(Vec::new()),
+        delta_vs_previous: None,
+        delta_vs_baseline: None,
+    }
+}
+
+fn is_no_tests_collected(output: &std::process::Output) -> bool {
+    if output.status.code() == Some(5) {
+        return true;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout.contains("no tests ran") || stderr.contains("no tests ran")
 }
 
 fn read_report(path: &Path) -> Result<CoverageJson, String> {
@@ -134,12 +203,4 @@ fn build_offenders(
     }
     offenders.sort_by(|left, right| left.file.cmp(&right.file));
     offenders
-}
-
-fn format_command(program: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        program.to_string()
-    } else {
-        format!("{program} {}", args.join(" "))
-    }
 }

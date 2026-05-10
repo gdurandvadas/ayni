@@ -1,4 +1,4 @@
-use super::util::run_tool_owned;
+use super::util::{command_failure_from_output, run_tool_for_context};
 use ayni_core::{
     Budget, Language, MutationResult, Offenders, RunContext, Scope, SignalKind, SignalResult,
     SignalRow,
@@ -24,6 +24,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
                 survived: 0,
                 timeout: 0,
                 score: None,
+                failure: None,
             }),
             budget: Budget::Mutation(json!({"enabled": false})),
             offenders: Offenders::Mutation(Vec::new()),
@@ -33,7 +34,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
 
     let (program, args, engine) = mutation_command(context);
-    let output = run_tool_owned(&context.workdir, &program, &args)?;
+    let output = run_tool_for_context(context, &program, &args)?;
     let status_ok = output.status.success();
     Ok(SignalRow {
         kind: SignalKind::Mutation,
@@ -51,6 +52,9 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             survived: if status_ok { 0 } else { 1 },
             timeout: 0,
             score: if status_ok { Some(1.0) } else { Some(0.0) },
+            failure: (!status_ok).then(|| {
+                command_failure_from_output(context, SignalKind::Mutation, &program, &args, &output)
+            }),
         }),
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(Vec::new()),
@@ -94,17 +98,20 @@ fn format_command(program: &str, args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::mutation_command;
-    use ayni_core::{AyniPolicy, RunContext, Scope};
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use std::path::PathBuf;
 
     fn context_with_policy(document: &str) -> RunContext {
         let policy: AyniPolicy = toml::from_str(document).expect("policy");
         RunContext {
             repo_root: PathBuf::from("."),
+            target_root: PathBuf::from("."),
             workdir: PathBuf::from("."),
             policy,
             scope: Scope::default(),
             diff: None,
+            execution: ExecutionResolution::direct("go", PathBuf::from("."), "test", 100),
+            debug: false,
         }
     }
 

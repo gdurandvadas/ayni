@@ -1,11 +1,12 @@
 use ayni_adapters_go::GoAdapter;
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+mod delta;
 mod discovery;
 mod ui;
 
@@ -14,12 +15,12 @@ use ayni_adapters_python::PythonAdapter;
 use ayni_adapters_rust::RustAdapter;
 use ayni_core::{
     AYNI_POLICY_FILE, AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, AyniPolicy, Budget,
-    CatalogEntry, ConcurrencyPolicy, Delta, InstallContext, Installer, Language,
+    CatalogEntry, ConcurrencyPolicy, ExecutionResolution, InstallContext, Installer, Language,
     NodePackageManager, PythonPackageManager, RunArtifact, RunContext, Scope, SignalKind,
-    SignalResult, SignalRow, ToolStatus, VersionCheck, detect_node_package_manager,
-    detect_python_package_manager,
+    SignalResult, SignalRow, ToolStatus, VersionCheck,
 };
 use clap::{Parser, Subcommand, ValueEnum};
+use delta::annotate_deltas_vs_previous;
 use discovery::discover_language_roots;
 
 const ARTIFACTS_DIR: &str = ".ayni/last";
@@ -56,6 +57,9 @@ enum Commands {
         /// Report format: `stdout` (default, coloured console) or `md` (markdown report).
         #[arg(long, value_enum, default_value = "stdout")]
         output: OutputArg,
+        /// Print raw command diagnostics and disable the live dashboard.
+        #[arg(long)]
+        debug: bool,
     },
     /// Scaffold repo guidance and show required tools; use `--apply` to install them.
     Install {
@@ -108,6 +112,7 @@ fn main() -> ExitCode {
             package,
             language,
             output,
+            debug,
         } => analyze(
             &config,
             AnalyzeOptions {
@@ -115,6 +120,7 @@ fn main() -> ExitCode {
                 file,
                 language_filter: language.map(|value| value.as_language()),
                 output_mode: output,
+                debug,
             },
         ),
         Commands::Install {
@@ -162,8 +168,12 @@ fn install_impl(
     let root = PathBuf::from(repo_root);
     let policy = prepare_install_policy(&root, language_filter).map_err(|error| vec![error])?;
     if apply {
-        let failures = collect_install_failures(&root, &policy, language_filter);
+        let mut failures = collect_install_failures(&root, &policy, language_filter);
         if failures.is_empty() {
+            failures.extend(validate_install_foundation(&root, &policy, language_filter));
+        }
+        if failures.is_empty() {
+            println!("foundation validation passed");
             Ok(())
         } else {
             Err(failures)
@@ -200,21 +210,19 @@ fn print_install_requirements(
             }
             let label = root_label_for_install(root_entry);
             println!("## {} — {}", language.as_str(), label);
-            let node_manager = if language == Language::Node {
-                detect_node_package_manager(&root_path).or(Some(NodePackageManager::Npm))
-            } else {
-                None
+            let Some(execution) = adapter.resolve_execution(repo_root, &root_path) else {
+                continue;
             };
-            let python_manager = if language == Language::Python {
-                detect_python_package_manager(&root_path).or(Some(PythonPackageManager::Pip))
-            } else {
-                None
-            };
-            let install_context = InstallContext {
-                cwd: Some(root_path.as_path()),
-                node_package_manager: node_manager,
-                python_package_manager: python_manager,
-            };
+            let install_context = install_context_for_execution(&execution);
+            println!(
+                "  runner: runner={} source={} kind={} resolved_from={} confidence={} ambiguous={}",
+                execution.runner,
+                execution.source,
+                execution.kind,
+                execution.resolved_from.display(),
+                execution.confidence,
+                execution.ambiguous
+            );
             for entry in adapter.catalog() {
                 if entry.opt_in && !check_enabled_for_entry(policy, entry) {
                     continue;
@@ -388,17 +396,23 @@ fn install_for_root(
     }
 
     let mut failures = Vec::new();
-    let node_manager = prepare_node_manager(language, root_entry, &root_path, &mut failures);
-    let python_manager = if language == Language::Python {
-        detect_python_package_manager(&root_path).or(Some(PythonPackageManager::Pip))
-    } else {
-        None
+    let Some(execution) = adapter.resolve_execution(root, &root_path) else {
+        failures.push(format!(
+            "install {language}:{root_entry}: repo setup issue: unable to resolve execution"
+        ));
+        return failures;
     };
-    let install_context = InstallContext {
-        cwd: Some(&root_path),
-        node_package_manager: node_manager,
-        python_package_manager: python_manager,
-    };
+    prepare_node_manager(language, root_entry, &execution, &mut failures);
+    println!(
+        "install {language}:{root_entry} runner={} source={} kind={} resolved_from={} confidence={} ambiguous={}",
+        execution.runner,
+        execution.source,
+        execution.kind,
+        execution.resolved_from.display(),
+        execution.confidence,
+        execution.ambiguous
+    );
+    let install_context = install_context_for_execution(&execution);
 
     for entry in adapter.catalog() {
         if entry.opt_in && !check_enabled_for_entry(policy, entry) {
@@ -419,18 +433,18 @@ fn install_for_root(
 fn prepare_node_manager(
     language: Language,
     root_entry: &str,
-    root_path: &Path,
+    execution: &ExecutionResolution,
     failures: &mut Vec<String>,
-) -> Option<NodePackageManager> {
+) {
     if language != Language::Node {
-        return None;
+        return;
     }
 
-    let manager = detect_node_package_manager(root_path).unwrap_or(NodePackageManager::Npm);
-    if let Err(error) = install_node_dependencies(root_path, manager) {
+    let manager =
+        NodePackageManager::from_executable(&execution.runner).unwrap_or(NodePackageManager::Npm);
+    if let Err(error) = install_node_dependencies(&execution.install_cwd, manager) {
         failures.push(format!("node install ({language}:{root_entry}): {error}"));
     }
-    Some(manager)
 }
 
 fn install_node_dependencies(root_path: &Path, manager: NodePackageManager) -> Result<(), String> {
@@ -454,6 +468,14 @@ fn install_node_dependencies(root_path: &Path, manager: NodePackageManager) -> R
             root_path.display(),
             status.code().unwrap_or(-1)
         ))
+    }
+}
+
+fn install_context_for_execution(execution: &ExecutionResolution) -> InstallContext<'_> {
+    InstallContext {
+        cwd: Some(execution.install_cwd.as_path()),
+        node_package_manager: NodePackageManager::from_executable(&execution.runner),
+        python_package_manager: PythonPackageManager::from_executable(&execution.runner),
     }
 }
 
@@ -484,8 +506,86 @@ fn prepare_install_policy(
         let discovered_roots =
             discover_language_roots(root, &enabled_languages, language_filter, &registry);
         update_policy_roots(root, &discovered_roots)?;
+        update_foundation_settings(root, &discovered_roots)?;
     }
     AyniPolicy::load(root)
+}
+
+fn validate_install_foundation(
+    repo_root: &Path,
+    policy: &AyniPolicy,
+    language_filter: Option<Language>,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    let registry = build_registry();
+    for adapter in registry.adapters() {
+        let language = adapter.language();
+        if should_skip_install_language(policy, language, language_filter)
+            || policy
+                .language_tooling(language)
+                .foundation
+                .as_ref()
+                .and_then(|value| value.validate_install)
+                == Some(false)
+        {
+            continue;
+        }
+        for root_entry in policy.roots_for(language) {
+            let root_path = repo_root.join(root_entry);
+            if !adapter.detect(&root_path).detected {
+                continue;
+            }
+            let Some(execution) = adapter.resolve_execution(repo_root, &root_path) else {
+                failures.push(format!(
+                    "foundation validation failed ({language}:{root_entry}): repo_setup_issue: unable to resolve execution for {}",
+                    root_path.display()
+                ));
+                continue;
+            };
+            let artifact_dir = repo_root
+                .join(".ayni")
+                .join("work")
+                .join(language.as_str())
+                .join(root_slug_for_path(root_entry));
+            if let Err(error) = fs::create_dir_all(&artifact_dir) {
+                failures.push(format!(
+                    "foundation validation failed ({language}:{root_entry}): repo_setup_issue: unable to create artifact path {}: {error}; runner={} source={} kind={} resolved_from={}",
+                    artifact_dir.display(),
+                    execution.runner,
+                    execution.source,
+                    execution.kind,
+                    execution.resolved_from.display()
+                ));
+            }
+            let install_context = install_context_for_execution(&execution);
+            for entry in adapter.catalog() {
+                if entry.opt_in && !check_enabled_for_entry(policy, entry) {
+                    continue;
+                }
+                if entry.status_in(install_context) == ToolStatus::Missing {
+                    failures.push(format!(
+                        "foundation validation failed ({language}:{root_entry}): repo_setup_issue: {} is not invocable; runner={} source={} kind={} resolved_from={} install_cwd={} exec_cwd={}",
+                        entry.name,
+                        execution.runner,
+                        execution.source,
+                        execution.kind,
+                        execution.resolved_from.display(),
+                        execution.install_cwd.display(),
+                        execution.exec_cwd.display()
+                    ));
+                }
+            }
+        }
+    }
+    failures
+}
+
+fn root_slug_for_path(root_entry: &str) -> String {
+    if root_entry == "." {
+        String::from("workspace")
+    } else {
+        root_entry.replace(['/', '\\'], "__")
+    }
 }
 
 fn signal_kind_slug(kind: SignalKind) -> &'static str {
@@ -519,6 +619,7 @@ struct AnalyzeOptions {
     file: Option<String>,
     language_filter: Option<Language>,
     output_mode: OutputArg,
+    debug: bool,
 }
 
 impl AnalyzeTarget {
@@ -676,7 +777,7 @@ fn collect_target_with_ui(
             Err(error) => {
                 tool.line(error.clone());
                 tool.finished(ui::runner::ToolState::Failed);
-                return Err(error);
+                continue;
             }
         }
     }
@@ -905,12 +1006,26 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<AnalyzeOut
         file,
         language_filter,
         output_mode,
+        debug,
     } = options;
 
-    let targets = build_analyze_targets(&workspace_root, &policy, package, file, language_filter)?;
+    let targets = build_analyze_targets(
+        &workspace_root,
+        &policy,
+        package,
+        file,
+        language_filter,
+        debug,
+    )?;
     let plan = build_analyze_plan(&targets);
     let artifact_slot = Arc::new(Mutex::new(None));
-    let aborted = execute_analyze_plan(output_mode, plan, targets, Arc::clone(&artifact_slot))?;
+    let aborted = execute_analyze_plan(
+        output_mode,
+        debug,
+        plan,
+        targets,
+        Arc::clone(&artifact_slot),
+    )?;
     if aborted {
         return Ok(AnalyzeOutcome::Aborted);
     }
@@ -934,16 +1049,47 @@ fn ensure_analyze_directories(workspace_root: &Path) -> Result<(), String> {
 
 fn execute_analyze_plan(
     output_mode: OutputArg,
+    debug: bool,
     plan: ui::runner::Plan,
     targets: Vec<AnalyzeTarget>,
     artifact_slot: Arc<Mutex<Option<RunArtifact>>>,
 ) -> Result<bool, String> {
     let execution = build_analyze_execution(targets, artifact_slot);
+    if debug {
+        return ui::runner::run_plain(plan, execution, debug_progress_event)
+            .map(|outcome| outcome.aborted);
+    }
     match output_mode {
         OutputArg::Md => {
             ui::runner::run_plain(plan, execution, |_| {}).map(|outcome| outcome.aborted)
         }
         OutputArg::Stdout => run_stdout_plan(plan, execution),
+    }
+}
+
+fn debug_progress_event(event: ui::runner::ProgressEvent) {
+    match event {
+        ui::runner::ProgressEvent::Started { language, name } => {
+            eprintln!("[{language}] {name} started");
+        }
+        ui::runner::ProgressEvent::Line {
+            language,
+            name,
+            line,
+        } => {
+            eprintln!("[{language}] {name}: {line}");
+        }
+        ui::runner::ProgressEvent::Finished {
+            language,
+            name,
+            state,
+            elapsed,
+        } => {
+            eprintln!(
+                "[{language}] {name} {state:?} {:.1}s",
+                elapsed.as_secs_f64()
+            );
+        }
     }
 }
 
@@ -1017,6 +1163,7 @@ fn build_analyze_targets(
     package: Option<String>,
     file: Option<String>,
     language_filter: Option<Language>,
+    debug: bool,
 ) -> Result<Vec<AnalyzeTarget>, String> {
     let file = file.map(|value| canonicalize_relative_posix(&value));
     let enabled_languages = policy.enabled_languages()?;
@@ -1039,6 +1186,23 @@ fn build_analyze_targets(
         }
         for root in policy.roots_for(language) {
             let workdir = repo_root.join(root);
+            let has_adapter_for_root = registry
+                .detect(&workdir)
+                .into_iter()
+                .any(|adapter| adapter.language() == language);
+            if !has_adapter_for_root {
+                continue;
+            }
+            let Some(adapter) = registry
+                .adapters()
+                .iter()
+                .find(|candidate| candidate.language() == language)
+            else {
+                continue;
+            };
+            let Some(execution) = adapter.resolve_execution(repo_root, &workdir) else {
+                continue;
+            };
             let scope = Scope {
                 workspace_root: repo_root.to_string_lossy().into_owned(),
                 path: if root == "." {
@@ -1051,18 +1215,14 @@ fn build_analyze_targets(
             };
             let run_context = RunContext {
                 repo_root: repo_root.to_path_buf(),
+                target_root: workdir.clone(),
                 workdir: workdir.clone(),
                 policy: policy.clone(),
                 scope,
                 diff: None,
+                execution,
+                debug,
             };
-            let has_adapter_for_root = registry
-                .detect(&workdir)
-                .into_iter()
-                .any(|adapter| adapter.language() == language);
-            if !has_adapter_for_root {
-                continue;
-            }
             targets.push(AnalyzeTarget {
                 language,
                 root: root.clone(),
@@ -1085,27 +1245,6 @@ fn canonicalize_relative_posix(value: &str) -> String {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct SignalRowKey {
-    kind: SignalKind,
-    language: Language,
-    workspace_root: String,
-    path: Option<String>,
-    package: Option<String>,
-    file: Option<String>,
-}
-
-fn signal_row_key(row: &SignalRow) -> SignalRowKey {
-    SignalRowKey {
-        kind: row.kind,
-        language: row.language,
-        workspace_root: row.scope.workspace_root.clone(),
-        path: row.scope.path.clone(),
-        package: row.scope.package.clone(),
-        file: row.scope.file.clone(),
-    }
-}
-
 fn load_previous_artifact(repo_root: &Path) -> Option<RunArtifact> {
     let candidates = [
         repo_root.join(PREVIOUS_SIGNALS_SNAPSHOT),
@@ -1121,141 +1260,6 @@ fn load_previous_artifact(repo_root: &Path) -> Option<RunArtifact> {
         }
     }
     None
-}
-
-fn annotate_deltas_vs_previous(
-    artifact: &mut RunArtifact,
-    previous_artifact: Option<&RunArtifact>,
-) {
-    let Some(previous_artifact) = previous_artifact else {
-        for row in &mut artifact.rows {
-            row.delta_vs_previous = Some(Delta {
-                changes: serde_json::json!({ "status": "no_previous_run" }),
-            });
-        }
-        return;
-    };
-
-    let mut previous_rows = HashMap::<SignalRowKey, &SignalRow>::new();
-    for row in &previous_artifact.rows {
-        previous_rows.insert(signal_row_key(row), row);
-    }
-
-    for row in &mut artifact.rows {
-        let previous_row = previous_rows.get(&signal_row_key(row)).copied();
-        row.delta_vs_previous = Some(compute_delta_vs_previous(row, previous_row));
-    }
-}
-
-fn compute_delta_vs_previous(current: &SignalRow, previous: Option<&SignalRow>) -> Delta {
-    let Some(previous) = previous else {
-        return Delta {
-            changes: serde_json::json!({ "status": "no_previous_target" }),
-        };
-    };
-
-    let current_metrics = signal_result_metrics(&current.result);
-    let previous_metrics = signal_result_metrics(&previous.result);
-    let metric_names = current_metrics
-        .keys()
-        .chain(previous_metrics.keys())
-        .copied()
-        .collect::<BTreeSet<_>>();
-    let mut metric_changes = serde_json::Map::new();
-    for metric in metric_names {
-        let current_value = current_metrics.get(metric).copied();
-        let previous_value = previous_metrics.get(metric).copied();
-        if current_value == previous_value {
-            continue;
-        }
-        let mut change = serde_json::Map::new();
-        if let Some(value) = previous_value {
-            change.insert(String::from("from"), serde_json::Value::from(value));
-        }
-        if let Some(value) = current_value {
-            change.insert(String::from("to"), serde_json::Value::from(value));
-        }
-        if let (Some(from), Some(to)) = (previous_value, current_value) {
-            change.insert(String::from("delta"), serde_json::Value::from(to - from));
-        }
-        metric_changes.insert(metric.to_string(), serde_json::Value::Object(change));
-    }
-
-    let changed = current.pass != previous.pass || !metric_changes.is_empty();
-    let mut changes = serde_json::Map::new();
-    changes.insert(
-        String::from("status"),
-        serde_json::Value::from(if changed { "changed" } else { "unchanged" }),
-    );
-    if current.pass != previous.pass {
-        changes.insert(
-            String::from("pass"),
-            serde_json::json!({ "from": previous.pass, "to": current.pass }),
-        );
-    }
-    if !metric_changes.is_empty() {
-        changes.insert(
-            String::from("metrics"),
-            serde_json::Value::Object(metric_changes),
-        );
-    }
-    Delta {
-        changes: serde_json::Value::Object(changes),
-    }
-}
-
-fn signal_result_metrics(result: &SignalResult) -> HashMap<&'static str, f64> {
-    let mut metrics = HashMap::new();
-    match result {
-        SignalResult::Test(value) => {
-            metrics.insert("total_tests", value.total_tests as f64);
-            metrics.insert("passed", value.passed as f64);
-            metrics.insert("failed", value.failed as f64);
-            if let Some(duration) = value.duration_ms {
-                metrics.insert("duration_ms", duration as f64);
-            }
-        }
-        SignalResult::Coverage(value) => {
-            if let Some(percent) = value.percent {
-                metrics.insert("percent", percent);
-            }
-            if let Some(percent) = value.line_percent {
-                metrics.insert("line_percent", percent);
-            }
-            if let Some(percent) = value.branch_percent {
-                metrics.insert("branch_percent", percent);
-            }
-        }
-        SignalResult::Size(value) => {
-            metrics.insert("max_lines", value.max_lines as f64);
-            metrics.insert("total_files", value.total_files as f64);
-            metrics.insert("warn_count", value.warn_count as f64);
-            metrics.insert("fail_count", value.fail_count as f64);
-        }
-        SignalResult::Complexity(value) => {
-            metrics.insert("measured_functions", value.measured_functions as f64);
-            metrics.insert("max_fn_cyclomatic", value.max_fn_cyclomatic);
-            if let Some(cognitive) = value.max_fn_cognitive {
-                metrics.insert("max_fn_cognitive", cognitive);
-            }
-            metrics.insert("warn_count", value.warn_count as f64);
-            metrics.insert("fail_count", value.fail_count as f64);
-        }
-        SignalResult::Deps(value) => {
-            metrics.insert("crate_count", value.crate_count as f64);
-            metrics.insert("edge_count", value.edge_count as f64);
-            metrics.insert("violation_count", value.violation_count as f64);
-        }
-        SignalResult::Mutation(value) => {
-            metrics.insert("killed", value.killed as f64);
-            metrics.insert("survived", value.survived as f64);
-            metrics.insert("timeout", value.timeout as f64);
-            if let Some(score) = value.score {
-                metrics.insert("score", score);
-            }
-        }
-    }
-    metrics
 }
 
 fn update_policy_roots(
@@ -1295,6 +1299,74 @@ fn update_policy_roots(
                     .collect(),
             ),
         );
+    }
+    let serialized = toml::to_string_pretty(&document)
+        .map_err(|error| format!("failed to serialize {}: {error}", policy_path.display()))?;
+    fs::write(&policy_path, format!("{serialized}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", policy_path.display()))
+}
+
+fn update_foundation_settings(
+    repo_root: &Path,
+    discovered_roots: &BTreeMap<Language, Vec<String>>,
+) -> Result<(), String> {
+    let registry = build_registry();
+    let mut languages_requiring_workspace_runner = BTreeSet::new();
+    for adapter in registry.adapters() {
+        let language = adapter.language();
+        let Some(roots) = discovered_roots.get(&language) else {
+            continue;
+        };
+        if roots
+            .iter()
+            .filter(|root| root.as_str() != ".")
+            .any(|root| {
+                adapter
+                    .resolve_execution(repo_root, &repo_root.join(root))
+                    .is_some_and(|value| value.kind == "workspace_ancestor")
+            })
+        {
+            languages_requiring_workspace_runner.insert(language);
+        }
+    }
+    if languages_requiring_workspace_runner.is_empty() {
+        return Ok(());
+    }
+    let policy_path = repo_root.join(AYNI_POLICY_FILE);
+    let content = fs::read_to_string(&policy_path)
+        .map_err(|error| format!("failed to read {}: {error}", policy_path.display()))?;
+    let mut document = content.parse::<toml::Value>().map_err(|error| {
+        format!(
+            "failed to parse {} as toml for foundation updates: {error}",
+            policy_path.display()
+        )
+    })?;
+    let Some(table) = document.as_table_mut() else {
+        return Err(format!("{} is not a TOML table", policy_path.display()));
+    };
+    for language in languages_requiring_workspace_runner {
+        let key = language.as_str();
+        if !table.contains_key(key) {
+            table.insert(key.to_string(), toml::Value::Table(toml::Table::new()));
+        }
+        let language_table = table
+            .get_mut(key)
+            .and_then(toml::Value::as_table_mut)
+            .ok_or_else(|| format!("[{key}] must be a table in {}", policy_path.display()))?;
+        let foundation = language_table
+            .entry("foundation")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let foundation_table = foundation.as_table_mut().ok_or_else(|| {
+            format!(
+                "[{key}.foundation] must be a table in {}",
+                policy_path.display()
+            )
+        })?;
+        foundation_table.insert(
+            String::from("runner"),
+            toml::Value::String(String::from("workspace")),
+        );
+        foundation_table.insert(String::from("validate_install"), toml::Value::Boolean(true));
     }
     let serialized = toml::to_string_pretty(&document)
         .map_err(|error| format!("failed to serialize {}: {error}", policy_path.display()))?;

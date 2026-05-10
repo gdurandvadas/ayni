@@ -98,6 +98,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             max_fn_cognitive: max_fn_cognitive.map(round2),
             warn_count,
             fail_count,
+            failure: None,
         }),
         budget: Budget::Complexity(budget),
         offenders: Offenders::Complexity(offenders),
