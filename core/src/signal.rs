@@ -79,6 +79,17 @@ pub enum SignalResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandFailure {
+    pub category: String,
+    pub classification: String,
+    pub command: String,
+    pub cwd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Budget {
     Test(serde_json::Value),
@@ -108,6 +119,8 @@ pub struct TestResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
     pub runner: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CommandFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -135,6 +148,8 @@ pub struct CoverageResult {
     pub branch_percent: Option<f64>,
     pub engine: String,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CommandFailure>,
 }
 
 impl CoverageResult {
@@ -180,6 +195,8 @@ pub struct ComplexityResult {
     pub max_fn_cognitive: Option<f64>,
     pub warn_count: u64,
     pub fail_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CommandFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -216,6 +233,8 @@ pub struct MutationResult {
     pub timeout: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CommandFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -242,6 +261,7 @@ mod coverage_result_tests {
                 branch_percent: Some(60.0),
                 engine: String::new(),
                 status: String::new(),
+                failure: None,
             }
             .headline_percent(),
             Some(90.0)
@@ -253,6 +273,7 @@ mod coverage_result_tests {
                 branch_percent: Some(60.0),
                 engine: String::new(),
                 status: String::new(),
+                failure: None,
             }
             .headline_percent(),
             Some(71.5)
@@ -264,6 +285,7 @@ mod coverage_result_tests {
                 branch_percent: Some(55.0),
                 engine: String::new(),
                 status: String::new(),
+                failure: None,
             }
             .headline_percent(),
             Some(55.0)

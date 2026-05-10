@@ -33,6 +33,13 @@ pub struct LanguageToolingOverrides {
     pub mutation: Option<ToolCommandOverride>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct FoundationPolicy {
+    pub runner: Option<String>,
+    pub validate_install: Option<bool>,
+}
+
 /// Per-language tooling thresholds. Maps from TOML tables like `[rust]`.
 ///
 /// Every sub-section is optional; missing sections mean "not configured".
@@ -45,6 +52,7 @@ pub struct LanguageTooling {
     pub complexity: Option<ComplexityPolicy>,
     pub coverage: Option<CoveragePolicy>,
     pub deps: Option<DepsPolicy>,
+    pub foundation: Option<FoundationPolicy>,
     pub tooling: LanguageToolingOverrides,
     /// Glob → threshold. TOML: `[rust.size]` / `[node.size]` etc.
     pub size: BTreeMap<String, SizeThreshold>,
@@ -449,6 +457,34 @@ args = ["exec", "stryker", "run"]
             .tool_override_for(Language::Node, SignalKind::Mutation)
             .expect("node mutation override");
         assert_eq!(node_mutation.command, "pnpm");
+    }
+
+    #[test]
+    fn python_foundation_policy_parses() {
+        let document = r#"
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["python"]
+
+[python.foundation]
+runner = "workspace"
+validate_install = true
+"#;
+        let policy: AyniPolicy = toml::from_str(document).expect("parse");
+        let foundation = policy
+            .python
+            .foundation
+            .as_ref()
+            .expect("python foundation");
+        assert_eq!(foundation.runner.as_deref(), Some("workspace"));
+        assert_eq!(foundation.validate_install, Some(true));
     }
 
     #[test]

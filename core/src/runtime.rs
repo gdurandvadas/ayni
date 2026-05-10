@@ -1,3 +1,4 @@
+use crate::catalog::PythonPackageManagerResolution;
 use crate::language::Language;
 use crate::policy::AyniPolicy;
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,8 @@ pub struct RunContext {
     pub policy: AyniPolicy,
     pub scope: Scope,
     pub diff: Option<BranchDiff>,
+    pub python_resolution: Option<PythonPackageManagerResolution>,
+    pub debug: bool,
 }
 
 #[derive(Debug, Clone)]

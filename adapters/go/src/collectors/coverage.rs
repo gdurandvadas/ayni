@@ -70,6 +70,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             branch_percent: None,
             engine: format!("{test_engine} + go tool cover"),
             status,
+            failure: None,
         }),
         budget: Budget::Coverage(coverage_budget),
         offenders: Offenders::Coverage(offenders),
@@ -171,6 +172,8 @@ mod tests {
             policy,
             scope: Scope::default(),
             diff: None,
+            python_resolution: None,
+            debug: false,
         }
     }
 

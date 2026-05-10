@@ -1,4 +1,7 @@
-use super::util::{ensure_ayni_dir, run_command, to_repo_relative_path};
+use super::util::{
+    command_failure_from_output, ensure_ayni_dir, format_command, run_command_for_context,
+    to_repo_relative_path,
+};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
@@ -32,12 +35,25 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         threshold,
         String::from("--ignore-complexity"),
     ];
-    let output = run_command(&context.workdir, "complexipy", &args)?;
+    let mut command_args = vec![
+        String::from("tool"),
+        String::from("run"),
+        String::from("complexipy"),
+    ];
+    command_args.extend(args);
+    let engine = format_command("uv", &command_args);
+    let output = run_command_for_context(context, "uv", &command_args)?;
     if !output.status.success() {
-        return Err(format!(
-            "complexipy failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stderr).trim()
+        return Ok(error_row(
+            context,
+            engine,
+            command_failure_from_output(
+                context,
+                SignalKind::Complexity,
+                "uv",
+                &command_args,
+                &output,
+            ),
         ));
     }
 
@@ -103,6 +119,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         pass: fail_count == 0,
         result: SignalResult::Complexity(ComplexityResult {
             engine: String::from("complexipy"),
+            failure: None,
             method: String::from("cognitive"),
             measured_functions,
             max_fn_cyclomatic: 0.0,
@@ -117,6 +134,38 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         delta_vs_previous: None,
         delta_vs_baseline: None,
     })
+}
+
+fn error_row(
+    context: &RunContext,
+    engine: String,
+    failure: ayni_core::CommandFailure,
+) -> SignalRow {
+    SignalRow {
+        kind: SignalKind::Complexity,
+        language: Language::Python,
+        scope: Scope {
+            workspace_root: context.scope.workspace_root.clone(),
+            path: context.scope.path.clone(),
+            package: context.scope.package.clone(),
+            file: context.scope.file.clone(),
+        },
+        pass: false,
+        result: SignalResult::Complexity(ComplexityResult {
+            engine,
+            method: String::from("cognitive"),
+            measured_functions: 0,
+            max_fn_cyclomatic: 0.0,
+            max_fn_cognitive: None,
+            warn_count: 0,
+            fail_count: 1,
+            failure: Some(failure),
+        }),
+        budget: Budget::Complexity(json!({})),
+        offenders: Offenders::Complexity(Vec::new()),
+        delta_vs_previous: None,
+        delta_vs_baseline: None,
+    }
 }
 
 #[derive(Debug, Clone)]

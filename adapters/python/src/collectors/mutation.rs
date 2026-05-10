@@ -1,4 +1,7 @@
-use super::util::{command_for_override_or_default, ensure_ayni_dir, run_command};
+use super::util::{
+    command_failure_from_output, command_for_override_or_default, ensure_ayni_dir, format_command,
+    run_command_for_context,
+};
 use ayni_core::{
     Budget, Language, Level, MutationOffender, MutationResult, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
@@ -26,6 +29,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
                 survived: 0,
                 timeout: 0,
                 score: None,
+                failure: None,
             }),
             budget: Budget::Mutation(json!({"enabled": false})),
             offenders: Offenders::Mutation(Vec::new()),
@@ -36,10 +40,19 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
 
     let (program, args) =
         command_for_override_or_default(context, SignalKind::Mutation, "mutmut", &["run"]);
-    let run_output = run_command(&context.workdir, &program, &args)?;
+    let run_output = run_command_for_context(context, &program, &args)?;
     if !run_output.status.success() {
-        let stderr = String::from_utf8_lossy(&run_output.stderr);
-        return Err(format!("mutmut run failed: {}", stderr.trim()));
+        return Ok(error_row(
+            context,
+            format_command(&program, &args),
+            command_failure_from_output(
+                context,
+                SignalKind::Mutation,
+                &program,
+                &args,
+                &run_output,
+            ),
+        ));
     }
 
     let artifact_dir = ensure_ayni_dir(context)?;
@@ -48,10 +61,19 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         command_for_override_or_default(context, SignalKind::Mutation, "mutmut", &["junitxml"]);
     junit_args.push(String::from("--suspicious-policy=failure"));
     junit_args.push(String::from("--untested-policy=failure"));
-    let junit_output = run_command(&context.workdir, &junit_program, &junit_args)?;
+    let junit_output = run_command_for_context(context, &junit_program, &junit_args)?;
     if !junit_output.status.success() {
-        let stderr = String::from_utf8_lossy(&junit_output.stderr);
-        return Err(format!("mutmut junitxml failed: {}", stderr.trim()));
+        return Ok(error_row(
+            context,
+            format_command(&junit_program, &junit_args),
+            command_failure_from_output(
+                context,
+                SignalKind::Mutation,
+                &junit_program,
+                &junit_args,
+                &junit_output,
+            ),
+        ));
     }
     fs::write(&junit_path, &junit_output.stdout)
         .map_err(|error| format!("failed to write {}: {error}", junit_path.display()))?;
@@ -83,12 +105,43 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             survived,
             timeout: 0,
             score,
+            failure: None,
         }),
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(report.offenders),
         delta_vs_previous: None,
         delta_vs_baseline: None,
     })
+}
+
+fn error_row(
+    context: &RunContext,
+    engine: String,
+    failure: ayni_core::CommandFailure,
+) -> SignalRow {
+    SignalRow {
+        kind: SignalKind::Mutation,
+        language: Language::Python,
+        scope: Scope {
+            workspace_root: context.scope.workspace_root.clone(),
+            path: context.scope.path.clone(),
+            package: context.scope.package.clone(),
+            file: context.scope.file.clone(),
+        },
+        pass: false,
+        result: SignalResult::Mutation(MutationResult {
+            engine,
+            killed: 0,
+            survived: 0,
+            timeout: 0,
+            score: None,
+            failure: Some(failure),
+        }),
+        budget: Budget::Mutation(json!({"enabled": true})),
+        offenders: Offenders::Mutation(Vec::new()),
+        delta_vs_previous: None,
+        delta_vs_baseline: None,
+    }
 }
 
 #[derive(Debug, Default)]

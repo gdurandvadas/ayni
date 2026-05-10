@@ -97,7 +97,18 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
 fn is_excluded_dir(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|value| value.to_str()),
-        Some(".venv" | "venv" | "env" | "__pycache__" | ".pytest_cache" | ".ruff_cache" | ".tox" | ".nox" | ".git" | ".ayni")
+        Some(
+            ".venv"
+                | "venv"
+                | "env"
+                | "__pycache__"
+                | ".pytest_cache"
+                | ".ruff_cache"
+                | ".tox"
+                | ".nox"
+                | ".git"
+                | ".ayni"
+        )
     )
 }
 

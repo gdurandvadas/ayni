@@ -7,8 +7,8 @@ use std::path::Path;
 #[cfg(test)]
 use ayni_core::{AYNI_POLICY_FILE, AyniPolicy, RunArtifact};
 use ayni_core::{
-    Budget, ComplexityOffender, CoverageOffender, DepsOffender, Level, MutationOffender,
-    SignalKind, SignalResult, SignalRow, SizeOffender, TestFailure,
+    Budget, CommandFailure, ComplexityOffender, CoverageOffender, DepsOffender, Level,
+    MutationOffender, SignalKind, SignalResult, SignalRow, SizeOffender, TestFailure,
 };
 use owo_colors::OwoColorize;
 use serde_json::Value;
@@ -150,8 +150,11 @@ fn build_report_text(rows: &[SignalRow], color: bool, offenders_limit: usize) ->
 fn summarize(row: &SignalRow) -> String {
     match &row.result {
         SignalResult::Test(result) => format!(
-            "measured total={} passed={} failed={}",
-            result.total_tests, result.passed, result.failed
+            "measured total={} passed={} failed={}{}",
+            result.total_tests,
+            result.passed,
+            result.failed,
+            failure_suffix(result.failure.as_ref())
         ),
         SignalResult::Coverage(result) => {
             let budget = match &row.budget {
@@ -169,12 +172,13 @@ fn summarize(row: &SignalRow) -> String {
                 .and_then(|budget| budget.get("line_percent_fail"))
                 .and_then(Value::as_f64);
             format!(
-                "measured={} thresholds={} deltas={} engine={} status={}",
+                "measured={} thresholds={} deltas={} engine={} status={}{}",
                 measured,
                 threshold_summary(warn, fail),
                 delta_summary(result.headline_percent(), warn, fail),
                 result.engine,
-                result.status
+                result.status,
+                failure_suffix(result.failure.as_ref())
             )
         }
         SignalResult::Size(result) => format!(
@@ -206,14 +210,15 @@ fn summarize(row: &SignalRow) -> String {
                 })
                 .unwrap_or_default();
             format!(
-                "measured functions={} max_cyclo={} cyclo_thresholds={} cyclo_deltas={} warn_count={} fail_count={}{}",
+                "measured functions={} max_cyclo={} cyclo_thresholds={} cyclo_deltas={} warn_count={} fail_count={}{}{}",
                 result.measured_functions,
                 format_number(result.max_fn_cyclomatic),
                 threshold_summary(cyclo_warn, cyclo_fail),
                 delta_summary(Some(result.max_fn_cyclomatic), cyclo_warn, cyclo_fail),
                 result.warn_count,
                 result.fail_count,
-                cognitive
+                cognitive,
+                failure_suffix(result.failure.as_ref())
             )
         }
         SignalResult::Deps(result) => format!(
@@ -221,7 +226,7 @@ fn summarize(row: &SignalRow) -> String {
             result.crate_count, result.edge_count, result.violation_count
         ),
         SignalResult::Mutation(result) => format!(
-            "measured score={} killed={} survived={} timeout={} engine={}",
+            "measured score={} killed={} survived={} timeout={} engine={}{}",
             result
                 .score
                 .map(format_percent)
@@ -229,13 +234,22 @@ fn summarize(row: &SignalRow) -> String {
             result.killed,
             result.survived,
             result.timeout,
-            result.engine
+            result.engine,
+            failure_suffix(result.failure.as_ref())
         ),
     }
 }
 
 fn offenders_text(color: bool, row: &SignalRow, offenders_limit: usize) -> String {
     let mut out = String::new();
+    if let Some(failure) = command_failure_for_row(row) {
+        render_lines(
+            &mut out,
+            color,
+            vec![(Palette::Failure, command_failure_line(failure))],
+            offenders_limit,
+        );
+    }
     match &row.offenders {
         ayni_core::Offenders::Test(items) => render_lines(
             &mut out,
@@ -275,6 +289,42 @@ fn offenders_text(color: bool, row: &SignalRow, offenders_limit: usize) -> Strin
         ),
     }
     out
+}
+
+fn command_failure_for_row(row: &SignalRow) -> Option<&CommandFailure> {
+    match &row.result {
+        SignalResult::Test(result) => result.failure.as_ref(),
+        SignalResult::Coverage(result) => result.failure.as_ref(),
+        SignalResult::Complexity(result) => result.failure.as_ref(),
+        SignalResult::Mutation(result) => result.failure.as_ref(),
+        SignalResult::Size(_) | SignalResult::Deps(_) => None,
+    }
+}
+
+fn failure_suffix(failure: Option<&CommandFailure>) -> String {
+    failure
+        .map(|failure| {
+            format!(
+                " failure={} category={}",
+                failure.classification, failure.category
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn command_failure_line(failure: &CommandFailure) -> String {
+    format!(
+        "FAIL {} {} exit={} command=`{}` cwd={} {}",
+        failure.category,
+        failure.classification,
+        failure
+            .exit_code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| String::from("—")),
+        failure.command,
+        failure.cwd,
+        failure.message.replace('\n', " ")
+    )
 }
 
 fn render_lines(
@@ -620,6 +670,7 @@ mod tests {
                     branch_percent: None,
                     engine: String::from("cargo-llvm-cov"),
                     status: String::from("ok"),
+                    failure: None,
                 }),
                 budget: Budget::Coverage(serde_json::json!({
                     "line_percent_warn": 70.0,
@@ -661,6 +712,7 @@ mod tests {
                     max_fn_cognitive: Some(16.0),
                     warn_count: 1,
                     fail_count: 0,
+                    failure: None,
                 }),
                 budget: Budget::Complexity(serde_json::json!({
                     "fn_cyclomatic": {"warn": 10.0, "fail": 20.0},

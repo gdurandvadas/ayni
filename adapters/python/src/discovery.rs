@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use toml::Value;
 
 const EXCLUDED_ROOTS: &[&str] = &[
     ".venv",
@@ -19,7 +20,41 @@ pub fn discover_roots(repo_root: &Path) -> Vec<String> {
             parts.iter().any(|part| EXCLUDED_ROOTS.contains(part))
         }));
     }
+    let excluded = uv_workspace_excludes(repo_root);
     dedupe_and_sort_roots(roots)
+        .into_iter()
+        .filter(|root| !is_excluded_root(root, &excluded))
+        .collect()
+}
+
+fn uv_workspace_excludes(repo_root: &Path) -> Vec<String> {
+    let pyproject_path = repo_root.join("pyproject.toml");
+    let Ok(content) = fs::read_to_string(pyproject_path) else {
+        return Vec::new();
+    };
+    let Ok(value) = toml::from_str::<Value>(&content) else {
+        return Vec::new();
+    };
+    value
+        .get("tool")
+        .and_then(|value| value.get("uv"))
+        .and_then(|value| value.get("workspace"))
+        .and_then(|value| value.get("exclude"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(canonicalize_relative_posix)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn is_excluded_root(root: &str, excluded: &[String]) -> bool {
+    excluded
+        .iter()
+        .any(|pattern| glob::Pattern::new(pattern).is_ok_and(|glob| glob.matches(root)))
 }
 
 fn discover_file_parent_roots<F>(repo_root: &Path, file_name: &str, exclude: F) -> Vec<String>
@@ -95,6 +130,54 @@ mod tests {
         assert_eq!(
             discover_roots(dir.path()),
             vec![String::from("."), String::from("packages/api")]
+        );
+    }
+
+    #[test]
+    fn excludes_uv_workspace_excluded_roots() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            r#"
+[tool.uv.workspace]
+members = ["services/*"]
+exclude = ["services/agent-runtime"]
+"#,
+        )
+        .expect("root pyproject");
+        fs::create_dir_all(dir.path().join("services/api")).expect("api dir");
+        fs::write(dir.path().join("services/api/pyproject.toml"), "").expect("api pyproject");
+        fs::create_dir_all(dir.path().join("services/agent-runtime")).expect("runtime dir");
+        fs::write(dir.path().join("services/agent-runtime/pyproject.toml"), "")
+            .expect("runtime pyproject");
+
+        assert_eq!(
+            discover_roots(dir.path()),
+            vec![String::from("."), String::from("services/api")]
+        );
+    }
+
+    #[test]
+    fn excludes_uv_workspace_glob_patterns() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            r#"
+[tool.uv.workspace]
+exclude = ["services/private-*"]
+"#,
+        )
+        .expect("root pyproject");
+        fs::create_dir_all(dir.path().join("services/private-api")).expect("private dir");
+        fs::write(dir.path().join("services/private-api/pyproject.toml"), "")
+            .expect("private pyproject");
+        fs::create_dir_all(dir.path().join("services/public-api")).expect("public dir");
+        fs::write(dir.path().join("services/public-api/pyproject.toml"), "")
+            .expect("public pyproject");
+
+        assert_eq!(
+            discover_roots(dir.path()),
+            vec![String::from("."), String::from("services/public-api")]
         );
     }
 }

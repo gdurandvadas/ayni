@@ -135,9 +135,15 @@ roots = ["."]
     )
     .expect("policy");
 
-    let targets =
-        super::build_analyze_targets(dir.path(), &policy, None, None, Some(Language::Python))
-            .expect("targets");
+    let targets = super::build_analyze_targets(
+        dir.path(),
+        &policy,
+        None,
+        None,
+        Some(Language::Python),
+        false,
+    )
+    .expect("targets");
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].language, Language::Python);
 }
@@ -154,6 +160,7 @@ fn test_row(pass: bool, passed: u64, failed: u64) -> ayni_core::SignalRow {
             failed,
             duration_ms: Some(400),
             runner: String::from("cargo-test"),
+            failure: None,
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(Vec::new()),

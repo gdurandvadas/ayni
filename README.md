@@ -151,7 +151,7 @@ ayni analyze --output md
 What these do:
 
 - `ayni install` scaffolds `.ayni.toml`, updates the managed block in `AGENTS.md`, ensures `.gitignore` includes `.ayni/`, and lists required tools.
-- `ayni install --apply` also installs missing or outdated tools from local language ecosystems.
+- `ayni install --apply` also installs missing or outdated tools from local language ecosystems and validates the resulting setup before succeeding.
 - `ayni analyze` prints the stdout report and writes `.ayni/last/signals.json`.
 - `ayni analyze --output md` prints Markdown to stdout and writes `.ayni/last/signals.json`.
 
@@ -163,7 +163,7 @@ healthy code.
 
 End-to-end flow:
 
-1. `ayni install` scaffolds local guidance and configuration, lists required tools and versions, and can install them with `ayni install --apply`.
+1. `ayni install` scaffolds local guidance and configuration, lists required tools and versions, and can install and validate them with `ayni install --apply`.
 2. `ayni analyze` executes enabled signal kinds per adapter.
 3. Results are merged into one `RunArtifact`.
 4. Ayni writes `.ayni/last/signals.json`.
@@ -217,7 +217,7 @@ complexity
 
 The default `install` and `analyze` workflow runs from the repository checkout.
 It reads project files, runs configured tooling, and writes artifacts under
-`.ayni/`. `ayni install --apply` uses adapter catalogs to install missing tools.
+`.ayni/`. `ayni install --apply` uses adapter catalogs to install missing tools and validate the configured foundation.
 
 ## Artifacts
 

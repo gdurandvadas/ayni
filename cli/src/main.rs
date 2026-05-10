@@ -15,9 +15,8 @@ use ayni_adapters_rust::RustAdapter;
 use ayni_core::{
     AYNI_POLICY_FILE, AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, AyniPolicy, Budget,
     CatalogEntry, ConcurrencyPolicy, Delta, InstallContext, Installer, Language,
-    NodePackageManager, PythonPackageManager, RunArtifact, RunContext, Scope, SignalKind,
-    SignalResult, SignalRow, ToolStatus, VersionCheck, detect_node_package_manager,
-    detect_python_package_manager,
+    NodePackageManager, RunArtifact, RunContext, Scope, SignalKind, SignalResult, SignalRow,
+    ToolStatus, VersionCheck, detect_node_package_manager, resolve_python_package_manager,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use discovery::discover_language_roots;
@@ -56,6 +55,9 @@ enum Commands {
         /// Report format: `stdout` (default, coloured console) or `md` (markdown report).
         #[arg(long, value_enum, default_value = "stdout")]
         output: OutputArg,
+        /// Print raw command diagnostics and disable the live dashboard.
+        #[arg(long)]
+        debug: bool,
     },
     /// Scaffold repo guidance and show required tools; use `--apply` to install them.
     Install {
@@ -108,6 +110,7 @@ fn main() -> ExitCode {
             package,
             language,
             output,
+            debug,
         } => analyze(
             &config,
             AnalyzeOptions {
@@ -115,6 +118,7 @@ fn main() -> ExitCode {
                 file,
                 language_filter: language.map(|value| value.as_language()),
                 output_mode: output,
+                debug,
             },
         ),
         Commands::Install {
@@ -162,8 +166,12 @@ fn install_impl(
     let root = PathBuf::from(repo_root);
     let policy = prepare_install_policy(&root, language_filter).map_err(|error| vec![error])?;
     if apply {
-        let failures = collect_install_failures(&root, &policy, language_filter);
+        let mut failures = collect_install_failures(&root, &policy, language_filter);
         if failures.is_empty() {
+            failures.extend(validate_install_foundation(&root, &policy, language_filter));
+        }
+        if failures.is_empty() {
+            println!("foundation validation passed");
             Ok(())
         } else {
             Err(failures)
@@ -205,16 +213,26 @@ fn print_install_requirements(
             } else {
                 None
             };
-            let python_manager = if language == Language::Python {
-                detect_python_package_manager(&root_path).or(Some(PythonPackageManager::Pip))
+            let python_resolution = if language == Language::Python {
+                resolve_python_package_manager(repo_root, &root_path)
             } else {
                 None
             };
+            let python_manager = python_resolution.as_ref().map(|value| value.manager);
             let install_context = InstallContext {
                 cwd: Some(root_path.as_path()),
                 node_package_manager: node_manager,
                 python_package_manager: python_manager,
             };
+            if let Some(resolution) = &python_resolution {
+                println!(
+                    "  runner: manager={} source={} kind={} ambiguous={}",
+                    resolution.manager_label(),
+                    resolution.resolved_from.display(),
+                    resolution.kind_label(),
+                    resolution.ambiguous
+                );
+            }
             for entry in adapter.catalog() {
                 if entry.opt_in && !check_enabled_for_entry(policy, entry) {
                     continue;
@@ -389,15 +407,24 @@ fn install_for_root(
 
     let mut failures = Vec::new();
     let node_manager = prepare_node_manager(language, root_entry, &root_path, &mut failures);
-    let python_manager = if language == Language::Python {
-        detect_python_package_manager(&root_path).or(Some(PythonPackageManager::Pip))
+    let python_resolution = if language == Language::Python {
+        resolve_python_package_manager(root, &root_path)
     } else {
         None
     };
+    if let Some(resolution) = &python_resolution {
+        println!(
+            "install {language}:{root_entry} manager={} source={} kind={} ambiguous={}",
+            resolution.manager_label(),
+            resolution.resolved_from.display(),
+            resolution.kind_label(),
+            resolution.ambiguous
+        );
+    }
     let install_context = InstallContext {
         cwd: Some(&root_path),
         node_package_manager: node_manager,
-        python_package_manager: python_manager,
+        python_package_manager: python_resolution.as_ref().map(|value| value.manager),
     };
 
     for entry in adapter.catalog() {
@@ -484,8 +511,78 @@ fn prepare_install_policy(
         let discovered_roots =
             discover_language_roots(root, &enabled_languages, language_filter, &registry);
         update_policy_roots(root, &discovered_roots)?;
+        update_python_foundation_settings(root, &discovered_roots)?;
     }
     AyniPolicy::load(root)
+}
+
+fn validate_install_foundation(
+    repo_root: &Path,
+    policy: &AyniPolicy,
+    language_filter: Option<Language>,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    if should_skip_install_language(policy, Language::Python, language_filter) {
+        return failures;
+    }
+    if policy
+        .python
+        .foundation
+        .as_ref()
+        .and_then(|value| value.validate_install)
+        == Some(false)
+    {
+        return failures;
+    }
+    let registry = build_registry();
+    let Some(adapter) = registry
+        .adapters()
+        .iter()
+        .find(|adapter| adapter.language() == Language::Python)
+    else {
+        return failures;
+    };
+    for root_entry in policy.roots_for(Language::Python) {
+        let root_path = repo_root.join(root_entry);
+        if !adapter.detect(&root_path).detected {
+            continue;
+        }
+        let Some(resolution) = resolve_python_package_manager(repo_root, &root_path) else {
+            failures.push(format!(
+                "foundation validation failed (python:{root_entry}): repo setup issue: unable to resolve python package manager for {}",
+                root_path.display()
+            ));
+            continue;
+        };
+        let install_context = InstallContext {
+            cwd: Some(root_path.as_path()),
+            node_package_manager: None,
+            python_package_manager: Some(resolution.manager),
+        };
+        let ayni_dir = root_path.join(".ayni");
+        if let Err(error) = fs::create_dir_all(&ayni_dir) {
+            failures.push(format!(
+                "foundation validation failed (python:{root_entry}): repo setup issue: unable to create {}: {error}",
+                ayni_dir.display()
+            ));
+        }
+        for entry in adapter.catalog() {
+            if entry.opt_in && !check_enabled_for_entry(policy, entry) {
+                continue;
+            }
+            if entry.status_in(install_context) == ToolStatus::Missing {
+                failures.push(format!(
+                    "foundation validation failed (python:{root_entry}): repo setup issue: {} is not invocable via {} from {} (resolution={} at {})",
+                    entry.name,
+                    resolution.manager_label(),
+                    root_path.display(),
+                    resolution.kind_label(),
+                    resolution.resolved_from.display()
+                ));
+            }
+        }
+    }
+    failures
 }
 
 fn signal_kind_slug(kind: SignalKind) -> &'static str {
@@ -519,6 +616,7 @@ struct AnalyzeOptions {
     file: Option<String>,
     language_filter: Option<Language>,
     output_mode: OutputArg,
+    debug: bool,
 }
 
 impl AnalyzeTarget {
@@ -905,12 +1003,26 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<AnalyzeOut
         file,
         language_filter,
         output_mode,
+        debug,
     } = options;
 
-    let targets = build_analyze_targets(&workspace_root, &policy, package, file, language_filter)?;
+    let targets = build_analyze_targets(
+        &workspace_root,
+        &policy,
+        package,
+        file,
+        language_filter,
+        debug,
+    )?;
     let plan = build_analyze_plan(&targets);
     let artifact_slot = Arc::new(Mutex::new(None));
-    let aborted = execute_analyze_plan(output_mode, plan, targets, Arc::clone(&artifact_slot))?;
+    let aborted = execute_analyze_plan(
+        output_mode,
+        debug,
+        plan,
+        targets,
+        Arc::clone(&artifact_slot),
+    )?;
     if aborted {
         return Ok(AnalyzeOutcome::Aborted);
     }
@@ -934,16 +1046,47 @@ fn ensure_analyze_directories(workspace_root: &Path) -> Result<(), String> {
 
 fn execute_analyze_plan(
     output_mode: OutputArg,
+    debug: bool,
     plan: ui::runner::Plan,
     targets: Vec<AnalyzeTarget>,
     artifact_slot: Arc<Mutex<Option<RunArtifact>>>,
 ) -> Result<bool, String> {
     let execution = build_analyze_execution(targets, artifact_slot);
+    if debug {
+        return ui::runner::run_plain(plan, execution, debug_progress_event)
+            .map(|outcome| outcome.aborted);
+    }
     match output_mode {
         OutputArg::Md => {
             ui::runner::run_plain(plan, execution, |_| {}).map(|outcome| outcome.aborted)
         }
         OutputArg::Stdout => run_stdout_plan(plan, execution),
+    }
+}
+
+fn debug_progress_event(event: ui::runner::ProgressEvent) {
+    match event {
+        ui::runner::ProgressEvent::Started { language, name } => {
+            eprintln!("[{language}] {name} started");
+        }
+        ui::runner::ProgressEvent::Line {
+            language,
+            name,
+            line,
+        } => {
+            eprintln!("[{language}] {name}: {line}");
+        }
+        ui::runner::ProgressEvent::Finished {
+            language,
+            name,
+            state,
+            elapsed,
+        } => {
+            eprintln!(
+                "[{language}] {name} {state:?} {:.1}s",
+                elapsed.as_secs_f64()
+            );
+        }
     }
 }
 
@@ -1017,6 +1160,7 @@ fn build_analyze_targets(
     package: Option<String>,
     file: Option<String>,
     language_filter: Option<Language>,
+    debug: bool,
 ) -> Result<Vec<AnalyzeTarget>, String> {
     let file = file.map(|value| canonicalize_relative_posix(&value));
     let enabled_languages = policy.enabled_languages()?;
@@ -1055,6 +1199,12 @@ fn build_analyze_targets(
                 policy: policy.clone(),
                 scope,
                 diff: None,
+                python_resolution: if language == Language::Python {
+                    resolve_python_package_manager(repo_root, &workdir)
+                } else {
+                    None
+                },
+                debug,
             };
             let has_adapter_for_root = registry
                 .detect(&workdir)
@@ -1296,6 +1446,65 @@ fn update_policy_roots(
             ),
         );
     }
+    let serialized = toml::to_string_pretty(&document)
+        .map_err(|error| format!("failed to serialize {}: {error}", policy_path.display()))?;
+    fs::write(&policy_path, format!("{serialized}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", policy_path.display()))
+}
+
+fn update_python_foundation_settings(
+    repo_root: &Path,
+    discovered_roots: &BTreeMap<Language, Vec<String>>,
+) -> Result<(), String> {
+    let Some(roots) = discovered_roots.get(&Language::Python) else {
+        return Ok(());
+    };
+    let requires_workspace_runner = roots
+        .iter()
+        .filter(|root| root.as_str() != ".")
+        .any(|root| {
+            resolve_python_package_manager(repo_root, &repo_root.join(root))
+                .is_some_and(|value| value.kind_label() == "workspace_ancestor")
+        });
+    if !requires_workspace_runner {
+        return Ok(());
+    }
+    let policy_path = repo_root.join(AYNI_POLICY_FILE);
+    let content = fs::read_to_string(&policy_path)
+        .map_err(|error| format!("failed to read {}: {error}", policy_path.display()))?;
+    let mut document = content.parse::<toml::Value>().map_err(|error| {
+        format!(
+            "failed to parse {} as toml for python foundation updates: {error}",
+            policy_path.display()
+        )
+    })?;
+    let Some(table) = document.as_table_mut() else {
+        return Err(format!("{} is not a TOML table", policy_path.display()));
+    };
+    if !table.contains_key("python") {
+        table.insert(
+            String::from("python"),
+            toml::Value::Table(toml::Table::new()),
+        );
+    }
+    let python_table = table
+        .get_mut("python")
+        .and_then(toml::Value::as_table_mut)
+        .ok_or_else(|| format!("[python] must be a table in {}", policy_path.display()))?;
+    let foundation = python_table
+        .entry("foundation")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let foundation_table = foundation.as_table_mut().ok_or_else(|| {
+        format!(
+            "[python.foundation] must be a table in {}",
+            policy_path.display()
+        )
+    })?;
+    foundation_table.insert(
+        String::from("runner"),
+        toml::Value::String(String::from("workspace")),
+    );
+    foundation_table.insert(String::from("validate_install"), toml::Value::Boolean(true));
     let serialized = toml::to_string_pretty(&document)
         .map_err(|error| format!("failed to serialize {}: {error}", policy_path.display()))?;
     fs::write(&policy_path, format!("{serialized}\n"))

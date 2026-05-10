@@ -264,6 +264,7 @@ mod tests {
                     branch_percent: None,
                     engine: String::from("cargo-llvm-cov"),
                     status: String::from("ok"),
+                    failure: None,
                 }),
                 budget: Budget::Coverage(json!({"line_percent_fail": 50.0})),
                 offenders: Offenders::Coverage(vec![CoverageOffender {

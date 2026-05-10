@@ -132,6 +132,7 @@ fn build_test_row(
             failed,
             duration_ms: None,
             runner: runner.to_string(),
+            failure: None,
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
@@ -231,6 +232,8 @@ mod tests {
             policy,
             scope: Scope::default(),
             diff: None,
+            python_resolution: None,
+            debug: false,
         }
     }
 

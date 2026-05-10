@@ -103,6 +103,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             failed,
             duration_ms: (duration_ms > 0).then_some(duration_ms),
             runner,
+            failure: None,
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
@@ -159,6 +160,8 @@ mod tests {
             policy,
             scope: Scope::default(),
             diff: None,
+            python_resolution: None,
+            debug: false,
         }
     }
 

@@ -24,6 +24,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
                 survived: 0,
                 timeout: 0,
                 score: None,
+                failure: None,
             }),
             budget: Budget::Mutation(json!({"enabled": false})),
             offenders: Offenders::Mutation(Vec::new()),
@@ -57,6 +58,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             survived: if status_ok { 0 } else { 1 },
             timeout: 0,
             score: if status_ok { Some(1.0) } else { Some(0.0) },
+            failure: None,
         }),
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(Vec::new()),
@@ -104,6 +106,8 @@ mod tests {
             policy,
             scope: Scope::default(),
             diff: None,
+            python_resolution: None,
+            debug: false,
         }
     }
 
