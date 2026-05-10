@@ -90,7 +90,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "ayni-adapters-go"
-version = "0.0.4"
+version = "0.1.0"
 dependencies = [
  "ayni-core",
  "glob",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-node"
-version = "0.0.4"
+version = "0.1.0"
 dependencies = [
  "ayni-core",
  "glob",
@@ -118,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-python"
-version = "0.0.4"
+version = "0.1.0"
 dependencies = [
  "ayni-core",
  "glob",
@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-rust"
-version = "0.0.4"
+version = "0.1.0"
 dependencies = [
  "ayni-core",
  "glob",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-cli"
-version = "0.0.4"
+version = "0.1.0"
 dependencies = [
  "ayni-adapters-go",
  "ayni-adapters-node",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-core"
-version = "0.0.4"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
