@@ -1,5 +1,6 @@
-use super::{
-    AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, annotate_deltas_vs_previous, upsert_managed_block,
+use super::{AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, LanguageArg, annotate_deltas_vs_previous};
+use crate::install::{
+    default_policy_toml, install_impl, upsert_managed_block, validate_install_foundation,
 };
 use ayni_core::{
     AyniPolicy, Budget, ExecutionResolution, Language, Offenders, RunArtifact, RunContext, Scope,
@@ -79,7 +80,7 @@ fn annotate_deltas_vs_previous_marks_missing_history() {
 
 #[test]
 fn language_arg_accepts_python() {
-    assert_eq!(super::LanguageArg::Python.as_language(), Language::Python);
+    assert_eq!(LanguageArg::Python.as_language(), Language::Python);
 }
 
 #[test]
@@ -91,7 +92,7 @@ fn default_policy_templates_are_valid_for_each_language() {
         Language::Python,
     ] {
         let policy: ayni_core::AyniPolicy =
-            toml::from_str(&super::default_policy_toml(Some(language))).expect("policy");
+            toml::from_str(&default_policy_toml(Some(language))).expect("policy");
 
         assert_eq!(policy.enabled_languages().expect("languages"), [language]);
         assert_eq!(policy.roots_for(language), ["."]);
@@ -101,8 +102,7 @@ fn default_policy_templates_are_valid_for_each_language() {
 
 #[test]
 fn default_policy_template_falls_back_to_rust() {
-    let policy: ayni_core::AyniPolicy =
-        toml::from_str(&super::default_policy_toml(None)).expect("policy");
+    let policy: ayni_core::AyniPolicy = toml::from_str(&default_policy_toml(None)).expect("policy");
 
     assert_eq!(
         policy.enabled_languages().expect("languages"),
@@ -186,7 +186,7 @@ roots = ["."]
     )
     .expect("policy");
 
-    let failures = super::validate_install_foundation(dir.path(), &policy, Some(Language::Rust));
+    let failures = validate_install_foundation(dir.path(), &policy, Some(Language::Rust));
 
     assert!(failures.is_empty());
     assert!(dir.path().join(".ayni/work/rust/workspace").is_dir());
@@ -222,8 +222,7 @@ exclude = ["services/agent-runtime"]
     )
     .expect("runtime pyproject");
 
-    super::install_impl(&dir.path().to_string_lossy(), Some(Language::Python), false)
-        .expect("install");
+    install_impl(&dir.path().to_string_lossy(), Some(Language::Python), false).expect("install");
     let policy = ayni_core::AyniPolicy::load(dir.path()).expect("policy");
 
     assert_eq!(
@@ -270,8 +269,7 @@ members = ["packages/*"]
     )
     .expect("config pyproject");
 
-    super::install_impl(&dir.path().to_string_lossy(), Some(Language::Python), false)
-        .expect("install");
+    install_impl(&dir.path().to_string_lossy(), Some(Language::Python), false).expect("install");
     let policy = ayni_core::AyniPolicy::load(dir.path()).expect("policy");
 
     assert_eq!(policy.roots_for(Language::Python), ["."]);
