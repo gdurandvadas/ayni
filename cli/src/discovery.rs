@@ -20,16 +20,9 @@ pub fn discover_language_roots(
         if !enabled_set.contains(&language) {
             continue;
         }
-        let mut roots = adapter.discover_roots(repo_root);
-        roots.sort();
-        roots.dedup();
         discovered.insert(
             language,
-            if roots.is_empty() {
-                vec![String::from(".")]
-            } else {
-                roots
-            },
+            adapter.discover_project_roots(repo_root).policy_roots(),
         );
     }
     discovered

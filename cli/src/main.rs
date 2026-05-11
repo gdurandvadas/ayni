@@ -15,9 +15,10 @@ use ayni_adapters_python::PythonAdapter;
 use ayni_adapters_rust::RustAdapter;
 use ayni_core::{
     AYNI_POLICY_FILE, AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, AyniPolicy, Budget,
-    CatalogEntry, ConcurrencyPolicy, ExecutionResolution, InstallContext, Installer, Language,
-    NodePackageManager, PythonPackageManager, RunArtifact, RunContext, Scope, SignalKind,
-    SignalResult, SignalRow, ToolStatus, VersionCheck,
+    CatalogEntry, CommandFailure, ComplexityResult, ConcurrencyPolicy, CoverageResult, DepsResult,
+    ExecutionResolution, InstallContext, Installer, Language, MutationResult, NodePackageManager,
+    Offenders, PythonPackageManager, RunArtifact, RunContext, Scope, SignalKind, SignalResult,
+    SignalRow, SizeResult, TestResult, ToolStatus, VersionCheck,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use delta::annotate_deltas_vs_previous;
@@ -776,12 +777,125 @@ fn collect_target_with_ui(
             }
             Err(error) => {
                 tool.line(error.clone());
+                let row = failed_signal_row(target.language, kind, &target.run_context, error);
                 tool.finished(ui::runner::ToolState::Failed);
-                continue;
+                rows.push(row);
             }
         }
     }
     Ok(rows)
+}
+
+fn failed_signal_row(
+    language: Language,
+    kind: SignalKind,
+    context: &RunContext,
+    message: String,
+) -> SignalRow {
+    let failure = CommandFailure {
+        category: failure_category_for_signal(kind).to_string(),
+        classification: String::from("adapter_error"),
+        command: signal_kind_slug(kind).to_string(),
+        cwd: context.execution.exec_cwd.display().to_string(),
+        exit_code: None,
+        message,
+    };
+    let scope = Scope {
+        workspace_root: context.scope.workspace_root.clone(),
+        path: context.scope.path.clone(),
+        package: context.scope.package.clone(),
+        file: context.scope.file.clone(),
+    };
+    let (result, budget, offenders) = match kind {
+        SignalKind::Test => (
+            SignalResult::Test(TestResult {
+                total_tests: 0,
+                passed: 0,
+                failed: 1,
+                duration_ms: None,
+                runner: String::from("test"),
+                failure: Some(failure),
+            }),
+            Budget::Test(serde_json::json!({})),
+            Offenders::Test(Vec::new()),
+        ),
+        SignalKind::Coverage => (
+            SignalResult::Coverage(CoverageResult {
+                percent: None,
+                line_percent: None,
+                branch_percent: None,
+                engine: String::from("coverage"),
+                status: String::from("error"),
+                failure: Some(failure),
+            }),
+            Budget::Coverage(serde_json::json!({})),
+            Offenders::Coverage(Vec::new()),
+        ),
+        SignalKind::Size => (
+            SignalResult::Size(SizeResult {
+                max_lines: 0,
+                total_files: 0,
+                warn_count: 0,
+                fail_count: 1,
+            }),
+            Budget::Size(serde_json::json!({})),
+            Offenders::Size(Vec::new()),
+        ),
+        SignalKind::Complexity => (
+            SignalResult::Complexity(ComplexityResult {
+                engine: String::from("complexity"),
+                method: String::from("unknown"),
+                measured_functions: 0,
+                max_fn_cyclomatic: 0.0,
+                max_fn_cognitive: None,
+                warn_count: 0,
+                fail_count: 1,
+                failure: Some(failure),
+            }),
+            Budget::Complexity(serde_json::json!({})),
+            Offenders::Complexity(Vec::new()),
+        ),
+        SignalKind::Deps => (
+            SignalResult::Deps(DepsResult {
+                crate_count: 0,
+                edge_count: 0,
+                violation_count: 1,
+            }),
+            Budget::Deps(serde_json::json!({})),
+            Offenders::Deps(Vec::new()),
+        ),
+        SignalKind::Mutation => (
+            SignalResult::Mutation(MutationResult {
+                engine: String::from("mutation"),
+                killed: 0,
+                survived: 0,
+                timeout: 0,
+                score: None,
+                failure: Some(failure),
+            }),
+            Budget::Mutation(serde_json::json!({})),
+            Offenders::Mutation(Vec::new()),
+        ),
+    };
+    SignalRow {
+        kind,
+        language,
+        scope,
+        pass: false,
+        result,
+        budget,
+        offenders,
+        delta_vs_previous: None,
+        delta_vs_baseline: None,
+    }
+}
+
+fn failure_category_for_signal(kind: SignalKind) -> &'static str {
+    match kind {
+        SignalKind::Test | SignalKind::Coverage | SignalKind::Mutation => "repo_code_issue",
+        SignalKind::Complexity => "repo_setup_issue",
+        SignalKind::Size | SignalKind::Deps => "ayni_internal_issue",
+    }
 }
 
 fn signal_outcome_line(kind: SignalKind, row: &SignalRow) -> String {

@@ -2,10 +2,12 @@ use super::{
     AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, annotate_deltas_vs_previous, upsert_managed_block,
 };
 use ayni_core::{
-    Budget, Language, Offenders, RunArtifact, Scope, SignalKind, SignalResult, TestResult,
+    AyniPolicy, Budget, ExecutionResolution, Language, Offenders, RunArtifact, RunContext, Scope,
+    SignalKind, SignalResult, TestResult,
 };
 use serde_json::json;
 use std::fs;
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 #[test]
@@ -188,6 +190,150 @@ roots = ["."]
 
     assert!(failures.is_empty());
     assert!(dir.path().join(".ayni/work/rust/workspace").is_dir());
+}
+
+#[test]
+fn install_new_python_policy_uses_member_roots_for_uv_workspace() {
+    let dir = TempDir::new().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        r#"[tool.uv.workspace]
+members = ["packages/*", "services/*"]
+exclude = ["services/agent-runtime"]
+"#,
+    )
+    .expect("root pyproject");
+    fs::create_dir_all(dir.path().join("packages/config")).expect("config dir");
+    fs::write(
+        dir.path().join("packages/config/pyproject.toml"),
+        "[project]\nname='config'\n",
+    )
+    .expect("config pyproject");
+    fs::create_dir_all(dir.path().join("services/api")).expect("api dir");
+    fs::write(
+        dir.path().join("services/api/pyproject.toml"),
+        "[project]\nname='api'\n",
+    )
+    .expect("api pyproject");
+    fs::create_dir_all(dir.path().join("services/agent-runtime")).expect("runtime dir");
+    fs::write(
+        dir.path().join("services/agent-runtime/pyproject.toml"),
+        "[project]\nname='runtime'\n",
+    )
+    .expect("runtime pyproject");
+
+    super::install_impl(&dir.path().to_string_lossy(), Some(Language::Python), false)
+        .expect("install");
+    let policy = ayni_core::AyniPolicy::load(dir.path()).expect("policy");
+
+    assert_eq!(
+        policy.roots_for(Language::Python),
+        ["packages/config", "services/api"]
+    );
+}
+
+#[test]
+fn install_existing_policy_does_not_rewrite_roots() {
+    let dir = TempDir::new().expect("tempdir");
+    fs::write(
+        dir.path().join(".ayni.toml"),
+        r#"[checks]
+test = false
+coverage = false
+size = true
+complexity = false
+deps = false
+mutation = false
+
+[languages]
+enabled = ["python"]
+
+[python]
+roots = ["."]
+
+[python.size]
+"**/*.py" = { warn = 400, fail = 800 }
+"#,
+    )
+    .expect("policy");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        r#"[tool.uv.workspace]
+members = ["packages/*"]
+"#,
+    )
+    .expect("root pyproject");
+    fs::create_dir_all(dir.path().join("packages/config")).expect("config dir");
+    fs::write(
+        dir.path().join("packages/config/pyproject.toml"),
+        "[project]\nname='config'\n",
+    )
+    .expect("config pyproject");
+
+    super::install_impl(&dir.path().to_string_lossy(), Some(Language::Python), false)
+        .expect("install");
+    let policy = ayni_core::AyniPolicy::load(dir.path()).expect("policy");
+
+    assert_eq!(policy.roots_for(Language::Python), ["."]);
+}
+
+#[test]
+fn collector_errors_are_preserved_as_failed_rows() {
+    let policy: AyniPolicy = toml::from_str(
+        r#"
+[checks]
+test = true
+coverage = true
+size = false
+complexity = false
+deps = false
+mutation = false
+
+[languages]
+enabled = ["python"]
+"#,
+    )
+    .expect("policy");
+    let context = RunContext {
+        repo_root: PathBuf::from("/repo"),
+        target_root: PathBuf::from("/repo/packages/api"),
+        workdir: PathBuf::from("/repo/packages/api"),
+        policy,
+        scope: Scope {
+            workspace_root: String::from("/repo"),
+            path: Some(String::from("packages/api")),
+            package: None,
+            file: None,
+        },
+        diff: None,
+        execution: ExecutionResolution::direct(
+            "python",
+            PathBuf::from("/repo/packages/api"),
+            "test",
+            100,
+        ),
+        debug: false,
+    };
+
+    let row = super::failed_signal_row(
+        Language::Python,
+        SignalKind::Coverage,
+        &context,
+        String::from("pytest-cov missing"),
+    );
+
+    assert!(!row.pass);
+    assert_eq!(row.kind, SignalKind::Coverage);
+    assert_eq!(row.scope.path.as_deref(), Some("packages/api"));
+    match row.result {
+        SignalResult::Coverage(result) => {
+            assert_eq!(result.status, "error");
+            let failure = result.failure.expect("failure");
+            assert_eq!(failure.classification, "adapter_error");
+            assert_eq!(failure.message, "pytest-cov missing");
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
 }
 
 fn test_row(pass: bool, passed: u64, failed: u64) -> ayni_core::SignalRow {
