@@ -1,5 +1,6 @@
 use ayni_core::{CommandFailure, PythonPackageManager, RunContext, SignalKind};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -188,7 +189,18 @@ pub fn ensure_ayni_dir(context: &RunContext) -> Result<PathBuf, String> {
         .join(root_slug(context.scope.path.as_deref()));
     fs::create_dir_all(&dir)
         .map_err(|error| format!("failed to create {}: {error}", dir.display()))?;
-    Ok(dir)
+    dir.canonicalize()
+        .map_err(|error| format!("failed to resolve {}: {error}", dir.display()))
+}
+
+pub fn prepare_report_path(context: &RunContext, filename: &str) -> Result<PathBuf, String> {
+    let path = ensure_ayni_dir(context)?.join(filename);
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("failed to remove {}: {error}", path.display())),
+    }
+    Ok(path)
 }
 
 fn root_slug(root: Option<&str>) -> String {
@@ -214,5 +226,54 @@ pub fn resolve_repo_path(repo_root: &Path, value: &str) -> PathBuf {
         path.to_path_buf()
     } else {
         repo_root.join(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_report_path;
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    #[test]
+    fn report_paths_are_absolute_and_stale_reports_are_removed() {
+        let temp = TempDir::new_in(env::current_dir().expect("cwd")).expect("tempdir");
+        let cwd = env::current_dir().expect("cwd");
+        let repo_root = temp
+            .path()
+            .strip_prefix(&cwd)
+            .expect("relative temp path")
+            .to_path_buf();
+        let context = RunContext {
+            repo_root: repo_root.clone(),
+            target_root: repo_root.join("packages/config"),
+            workdir: repo_root.join("packages/config"),
+            policy: AyniPolicy::default(),
+            scope: Scope {
+                workspace_root: repo_root.to_string_lossy().into_owned(),
+                path: Some(String::from("packages/config")),
+                package: None,
+                file: None,
+            },
+            diff: None,
+            execution: ExecutionResolution::direct(
+                "uv",
+                PathBuf::from("packages/config"),
+                "test",
+                100,
+            ),
+            debug: false,
+        };
+
+        let first = prepare_report_path(&context, "coverage.json").expect("first report path");
+        assert!(first.is_absolute());
+        fs::write(&first, "{}").expect("stale report");
+
+        let second = prepare_report_path(&context, "coverage.json").expect("second report path");
+        assert_eq!(second, first);
+        assert!(!second.exists());
     }
 }

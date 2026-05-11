@@ -3,7 +3,7 @@ use crate::collectors::GoCollector;
 use crate::discovery;
 use ayni_core::{
     CatalogEntry, DetectResult, ExecutionResolution, Language, LanguageAdapter, LanguageProfile,
-    SignalCollector,
+    ProjectDiscovery, SignalCollector,
 };
 use std::path::Path;
 
@@ -65,6 +65,10 @@ impl LanguageAdapter for GoAdapter {
 
     fn discover_roots(&self, repo_root: &Path) -> Vec<String> {
         discovery::discover_roots(repo_root)
+    }
+
+    fn discover_project_roots(&self, repo_root: &Path) -> ProjectDiscovery {
+        discovery::discover_project_roots(repo_root)
     }
 
     fn profile(&self) -> LanguageProfile {

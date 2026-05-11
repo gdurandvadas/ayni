@@ -3,7 +3,8 @@ use crate::collectors::PythonCollector;
 use crate::discovery;
 use ayni_core::{
     CatalogEntry, DetectResult, ExecutionResolution, Language, LanguageAdapter, LanguageProfile,
-    SignalCollector, detect_python_package_manager, resolve_python_package_manager,
+    ProjectDiscovery, SignalCollector, detect_python_package_manager,
+    resolve_python_package_manager,
 };
 use std::path::Path;
 
@@ -86,6 +87,10 @@ impl LanguageAdapter for PythonAdapter {
 
     fn discover_roots(&self, repo_root: &Path) -> Vec<String> {
         discovery::discover_roots(repo_root)
+    }
+
+    fn discover_project_roots(&self, repo_root: &Path) -> ProjectDiscovery {
+        discovery::discover_project_roots(repo_root)
     }
 
     fn profile(&self) -> LanguageProfile {

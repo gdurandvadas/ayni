@@ -8,7 +8,10 @@ pub mod registry;
 pub mod runtime;
 pub mod signal;
 
-pub use adapter::{DetectResult, LanguageAdapter, LanguageProfile, SignalCollector};
+pub use adapter::{
+    DetectResult, DiscoveredRoot, LanguageAdapter, LanguageProfile, ProjectDiscovery,
+    ProjectLayout, SignalCollector,
+};
 pub use catalog::{
     CatalogEntry, InstallContext, Installer, NodePackageManager, PythonPackageManager,
     PythonPackageManagerResolution, PythonResolutionKind, ToolStatus, VersionCheck,

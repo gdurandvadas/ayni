@@ -1,5 +1,5 @@
 use super::util::{
-    command_failure_from_output, ensure_ayni_dir, format_command, run_command_for_context,
+    command_failure_from_output, format_command, prepare_report_path, run_command_for_context,
     to_repo_relative_path,
 };
 use ayni_core::{
@@ -21,8 +21,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .fn_cognitive
         .ok_or_else(|| String::from("missing python.complexity.fn_cognitive"))?;
 
-    let artifact_dir = ensure_ayni_dir(context)?;
-    let report_path = artifact_dir.join("complexipy.json");
+    let report_path = prepare_report_path(context, "complexipy.json")?;
     let threshold = cognitive.fail.to_string();
     let output_path = report_path.to_string_lossy().to_string();
     let args = vec![
