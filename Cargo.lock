@@ -103,6 +103,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ayni-adapters-kotlin"
+version = "0.1.0"
+dependencies = [
+ "ayni-core",
+ "glob",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "toml 0.8.23",
+ "walkdir",
+]
+
+[[package]]
 name = "ayni-adapters-node"
 version = "0.1.0"
 dependencies = [
@@ -149,6 +162,7 @@ name = "ayni-cli"
 version = "0.1.0"
 dependencies = [
  "ayni-adapters-go",
+ "ayni-adapters-kotlin",
  "ayni-adapters-node",
  "ayni-adapters-python",
  "ayni-adapters-rust",

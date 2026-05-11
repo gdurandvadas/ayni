@@ -2,7 +2,7 @@ use crate::discovery::discover_language_roots;
 use crate::signal_kind_slug;
 use crate::{
     AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, AYNI_POLICY_FILE, GO_POLICY_TEMPLATE,
-    NODE_POLICY_TEMPLATE, PYTHON_POLICY_TEMPLATE, RUST_POLICY_TEMPLATE,
+    KOTLIN_POLICY_TEMPLATE, NODE_POLICY_TEMPLATE, PYTHON_POLICY_TEMPLATE, RUST_POLICY_TEMPLATE,
 };
 use ayni_core::{
     AyniPolicy, CatalogEntry, ExecutionResolution, InstallContext, Installer, Language,
@@ -155,6 +155,7 @@ fn installer_summary(inst: &Installer) -> String {
             ..
         } => fmt_python_package(package, *version, *dev),
         Installer::UvTool { package, version } => fmt_uv_tool(package, *version),
+        Installer::GradleTask { task } => format!("install: provided by Gradle task `{task}`"),
         Installer::PythonRuntime => String::from("install: (python runtime on PATH)"),
         Installer::Custom { program, args } => format!("install: {} {}", program, args.join(" ")),
     }
@@ -256,6 +257,7 @@ fn install_for_root(
         return failures;
     };
     prepare_node_manager(language, root_entry, &execution, &mut failures);
+    prepare_kotlin_gradle_plugins(language, root_entry, &execution, &mut failures);
     println!(
         "install {language}:{root_entry} runner={} source={} kind={} resolved_from={} confidence={} ambiguous={}",
         execution.runner,
@@ -300,6 +302,21 @@ fn prepare_node_manager(
     }
 }
 
+fn prepare_kotlin_gradle_plugins(
+    language: Language,
+    root_entry: &str,
+    execution: &ExecutionResolution,
+    failures: &mut Vec<String>,
+) {
+    if language != Language::Kotlin {
+        return;
+    }
+    if let Err(error) = ayni_adapters_kotlin::install::ensure_gradle_plugins(&execution.install_cwd)
+    {
+        failures.push(format!("kotlin install ({language}:{root_entry}): {error}"));
+    }
+}
+
 fn install_node_dependencies(root_path: &Path, manager: NodePackageManager) -> Result<(), String> {
     let status = Command::new(manager.executable())
         .arg("install")
@@ -329,6 +346,7 @@ fn install_context_for_execution(execution: &ExecutionResolution) -> InstallCont
         cwd: Some(execution.install_cwd.as_path()),
         node_package_manager: NodePackageManager::from_executable(&execution.runner),
         python_package_manager: PythonPackageManager::from_executable(&execution.runner),
+        gradle_runner: Some(execution.runner.as_str()),
     }
 }
 
@@ -468,6 +486,7 @@ pub(crate) fn default_policy_toml(language_filter: Option<Language>) -> String {
         Language::Go => GO_POLICY_TEMPLATE,
         Language::Node => NODE_POLICY_TEMPLATE,
         Language::Python => PYTHON_POLICY_TEMPLATE,
+        Language::Kotlin => KOTLIN_POLICY_TEMPLATE,
     }
     .to_string()
 }

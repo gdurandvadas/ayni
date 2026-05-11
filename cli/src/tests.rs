@@ -81,6 +81,7 @@ fn annotate_deltas_vs_previous_marks_missing_history() {
 #[test]
 fn language_arg_accepts_python() {
     assert_eq!(LanguageArg::Python.as_language(), Language::Python);
+    assert_eq!(LanguageArg::Kotlin.as_language(), Language::Kotlin);
 }
 
 #[test]
@@ -90,6 +91,7 @@ fn default_policy_templates_are_valid_for_each_language() {
         Language::Go,
         Language::Node,
         Language::Python,
+        Language::Kotlin,
     ] {
         let policy: ayni_core::AyniPolicy =
             toml::from_str(&default_policy_toml(Some(language))).expect("policy");
@@ -109,6 +111,47 @@ fn default_policy_template_falls_back_to_rust() {
         [Language::Rust]
     );
     assert_eq!(policy.roots_for(Language::Rust), ["."]);
+}
+
+#[test]
+fn kotlin_analyze_targets_are_built_when_enabled() {
+    let dir = TempDir::new().expect("tempdir");
+    fs::write(dir.path().join("build.gradle.kts"), "plugins {}\n").expect("gradle build");
+    let policy: ayni_core::AyniPolicy = toml::from_str(
+        r#"
+[checks]
+test = false
+coverage = false
+size = true
+complexity = false
+deps = false
+mutation = false
+
+[languages]
+enabled = ["kotlin"]
+
+[kotlin]
+roots = ["."]
+
+[kotlin.size]
+"**/*.kt" = { warn = 400, fail = 800 }
+"#,
+    )
+    .expect("policy");
+
+    let targets = super::build_analyze_targets(
+        dir.path(),
+        &policy,
+        None,
+        None,
+        Some(Language::Kotlin),
+        false,
+    )
+    .expect("targets");
+
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].language, Language::Kotlin);
+    assert_eq!(targets[0].run_context.execution.runner, "gradle");
 }
 
 #[test]

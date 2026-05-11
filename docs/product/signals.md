@@ -10,7 +10,7 @@ For command failure categories and runtime diagnostics, see **[Runtime and setup
 Every signal row includes:
 
 - `kind`: one of `test`, `coverage`, `size`, `complexity`, `deps`, `mutation`
-- `language`: one of `rust`, `go`, `node`, `python` (expandable)
+- `language`: one of `rust`, `go`, `node`, `python`, `kotlin` (expandable)
 - `scope`: measurement target (`workspace`, `path`, optional `package`, optional `file`)
 - `pass`: whether the row is within policy budget
 - `result`: typed payload for the signal kind

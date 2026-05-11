@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 ayni-core = { path = "../core" }
 ayni-adapters-go = { path = "../adapters/go" }
+ayni-adapters-kotlin = { path = "../adapters/kotlin" }
 ayni-adapters-node = { path = "../adapters/node" }
 ayni-adapters-python = { path = "../adapters/python" }
 ayni-adapters-rust = { path = "../adapters/rust" }

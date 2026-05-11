@@ -2,6 +2,7 @@
 members = [
   "core",
   "adapters/go",
+  "adapters/kotlin",
   "adapters/rust",
   "adapters/node",
   "adapters/python",
