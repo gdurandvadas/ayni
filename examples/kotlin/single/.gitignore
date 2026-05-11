@@ -1,0 +1,5 @@
+.ayni/
+.gradle/
+build/
+out/
+*.iml

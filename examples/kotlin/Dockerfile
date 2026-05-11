@@ -4,7 +4,7 @@ WORKDIR /repo
 COPY . .
 RUN cargo build -p ayni-cli --release
 
-FROM gradle:9.5.0-jdk25
+FROM gradle:9.5.0-jdk21
 
 ENV HOME=/tmp/ayni-home
 ENV GOPATH=/tmp/ayni-go
