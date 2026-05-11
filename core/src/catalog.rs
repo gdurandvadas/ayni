@@ -736,10 +736,11 @@ fn gradle_task_status(ctx: InstallContext<'_>, task: &str) -> ToolStatus {
         return ToolStatus::Missing;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout
-        .lines()
-        .any(|line| line.split_whitespace().next() == Some(task))
-    {
+    let suffix = format!(":{task}");
+    if stdout.lines().any(|line| {
+        let first = line.split_whitespace().next().unwrap_or("");
+        first == task || first.ends_with(&suffix)
+    }) {
         ToolStatus::Current
     } else {
         ToolStatus::Missing
