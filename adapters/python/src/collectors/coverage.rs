@@ -1,6 +1,6 @@
 use super::util::{
-    command_failure_from_output, command_for_override_or_default, ensure_ayni_dir, format_command,
-    run_command_for_context, to_repo_relative_path,
+    command_failure_from_output, command_for_override_or_default, format_command,
+    prepare_report_path, run_command_for_context, to_repo_relative_path,
 };
 use ayni_core::{
     Budget, CoverageOffender, CoveragePolicy, CoverageResult, Language, Level, Offenders,
@@ -31,8 +31,7 @@ struct CoverageSummary {
 }
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let artifact_dir = ensure_ayni_dir(context)?;
-    let report_path = artifact_dir.join("coverage.json");
+    let report_path = prepare_report_path(context, "coverage.json")?;
     let cov_arg = format!("--cov-report=json:{}", report_path.display());
     let default_args = ["--cov=.", cov_arg.as_str()];
     let (program, args) =

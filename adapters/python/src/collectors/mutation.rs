@@ -1,6 +1,6 @@
 use super::util::{
-    command_failure_from_output, command_for_override_or_default, ensure_ayni_dir, format_command,
-    run_command_for_context,
+    command_failure_from_output, command_for_override_or_default, format_command,
+    prepare_report_path, run_command_for_context,
 };
 use ayni_core::{
     Budget, Language, Level, MutationOffender, MutationResult, Offenders, RunContext, Scope,
@@ -55,8 +55,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         ));
     }
 
-    let artifact_dir = ensure_ayni_dir(context)?;
-    let junit_path = artifact_dir.join("mutmut-junit.xml");
+    let junit_path = prepare_report_path(context, "mutmut-junit.xml")?;
     let (junit_program, mut junit_args) =
         command_for_override_or_default(context, SignalKind::Mutation, "mutmut", &["junitxml"]);
     junit_args.push(String::from("--suspicious-policy=failure"));
