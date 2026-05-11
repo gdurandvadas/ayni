@@ -1,4 +1,5 @@
 use ayni_adapters_go::GoAdapter;
+use ayni_adapters_kotlin::KotlinAdapter;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,6 +35,7 @@ const RUST_POLICY_TEMPLATE: &str = include_str!("../templates/policy/rust.toml")
 const GO_POLICY_TEMPLATE: &str = include_str!("../templates/policy/go.toml");
 const NODE_POLICY_TEMPLATE: &str = include_str!("../templates/policy/node.toml");
 const PYTHON_POLICY_TEMPLATE: &str = include_str!("../templates/policy/python.toml");
+const KOTLIN_POLICY_TEMPLATE: &str = include_str!("../templates/policy/kotlin.toml");
 
 #[derive(Parser, Debug)]
 #[command(name = "ayni")]
@@ -84,6 +86,7 @@ enum LanguageArg {
     Go,
     Node,
     Python,
+    Kotlin,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
@@ -101,6 +104,7 @@ impl LanguageArg {
             Self::Go => Language::Go,
             Self::Node => Language::Node,
             Self::Python => Language::Python,
+            Self::Kotlin => Language::Kotlin,
         }
     }
 }
@@ -146,6 +150,7 @@ fn build_registry() -> AdapterRegistry {
     registry.register(Arc::new(RustAdapter::new()));
     registry.register(Arc::new(NodeAdapter::new()));
     registry.register(Arc::new(PythonAdapter::new()));
+    registry.register(Arc::new(KotlinAdapter::new()));
     registry
 }
 
@@ -861,6 +866,7 @@ fn build_analyze_targets(
         Language::Go,
         Language::Node,
         Language::Python,
+        Language::Kotlin,
     ] {
         if let Some(filter) = language_filter
             && filter != language

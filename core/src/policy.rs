@@ -73,6 +73,8 @@ pub struct AyniPolicy {
     pub node: LanguageTooling,
     #[serde(default)]
     pub python: LanguageTooling,
+    #[serde(default)]
+    pub kotlin: LanguageTooling,
     #[serde(flatten)]
     pub extras: BTreeMap<String, toml::Value>,
 }
@@ -142,7 +144,7 @@ impl AyniPolicy {
             out.push(
                 Language::from_str(value).map_err(|_| {
                     format!(
-                        "languages.enabled contains unsupported language '{value}'; expected rust, go, node, or python"
+                        "languages.enabled contains unsupported language '{value}'; expected rust, go, node, python, or kotlin"
                     )
                 })?,
             );
@@ -157,6 +159,7 @@ impl AyniPolicy {
             Language::Go => &self.go,
             Language::Node => &self.node,
             Language::Python => &self.python,
+            Language::Kotlin => &self.kotlin,
         }
     }
 
@@ -200,7 +203,7 @@ impl AyniPolicy {
             }
             Language::from_str(value).map_err(|_| {
                 format!(
-                    "languages.enabled contains unsupported language '{value}'; expected rust, go, node, or python"
+                    "languages.enabled contains unsupported language '{value}'; expected rust, go, node, python, or kotlin"
                 )
             })?;
         }
@@ -208,6 +211,7 @@ impl AyniPolicy {
         self.go.roots = normalize_roots("go", &self.go.roots)?;
         self.node.roots = normalize_roots("node", &self.node.roots)?;
         self.python.roots = normalize_roots("python", &self.python.roots)?;
+        self.kotlin.roots = normalize_roots("kotlin", &self.kotlin.roots)?;
         if self.concurrency.amount == 0 {
             return Err(String::from("concurrency.amount must be at least 1"));
         }

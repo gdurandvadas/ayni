@@ -36,6 +36,8 @@ Every analyzed root records:
   then from workspace ancestor package-manager markers.
 - Python resolves `uv`, `poetry`, `pdm`, `pipenv`, `hatch`, or `python` from
   direct root markers first, then supported workspace ancestors.
+- Kotlin resolves Gradle from the configured root, preferring `./gradlew`, then
+  `gradlew.bat`, then `gradle`.
 
 ## Install Validation
 

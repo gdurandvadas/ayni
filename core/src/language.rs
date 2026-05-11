@@ -10,6 +10,7 @@ pub enum Language {
     Go,
     Node,
     Python,
+    Kotlin,
 }
 
 impl Language {
@@ -20,6 +21,7 @@ impl Language {
             Self::Go => "go",
             Self::Node => "node",
             Self::Python => "python",
+            Self::Kotlin => "kotlin",
         }
     }
 }
@@ -39,6 +41,7 @@ impl FromStr for Language {
             "go" => Ok(Self::Go),
             "node" | "nodejs" | "javascript" | "typescript" => Ok(Self::Node),
             "python" | "py" => Ok(Self::Python),
+            "kotlin" | "kt" => Ok(Self::Kotlin),
             _ => Err(format!("unsupported language: {value}")),
         }
     }
@@ -54,5 +57,12 @@ mod tests {
         assert_eq!(Language::from_str("python"), Ok(Language::Python));
         assert_eq!(Language::from_str("py"), Ok(Language::Python));
         assert_eq!(Language::Python.as_str(), "python");
+    }
+
+    #[test]
+    fn parses_kotlin_aliases() {
+        assert_eq!(Language::from_str("kotlin"), Ok(Language::Kotlin));
+        assert_eq!(Language::from_str("kt"), Ok(Language::Kotlin));
+        assert_eq!(Language::Kotlin.as_str(), "kotlin");
     }
 }

@@ -38,7 +38,7 @@ Analyze the local repository and print a quality report
 * `--package <PACKAGE>`
 * `--language <LANGUAGE>`
 
-  Possible values: `rust`, `go`, `node`, `python`
+  Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
 * `--output <OUTPUT>` — Report format: `stdout` (default, coloured console) or `md` (markdown report)
 
@@ -67,7 +67,7 @@ Scaffold repo guidance and show required tools; use `--apply` to install them
   Default value: `.`
 * `--language <LANGUAGE>`
 
-  Possible values: `rust`, `go`, `node`, `python`
+  Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
 * `--apply` — Install missing or outdated tools from adapter catalogs (cargo, rustup, go, npm, …)
 

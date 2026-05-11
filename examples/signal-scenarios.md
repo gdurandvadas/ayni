@@ -10,4 +10,4 @@
 - `math` lib has exactly 10 exported functions.
 - Tests cover 8/10 math functions (target ~80%).
 - Service depends on both libs.
-- Service includes an extra third-party dependency (`reqwest` / `lodash` / `requests` / `logrus`) as intentional dependency-policy scenario.
+- Service includes an extra third-party dependency (`reqwest` / `lodash` / `requests` / `logrus` / `okhttp`) as intentional dependency-policy scenario.

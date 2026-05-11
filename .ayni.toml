@@ -14,12 +14,7 @@ amount = 1
 
 [rust]
 roots = [
-  "core",
-  "adapters/rust",
-  "adapters/go",
-  "adapters/node",
-  "adapters/python",
-  "cli",
+  ".",
 ]
 # Optional tool override examples:
 # [rust.tooling.test]

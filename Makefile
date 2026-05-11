@@ -2,10 +2,10 @@ SHELL := /bin/bash
 
 .PHONY: ayni ayni-sandbox-analyze ayni-sandbox-install \
 	docker-build docker-install docker-analyze docker-example docker-examples \
-	docker-build-rust docker-build-go docker-build-node docker-build-python \
-	docker-install-rust-single docker-install-go-single docker-install-node-single docker-install-python-single \
-	docker-analyze-rust-mono docker-analyze-go-mono docker-analyze-node-mono docker-analyze-python-mono \
-	docker-example-rust docker-example-go docker-example-node docker-example-python \
+	docker-build-rust docker-build-go docker-build-node docker-build-python docker-build-kotlin \
+	docker-install-rust-single docker-install-go-single docker-install-node-single docker-install-python-single docker-install-kotlin-single \
+	docker-analyze-rust-mono docker-analyze-go-mono docker-analyze-node-mono docker-analyze-python-mono docker-analyze-kotlin-mono \
+	docker-example-rust docker-example-go docker-example-node docker-example-python docker-example-kotlin \
 	tag tag-major tag-minor tag-patch
 
 LANG ?= go
@@ -66,7 +66,7 @@ docker-example: docker-build
 
 docker-examples:
 	@set -euo pipefail; \
-	for lang in rust go node python; do \
+	for lang in rust go node python kotlin; do \
 		$(MAKE) docker-example-$$lang; \
 	done
 
@@ -81,6 +81,9 @@ docker-build-node:
 
 docker-build-python:
 	@$(MAKE) docker-build LANG=python
+
+docker-build-kotlin:
+	@$(MAKE) docker-build LANG=kotlin
 
 docker-install-rust-single:
 	@$(MAKE) docker-build LANG=rust
@@ -98,6 +101,10 @@ docker-install-python-single:
 	@$(MAKE) docker-build LANG=python
 	@$(MAKE) docker-install LANG=python FIXTURE=single APPLY=true
 
+docker-install-kotlin-single:
+	@$(MAKE) docker-build LANG=kotlin
+	@$(MAKE) docker-install LANG=kotlin FIXTURE=single APPLY=true
+
 docker-analyze-rust-mono:
 	@$(MAKE) docker-build LANG=rust
 	@$(MAKE) docker-analyze LANG=rust FIXTURE=mono
@@ -113,6 +120,10 @@ docker-analyze-node-mono:
 docker-analyze-python-mono:
 	@$(MAKE) docker-build LANG=python
 	@$(MAKE) docker-analyze LANG=python FIXTURE=mono
+
+docker-analyze-kotlin-mono:
+	@$(MAKE) docker-build LANG=kotlin
+	@$(MAKE) docker-analyze LANG=kotlin FIXTURE=mono
 
 docker-example-rust:
 	@$(MAKE) docker-build LANG=rust
@@ -133,6 +144,11 @@ docker-example-python:
 	@$(MAKE) docker-build LANG=python
 	@$(MAKE) docker-install LANG=python FIXTURE=single APPLY=true
 	@$(MAKE) docker-analyze LANG=python FIXTURE=mono
+
+docker-example-kotlin:
+	@$(MAKE) docker-build LANG=kotlin
+	@$(MAKE) docker-install LANG=kotlin FIXTURE=single APPLY=true
+	@$(MAKE) docker-analyze LANG=kotlin FIXTURE=mono
 
 # Semver tag helpers
 # Usage:

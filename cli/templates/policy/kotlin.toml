@@ -1,0 +1,57 @@
+# Select which signal kinds Ayni should run.
+[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+# Select the language adapters enabled for this repository.
+[languages]
+enabled = ["kotlin"]
+
+# Control parallel analysis across configured roots.
+[concurrency]
+per_language = false
+amount = 1
+
+# Control console report rendering.
+[report]
+offenders_limit = 8
+
+# Define Kotlin Gradle roots relative to the repository root.
+[kotlin]
+roots = ["."]
+
+# Override Kotlin Gradle commands when the defaults do not match this repository.
+#
+# [kotlin.tooling.test]
+# command = "./gradlew"
+# args = ["test", "--console=plain"]
+#
+# [kotlin.tooling.coverage]
+# command = "./gradlew"
+# args = ["koverXmlReport", "--console=plain"]
+#
+# [kotlin.tooling.mutation]
+# command = "./gradlew"
+# args = ["pitest", "--console=plain"]
+
+# Set line-count budgets for Kotlin source and script files.
+[kotlin.size]
+"**/*.kt" = { warn = 400, fail = 800, exclude = ["build/**", ".gradle/**", ".git/**", ".ayni/**"] }
+"**/*.kts" = { warn = 400, fail = 800, exclude = ["build/**", ".gradle/**", ".git/**", ".ayni/**"] }
+
+# Set Kotlin function complexity budgets.
+[kotlin.complexity]
+fn_cyclomatic = { warn = 10, fail = 20 }
+
+# Set Kotlin coverage budgets.
+[kotlin.coverage]
+line_percent = { warn = 70, fail = 50 }
+# branch_percent = { warn = 70, fail = 50 }
+
+# Define forbidden Kotlin Gradle project dependency edges.
+[kotlin.deps.forbidden]
+# "apps/api" = ["libs/ui"]

@@ -272,6 +272,7 @@ pub struct InstallContext<'a> {
     pub cwd: Option<&'a Path>,
     pub node_package_manager: Option<NodePackageManager>,
     pub python_package_manager: Option<PythonPackageManager>,
+    pub gradle_runner: Option<&'a str>,
 }
 
 #[must_use]
@@ -353,6 +354,9 @@ pub enum Installer {
         package: &'static str,
         version: Option<&'static str>,
     },
+    GradleTask {
+        task: &'static str,
+    },
     PythonRuntime,
     Bundled,
     Custom {
@@ -388,6 +392,7 @@ impl CatalogEntry {
                     ..
                 } => python_package_status(ctx, import_name, version),
                 Installer::UvTool { package, version } => uv_tool_status(package, version),
+                Installer::GradleTask { task } => gradle_task_status(ctx, task),
                 Installer::PythonRuntime => python_runtime_status(),
                 _ => ToolStatus::Missing,
             };
@@ -458,6 +463,7 @@ fn install_with(
             ..
         } => install_python_package(ctx, package, *version, *dev, tool_name),
         Installer::UvTool { package, version } => install_uv_tool(package, *version, tool_name),
+        Installer::GradleTask { .. } => Ok(()),
         Installer::Custom { program, args } => run_cmd_in(program, args, tool_name, ctx.cwd),
     }
 }
@@ -710,6 +716,35 @@ fn uv_tool_command_runs(package: &str) -> bool {
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+fn gradle_task_status(ctx: InstallContext<'_>, task: &str) -> ToolStatus {
+    let Some(cwd) = ctx.cwd else {
+        return ToolStatus::Missing;
+    };
+    let runner = ctx.gradle_runner.unwrap_or("gradle");
+    let output = Command::new(runner)
+        .args(["tasks", "--all", "--quiet"])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+    let Ok(output) = output else {
+        return ToolStatus::Missing;
+    };
+    if !output.status.success() {
+        return ToolStatus::Missing;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let suffix = format!(":{task}");
+    if stdout.lines().any(|line| {
+        let first = line.split_whitespace().next().unwrap_or("");
+        first == task || first.ends_with(&suffix)
+    }) {
+        ToolStatus::Current
+    } else {
+        ToolStatus::Missing
+    }
 }
 
 fn node_package_status(cwd: Option<&Path>, package: &str, version: Option<&str>) -> ToolStatus {

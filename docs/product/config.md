@@ -22,7 +22,7 @@ telemetry, see [`runtime.md`](runtime.md).
 | `[languages]`                                  | Explicit language list, for example `enabled = ["rust", "node"]`.                                                |
 | `[concurrency]`                                | Scheduler settings for running independent analyze roots in parallel.                                            |
 | `[report]`                                     | Console report rendering settings such as offender list limits.                                                  |
-| `[rust.*]`, `[go.*]`, `[node.*]`, `[python.*]` | Per-language settings (roots, thresholds, optional foundation settings, and optional tooling command overrides). |
+| `[rust.*]`, `[go.*]`, `[node.*]`, `[python.*]`, `[kotlin.*]` | Per-language settings (roots, thresholds, optional foundation settings, and optional tooling command overrides). |
 
 Everything under a language key uses normal TOML **single-bracket** tables and inline tables. There are no `[[array.of.tables]]` blocks in the policy model.
 
@@ -78,7 +78,7 @@ Matching uses the map’s key order (sorted lexicographically). If two keys coul
 
 ## Other languages
 
-Use the same shape for Node and Python when those adapters are enabled:
+Use the same shape for Node, Python, and Kotlin when those adapters are enabled:
 
 ```toml
 [node.size]
@@ -113,6 +113,21 @@ line_percent = { warn = 80, fail = 60 }
 
 [python.deps.forbidden]
 "src/domain/**" = ["src/presentation/**"]
+```
+
+```toml
+[kotlin.size]
+"**/*.kt" = { warn = 400, fail = 800, exclude = ["build/**", ".gradle/**", ".git/**", ".ayni/**"] }
+"**/*.kts" = { warn = 400, fail = 800, exclude = ["build/**", ".gradle/**", ".git/**", ".ayni/**"] }
+
+[kotlin.complexity]
+fn_cyclomatic = { warn = 10, fail = 20 }
+
+[kotlin.coverage]
+line_percent = { warn = 70, fail = 50 }
+
+[kotlin.deps.forbidden]
+"apps/api" = ["libs/ui"]
 ```
 
 Note: Ayni uses Rust `glob` matching. Brace expansion like `*.{ts,tsx}` is not supported; use separate entries per extension.
@@ -177,6 +192,9 @@ roots = ["apps/web"]
 
 [python]
 roots = ["services/api"]
+
+[kotlin]
+roots = ["apps/android"]
 ```
 
 Rules:
