@@ -1,5 +1,5 @@
 use super::util::{
-    attr_string, command_failure_from_output, find_report, format_command, gradle_command,
+    attr_string, command_failure_from_output, find_reports, format_command, gradle_command,
     run_command_for_context, setup_failure,
 };
 use ayni_core::{
@@ -48,8 +48,8 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             command_failure_from_output(context, SignalKind::Mutation, &program, &args, &output),
         ));
     }
-    let Some(report_path) = find_report(&context.workdir, &["build", "reports", "pitest"], "xml")
-    else {
+    let report_paths = find_reports(&context.workdir, &["build", "reports", "pitest"], "xml");
+    if report_paths.is_empty() {
         return Ok(error_row(
             context,
             engine,
@@ -59,8 +59,15 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
                 "pitest did not produce mutations.xml under build/reports/pitest",
             ),
         ));
-    };
-    let report = parse_pitest_xml(&report_path)?;
+    }
+    let mut report = PitestReport::default();
+    for path in &report_paths {
+        let next = parse_pitest_xml(path)?;
+        report.killed += next.killed;
+        report.survived += next.survived;
+        report.timeout += next.timeout;
+        report.offenders.extend(next.offenders);
+    }
     let killed = report.killed;
     let survived = report.survived;
     let timeout = report.timeout;

@@ -130,22 +130,41 @@ pub fn to_repo_relative_path(repo_root: &Path, candidate: &Path) -> String {
     candidate.to_string_lossy().replace('\\', "/")
 }
 
-pub fn find_report(root: &Path, segments: &[&str], extension: &str) -> Option<PathBuf> {
-    let mut base = root.to_path_buf();
-    for segment in segments {
-        base.push(segment);
-    }
-    let mut reports = WalkDir::new(base)
+pub fn find_reports(root: &Path, segments: &[&str], extension: &str) -> Vec<PathBuf> {
+    let suffix: PathBuf = segments.iter().collect();
+    let report_dirs: Vec<PathBuf> = WalkDir::new(root)
         .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .filter(|entry| {
-            entry.path().extension().and_then(|value| value.to_str()) == Some(extension)
+        .filter_entry(|entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            match entry.file_name().to_str() {
+                Some(".git" | "node_modules" | ".gradle") => false,
+                _ => true,
+            }
         })
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_dir())
+        .filter(|entry| entry.path().ends_with(&suffix))
         .map(|entry| entry.path().to_path_buf())
-        .collect::<Vec<_>>();
+        .collect();
+    let mut reports: Vec<PathBuf> = report_dirs
+        .into_iter()
+        .flat_map(|dir| {
+            WalkDir::new(dir)
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_file())
+                .filter(|entry| {
+                    entry.path().extension().and_then(|value| value.to_str()) == Some(extension)
+                })
+                .map(|entry| entry.path().to_path_buf())
+                .collect::<Vec<_>>()
+        })
+        .collect();
     reports.sort();
-    reports.into_iter().next()
+    reports.dedup();
+    reports
 }
 
 pub fn attr_string(attrs: &str, name: &str) -> Option<String> {

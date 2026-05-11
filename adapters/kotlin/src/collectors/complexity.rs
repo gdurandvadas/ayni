@@ -1,5 +1,5 @@
 use super::util::{
-    attr_string, attr_u64, command_failure_from_output, find_report, format_command,
+    attr_string, attr_u64, command_failure_from_output, find_reports, format_command,
     gradle_command, run_command_for_context, setup_failure, to_repo_relative_path,
 };
 use ayni_core::{
@@ -31,8 +31,8 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             command_failure_from_output(context, SignalKind::Complexity, &program, &args, &output),
         ));
     }
-    let Some(report_path) = find_report(&context.workdir, &["build", "reports", "detekt"], "xml")
-    else {
+    let report_paths = find_reports(&context.workdir, &["build", "reports", "detekt"], "xml");
+    if report_paths.is_empty() {
         return Ok(error_row(
             context,
             engine,
@@ -42,8 +42,11 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
                 "detekt did not produce an XML report under build/reports/detekt",
             ),
         ));
-    };
-    let mut offenders = parse_checkstyle_xml(&report_path, context, cyclomatic.fail + 1.0)?;
+    }
+    let mut offenders = Vec::new();
+    for report_path in &report_paths {
+        offenders.extend(parse_checkstyle_xml(report_path, context, cyclomatic.fail + 1.0)?);
+    }
     let mut max_fn_cyclomatic = 0.0_f64;
     let mut warn_count = 0_u64;
     let mut fail_count = 0_u64;

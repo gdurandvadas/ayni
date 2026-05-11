@@ -1,5 +1,5 @@
 use super::util::{
-    attr_u64, command_failure_from_output, find_report, format_command, gradle_command,
+    attr_u64, command_failure_from_output, find_reports, format_command, gradle_command,
     run_command_for_context, setup_failure, to_repo_relative_path,
 };
 use ayni_core::{
@@ -22,8 +22,8 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             command_failure_from_output(context, SignalKind::Coverage, &program, &args, &output),
         ));
     }
-    let Some(report_path) = find_report(&context.workdir, &["build", "reports", "kover"], "xml")
-    else {
+    let report_paths = find_reports(&context.workdir, &["build", "reports", "kover"], "xml");
+    if report_paths.is_empty() {
         return Ok(error_row(
             context,
             engine,
@@ -33,8 +33,12 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
                 "koverXmlReport did not produce a Kover XML report under build/reports/kover",
             ),
         ));
-    };
-    let report = parse_jacoco_xml(&report_path)?;
+    }
+    let mut totals = CoverageCounters::default();
+    for path in &report_paths {
+        totals.merge(parse_jacoco_xml(path)?);
+    }
+    let report = totals.finish();
     let coverage_config = context.policy.kotlin.coverage.as_ref();
     let budget = coverage_config
         .map(|config| {
@@ -106,6 +110,38 @@ fn error_row(
 
 #[derive(Debug, Default)]
 struct CoverageReport {
+    line_covered: u64,
+    line_missed: u64,
+    branch_covered: u64,
+    branch_missed: u64,
+}
+
+#[derive(Debug, Default)]
+struct CoverageCounters {
+    line_covered: u64,
+    line_missed: u64,
+    branch_covered: u64,
+    branch_missed: u64,
+}
+
+impl CoverageCounters {
+    fn merge(&mut self, report: CoverageReport) {
+        self.line_covered += report.line_covered;
+        self.line_missed += report.line_missed;
+        self.branch_covered += report.branch_covered;
+        self.branch_missed += report.branch_missed;
+    }
+
+    fn finish(&self) -> CoverageTotals {
+        CoverageTotals {
+            line_percent: percent(self.line_covered, self.line_missed),
+            branch_percent: percent(self.branch_covered, self.branch_missed),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct CoverageTotals {
     line_percent: Option<f64>,
     branch_percent: Option<f64>,
 }
@@ -119,19 +155,26 @@ fn parse_jacoco_xml(path: &Path) -> Result<CoverageReport, String> {
 fn parse_jacoco_content(content: &str) -> Result<CoverageReport, String> {
     let counter_re = Regex::new(r#"<counter\b([^>]*)/>"#)
         .map_err(|error| format!("failed to compile counter regex: {error}"))?;
-    let mut report = CoverageReport::default();
+    let mut line: Option<(u64, u64)> = None;
+    let mut branch: Option<(u64, u64)> = None;
     for caps in counter_re.captures_iter(content) {
         let attrs = caps.get(1).map(|value| value.as_str()).unwrap_or("");
         let missed = attr_u64(attrs, "missed").unwrap_or(0);
         let covered = attr_u64(attrs, "covered").unwrap_or(0);
-        let percent = percent(covered, missed);
         if attrs.contains(r#"type="LINE""#) {
-            report.line_percent = percent;
+            line = Some((covered, missed));
         } else if attrs.contains(r#"type="BRANCH""#) {
-            report.branch_percent = percent;
+            branch = Some((covered, missed));
         }
     }
-    Ok(report)
+    let (line_covered, line_missed) = line.unwrap_or((0, 0));
+    let (branch_covered, branch_missed) = branch.unwrap_or((0, 0));
+    Ok(CoverageReport {
+        line_covered,
+        line_missed,
+        branch_covered,
+        branch_missed,
+    })
 }
 
 fn percent(covered: u64, missed: u64) -> Option<f64> {
@@ -176,7 +219,28 @@ mod tests {
         )
         .expect("coverage");
 
-        assert_eq!(report.line_percent, Some(80.0));
-        assert_eq!(report.branch_percent, Some(75.0));
+        assert_eq!(report.line_covered, 8);
+        assert_eq!(report.line_missed, 2);
+        assert_eq!(report.branch_covered, 3);
+        assert_eq!(report.branch_missed, 1);
+    }
+
+    #[test]
+    fn aggregates_counters_across_reports() {
+        let mut totals = super::CoverageCounters::default();
+        totals.merge(
+            parse_jacoco_content(
+                r#"<report><counter type="LINE" missed="0" covered="10"/></report>"#,
+            )
+            .expect("first"),
+        );
+        totals.merge(
+            parse_jacoco_content(
+                r#"<report><counter type="LINE" missed="10" covered="30"/></report>"#,
+            )
+            .expect("second"),
+        );
+        let finished = totals.finish();
+        assert_eq!(finished.line_percent, Some(80.0));
     }
 }
