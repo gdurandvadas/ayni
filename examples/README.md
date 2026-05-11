@@ -11,3 +11,6 @@ Layout:
 - `examples/<language>/mono`
 
 The `math` library exports 10 functions and includes tests for 8/10 to make coverage intentionally incomplete.
+
+Kotlin examples use Gradle Kotlin DSL. `single/` is intentionally missing Ayni
+files; `mono/` includes `.ayni.toml` and Gradle quality plugins.
