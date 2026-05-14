@@ -63,6 +63,12 @@ test/coverage tools are installed through the detected Python package manager.
 Each entry declares install/check behavior, required signal kinds
 (`for_signals`), and opt-in status for expensive checks such as mutation.
 
+| Field | Meaning |
+| ----- | ------- |
+| install/check behavior | typed installer and probe rules |
+| `for_signals` | required signal kinds |
+| `opt_in` | expensive or optional checks such as mutation |
+
 ## Policy expectations
 
 Python collectors read these `.ayni.toml` sections:

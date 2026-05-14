@@ -24,12 +24,14 @@ adapters/rust/src/
 
 ## Signal coverage
 
-- `test`: `collectors/test.rs` using `cargo test`
-- `coverage`: `collectors/coverage.rs` using `cargo llvm-cov`
-- `size`: `collectors/size.rs` using walkdir + `[rust.size]` budgets
-- `complexity`: `collectors/complexity.rs` using `rust-code-analysis-cli`
-- `deps`: `collectors/deps.rs` using Cargo workspace/dependency graph scan
-- `mutation`: `collectors/mutation.rs` using `cargo mutants`
+| Signal kind  | Collector module         | Source tool / method                              |
+| ------------ | ------------------------ | ------------------------------------------------- |
+| `test`       | `collectors/test.rs`     | `cargo test`                                      |
+| `coverage`   | `collectors/coverage.rs` | `cargo llvm-cov`                                  |
+| `size`       | `collectors/size.rs`     | walkdir + `[rust.size]` budgets                   |
+| `complexity` | `collectors/complexity.rs` | `rust-code-analysis-cli`                         |
+| `deps`       | `collectors/deps.rs`     | Cargo workspace/dependency graph scan             |
+| `mutation`   | `collectors/mutation.rs` | `cargo mutants`                                   |
 
 Every collector outputs:
 
@@ -45,9 +47,11 @@ from the workspace root.
 
 Rust tools are declared in `catalog.rs` using `CatalogEntry` + `Installer`:
 
-- `Installer::Bundled` for built-in `cargo`
-- `Installer::Rustup` for `llvm-tools-preview`
-- `Installer::Cargo` for `cargo-llvm-cov`, `rust-code-analysis-cli`, `cargo-mutants`
+| Installer | Example tools | Used for |
+| --------- | ------------- | -------- |
+| `Bundled` | `cargo` | built-in workspace/test execution |
+| `Rustup` | `llvm-tools-preview` | LLVM tooling required by coverage |
+| `Cargo` | `cargo-llvm-cov`, `rust-code-analysis-cli`, `cargo-mutants` | coverage, complexity, mutation |
 
 Each entry declares `for_signals`, so `ayni install` can infer install needs from enabled signal kinds.
 
@@ -109,11 +113,13 @@ The adapter must never emit ad-hoc free-form row shapes. It only emits core-defi
 
 The tool catalog above is not just documentation — it is a first-class data structure inside the adapter crate. Each catalog entry declares:
 
-- `name` — identifier (e.g. `cargo-llvm-cov`)
-- `install_cmd` — the command to install it (e.g. `cargo install cargo-llvm-cov`)
-- `check_cmd` — a command that exits zero if the tool is already present
-- `for_signals` — which signals require this tool (e.g. `["coverage"]`)
-- `opt_in` — whether the tool is only installed when the corresponding check is enabled in `.ayni.toml`
+| Field | Meaning |
+| ----- | ------- |
+| `name` | identifier (e.g. `cargo-llvm-cov`) |
+| `install_cmd` | command used to install it (e.g. `cargo install cargo-llvm-cov`) |
+| `check_cmd` | command that exits zero if the tool is already present |
+| `for_signals` | which signals require this tool (e.g. `["coverage"]`) |
+| `opt_in` | whether the tool is only installed when the corresponding check is enabled in `.ayni.toml` |
 
 `ayni install --language rust` iterates this catalog at install time. This is the single source of truth for "what does the Rust adapter need to collect signals" — if a tool is added to the adapter, it must be added to the catalog, and `ayni install` picks it up automatically.
 

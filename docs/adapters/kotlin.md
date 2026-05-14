@@ -18,9 +18,9 @@ adapters/kotlin/src/
 └── collectors/
 ```
 
-## Signal mapping
+## Signal coverage
 
-| Signal | Collector | Tooling |
+| Signal kind | Collector module | Tooling |
 | --- | --- | --- |
 | `test` | `collectors/test.rs` | Gradle `test` + JUnit XML under `build/test-results/test` |
 | `coverage` | `collectors/coverage.rs` | Gradle `koverXmlReport` + Kover/JaCoCo XML |
