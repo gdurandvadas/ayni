@@ -54,3 +54,9 @@ cargo doc-cli > docs/cli.md
 - README or docs updated if behavior changed.
 - `AGENTS.md` install behavior remains deterministic and preserves user content.
 - `cargo fmt`, `cargo clippy`, `cargo test`, and `cargo check` pass.
+
+## Licensing
+
+By contributing to Ayni, you agree that your contribution is licensed under
+the same license as the project: GNU Affero General Public License, version 3
+only (`AGPL-3.0-only`).

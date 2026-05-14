@@ -14,7 +14,11 @@ resolver = "3"
 edition = "2024"
 rust-version = "1.93"
 version = "0.1.1"
-license = "MIT"
+authors = ["Gastón Durand Vadas"]
+description = "Open-source code quality signals for AI agents"
+license = "AGPL-3.0-only"
+repository = "https://github.com/gdurandvadas/ayni"
+homepage = "https://github.com/gdurandvadas/ayni"
 
 [workspace.dependencies]
 toml = "0.9"

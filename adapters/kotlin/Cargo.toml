@@ -3,7 +3,11 @@ name = "ayni-adapters-kotlin"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
+description.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [lib]
 path = "src/lib.rs"
