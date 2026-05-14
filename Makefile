@@ -16,12 +16,13 @@ DOCKER_IMAGE = $(DOCKER_IMAGE_PREFIX)-$(LANG)
 DOCKERFILE = examples/$(LANG)/Dockerfile
 FIXTURE_PATH = examples/$(LANG)/$(FIXTURE)
 DOCKER_USER = $(shell id -u):$(shell id -g)
+DOCKER_TMPFS_SIZE ?= 4g
 DOCKER_ENV = -e HOME=/tmp/ayni-home \
 	-e GOPATH=/tmp/ayni-go \
 	-e UV_TOOL_DIR=/tmp/ayni-uv-tools \
 	-e UV_TOOL_BIN_DIR=/tmp/ayni-bin
 DOCKER_RUN = docker run --rm \
-	--tmpfs /tmp:rw,exec,nosuid,size=1g \
+	--tmpfs /tmp:rw,exec,nosuid,size=$(DOCKER_TMPFS_SIZE) \
 	--user $(DOCKER_USER) \
 	$(DOCKER_ENV) \
 	-v "$(CURDIR):/repo:ro" \

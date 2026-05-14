@@ -19,3 +19,6 @@ description = "Open-source code quality signals for AI agents"
 license = "AGPL-3.0-only"
 repository = "https://github.com/gdurandvadas/ayni"
 homepage = "https://github.com/gdurandvadas/ayni"
+
+[workspace.dependencies]
+toml = "0.9"

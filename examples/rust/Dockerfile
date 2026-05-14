@@ -7,7 +7,7 @@ RUN cargo build -p ayni-cli --release
 FROM rust:1-slim-bookworm
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends g++ \
+    && apt-get install -y --no-install-recommends g++ pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV HOME=/tmp/ayni-home

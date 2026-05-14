@@ -60,9 +60,11 @@ Node tools are declared in `catalog.rs` with typed installers. The catalog is co
 
 Each entry declares:
 
-- install/check behavior
-- required signal kinds (`for_signals`)
-- opt-in status for expensive checks (for example mutation)
+| Field | Meaning |
+| ----- | ------- |
+| install/check behavior | typed installer and probe rules |
+| `for_signals` | required signal kinds |
+| `opt_in` | expensive or optional checks such as mutation |
 
 ## Policy expectations
 

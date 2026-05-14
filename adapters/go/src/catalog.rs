@@ -26,7 +26,8 @@ pub static GO_CATALOG: &[CatalogEntry] = &[
         name: "gocyclo",
         check: Some(VersionCheck {
             command: "gocyclo",
-            args: &["-h"],
+            // `gocyclo -h` exits non-zero on some versions; use a real directory input probe.
+            args: &["."],
             contains: None,
         }),
         installer: Installer::GoInstall {

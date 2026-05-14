@@ -25,12 +25,14 @@ adapters/go/src/
 
 ## Signal coverage
 
-- `test`: `collectors/test.rs` using `go test ./... -json`
-- `coverage`: `collectors/coverage.rs` using `go test -coverprofile` + `go tool cover -func`
-- `size`: `collectors/size.rs` using file walk + `[go.size]` glob budgets
-- `complexity`: `collectors/complexity.rs` using `gocyclo`
-- `deps`: `collectors/deps.rs` using `go list -json ./...` + forbidden edge rules
-- `mutation`: `collectors/mutation.rs` using proxy mutation flow (tooling override aware)
+| Signal kind  | Collector module         | Source tool / method                              |
+| ------------ | ------------------------ | ------------------------------------------------- |
+| `test`       | `collectors/test.rs`     | `go test ./... -json`                             |
+| `coverage`   | `collectors/coverage.rs` | `go test -coverprofile` + `go tool cover -func`   |
+| `size`       | `collectors/size.rs`     | file walk + `[go.size]` glob budgets              |
+| `complexity` | `collectors/complexity.rs` | `gocyclo`                                        |
+| `deps`       | `collectors/deps.rs`     | `go list -json ./...` + forbidden edge rules      |
+| `mutation`   | `collectors/mutation.rs` | proxy mutation flow (tooling override aware)      |
 
 Every collector outputs:
 
@@ -49,8 +51,10 @@ Every collector outputs:
 
 Go tools are declared in `catalog.rs` using `CatalogEntry` + `Installer`:
 
-- `Installer::Bundled` for `go`
-- `Installer::GoInstall` for `gocyclo`
+| Installer | Example tools | Used for |
+| --------- | ------------- | -------- |
+| `Bundled` | `go` | built-in execution across Go signals |
+| `GoInstall` | `gocyclo` | complexity collection |
 
 Each entry declares `for_signals`, so `ayni install` can derive required tools from enabled checks.
 

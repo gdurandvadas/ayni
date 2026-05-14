@@ -61,11 +61,13 @@ For **`coverage`**, populate `CoverageResult.percent` with the headline percenta
 
 Each `CatalogEntry` should include:
 
-- stable tool name
-- typed installer (`Cargo`, `GoInstall`, `NpmGlobal`, `Bundled`, `Custom`, etc.)
-- optional check command/version probe
-- `for_signals` listing required signal kinds
-- `opt_in` for expensive checks (for example mutation)
+| Field | Meaning |
+| ----- | ------- |
+| stable tool name | identifier used by the adapter catalog |
+| typed installer (`Cargo`, `GoInstall`, `NpmGlobal`, `Bundled`, `Custom`, etc.) | how `ayni install` resolves and applies the tool |
+| optional check command/version probe | how the catalog detects whether the tool is already present |
+| `for_signals` | required signal kinds |
+| `opt_in` | expensive checks such as mutation |
 
 Catalog entries are the source of truth for `ayni install`.
 
