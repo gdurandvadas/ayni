@@ -138,10 +138,10 @@ pub fn find_reports(root: &Path, segments: &[&str], extension: &str) -> Vec<Path
             if entry.depth() == 0 {
                 return true;
             }
-            match entry.file_name().to_str() {
-                Some(".git" | "node_modules" | ".gradle") => false,
-                _ => true,
-            }
+            !matches!(
+                entry.file_name().to_str(),
+                Some(".git" | "node_modules" | ".gradle")
+            )
         })
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_dir())

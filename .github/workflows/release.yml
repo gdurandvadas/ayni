@@ -167,8 +167,11 @@ jobs:
           TAG: ${{ needs.prepare-release.outputs.release_tag }}
         run: |
           mkdir -p dist
+          mkdir -p "dist/ayni-${TAG}-${TARGET}"
+          cp "target/${TARGET}/release/ayni" "dist/ayni-${TAG}-${TARGET}/"
+          cp LICENSE NOTICE "dist/ayni-${TAG}-${TARGET}/"
           ARCHIVE="ayni-${TAG}-${TARGET}.tar.gz"
-          tar -C "target/${TARGET}/release" -czf "dist/${ARCHIVE}" ayni
+          tar -C dist -czf "dist/${ARCHIVE}" "ayni-${TAG}-${TARGET}"
           shasum -a 256 "dist/${ARCHIVE}" > "dist/${ARCHIVE}.sha256"
 
       - name: Upload build artifacts
@@ -209,8 +212,11 @@ jobs:
           TAG: ${{ needs.prepare-release.outputs.release_tag }}
         run: |
           mkdir -p dist
+          mkdir -p "dist/ayni-${TAG}-${TARGET}"
+          cp "target/${TARGET}/release/ayni" "dist/ayni-${TAG}-${TARGET}/"
+          cp LICENSE NOTICE "dist/ayni-${TAG}-${TARGET}/"
           ARCHIVE="ayni-${TAG}-${TARGET}.tar.gz"
-          tar -C "target/${TARGET}/release" -czf "dist/${ARCHIVE}" ayni
+          tar -C dist -czf "dist/${ARCHIVE}" "ayni-${TAG}-${TARGET}"
           shasum -a 256 "dist/${ARCHIVE}" > "dist/${ARCHIVE}.sha256"
 
       - name: Upload build artifacts
