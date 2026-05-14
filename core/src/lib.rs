@@ -7,6 +7,7 @@ pub mod policy;
 pub mod registry;
 pub mod runtime;
 pub mod signal;
+pub mod size;
 
 pub use adapter::{
     DetectResult, DiscoveredRoot, LanguageAdapter, LanguageProfile, ProjectDiscovery,

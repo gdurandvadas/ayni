@@ -1,6 +1,6 @@
 use ayni_adapters_go::GoAdapter;
 use ayni_adapters_kotlin::KotlinAdapter;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -858,22 +858,12 @@ fn build_analyze_targets(
 ) -> Result<Vec<AnalyzeTarget>, String> {
     let file = file.map(|value| canonicalize_relative_posix(&value));
     let enabled_languages = policy.enabled_languages()?;
-    let enabled_set: BTreeSet<Language> = enabled_languages.into_iter().collect();
     let registry = build_registry();
     let mut targets = Vec::new();
-    for language in [
-        Language::Rust,
-        Language::Go,
-        Language::Node,
-        Language::Python,
-        Language::Kotlin,
-    ] {
+    for language in enabled_languages {
         if let Some(filter) = language_filter
             && filter != language
         {
-            continue;
-        }
-        if !enabled_set.contains(&language) {
             continue;
         }
         for root in policy.roots_for(language) {
@@ -885,11 +875,10 @@ fn build_analyze_targets(
             if !has_adapter_for_root {
                 continue;
             }
-            let Some(adapter) = registry
-                .adapters()
-                .iter()
-                .find(|candidate| candidate.language() == language)
-            else {
+            let Some(adapter) = registry.detect(&workdir).into_iter().find(|candidate| {
+                candidate.language() == language
+                    && candidate.resolve_execution(repo_root, &workdir).is_some()
+            }) else {
                 continue;
             };
             let Some(execution) = adapter.resolve_execution(repo_root, &workdir) else {

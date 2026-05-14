@@ -501,15 +501,12 @@ fn update_policy_roots(
     let policy_path = repo_root.join(AYNI_POLICY_FILE);
     let content = fs::read_to_string(&policy_path)
         .map_err(|error| format!("failed to read {}: {error}", policy_path.display()))?;
-    let mut document = content.parse::<toml::Value>().map_err(|error| {
+    let mut table = toml::from_str::<toml::Table>(&content).map_err(|error| {
         format!(
             "failed to parse {} as toml for root updates: {error}",
             policy_path.display()
         )
     })?;
-    let Some(table) = document.as_table_mut() else {
-        return Err(format!("{} is not a TOML table", policy_path.display()));
-    };
     for (language, roots) in discovered_roots {
         let key = language.as_str();
         if !table.contains_key(key) {
@@ -529,7 +526,7 @@ fn update_policy_roots(
             ),
         );
     }
-    let serialized = toml::to_string_pretty(&document)
+    let serialized = toml::to_string_pretty(&table)
         .map_err(|error| format!("failed to serialize {}: {error}", policy_path.display()))?;
     fs::write(&policy_path, format!("{serialized}\n"))
         .map_err(|error| format!("failed to write {}: {error}", policy_path.display()))
@@ -564,15 +561,12 @@ fn update_foundation_settings(
     let policy_path = repo_root.join(AYNI_POLICY_FILE);
     let content = fs::read_to_string(&policy_path)
         .map_err(|error| format!("failed to read {}: {error}", policy_path.display()))?;
-    let mut document = content.parse::<toml::Value>().map_err(|error| {
+    let mut table = toml::from_str::<toml::Table>(&content).map_err(|error| {
         format!(
             "failed to parse {} as toml for foundation updates: {error}",
             policy_path.display()
         )
     })?;
-    let Some(table) = document.as_table_mut() else {
-        return Err(format!("{} is not a TOML table", policy_path.display()));
-    };
     for language in languages_requiring_workspace_runner {
         let key = language.as_str();
         if !table.contains_key(key) {
@@ -597,7 +591,7 @@ fn update_foundation_settings(
         );
         foundation_table.insert(String::from("validate_install"), toml::Value::Boolean(true));
     }
-    let serialized = toml::to_string_pretty(&document)
+    let serialized = toml::to_string_pretty(&table)
         .map_err(|error| format!("failed to serialize {}: {error}", policy_path.display()))?;
     fs::write(&policy_path, format!("{serialized}\n"))
         .map_err(|error| format!("failed to write {}: {error}", policy_path.display()))
