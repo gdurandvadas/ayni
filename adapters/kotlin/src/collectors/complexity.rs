@@ -45,7 +45,11 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
     let mut offenders = Vec::new();
     for report_path in &report_paths {
-        offenders.extend(parse_checkstyle_xml(report_path, context, cyclomatic.fail + 1.0)?);
+        offenders.extend(parse_checkstyle_xml(
+            report_path,
+            context,
+            cyclomatic.fail + 1.0,
+        )?);
     }
     let mut max_fn_cyclomatic = 0.0_f64;
     let mut warn_count = 0_u64;
