@@ -13,7 +13,7 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 rust-version = "1.93"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Gastón Durand Vadas"]
 description = "Open-source code quality signals for AI agents"
 license = "AGPL-3.0-only"
