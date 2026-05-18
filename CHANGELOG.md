@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/gdurandvadas/ayni/compare/ayni-v0.2.1...ayni-v0.2.2) (2026-05-18)
+
+
+### Bug Fixes
+
+* **kotlin:** add support for jacoco ([#16](https://github.com/gdurandvadas/ayni/issues/16)) ([c149536](https://github.com/gdurandvadas/ayni/commit/c149536ec13e3066219004b20b000029cef19bb9))
+
 ## [0.2.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.2.0...ayni-v0.2.1) (2026-05-18)
 
 
