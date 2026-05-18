@@ -357,6 +357,9 @@ pub enum Installer {
     GradleTask {
         task: &'static str,
     },
+    GradleTaskAny {
+        tasks: &'static [&'static str],
+    },
     PythonRuntime,
     Bundled,
     Custom {
@@ -393,6 +396,7 @@ impl CatalogEntry {
                 } => python_package_status(ctx, import_name, version),
                 Installer::UvTool { package, version } => uv_tool_status(package, version),
                 Installer::GradleTask { task } => gradle_task_status(ctx, task),
+                Installer::GradleTaskAny { tasks } => gradle_task_any_status(ctx, tasks),
                 Installer::PythonRuntime => python_runtime_status(),
                 _ => ToolStatus::Missing,
             };
@@ -463,7 +467,7 @@ fn install_with(
             ..
         } => install_python_package(ctx, package, *version, *dev, tool_name),
         Installer::UvTool { package, version } => install_uv_tool(package, *version, tool_name),
-        Installer::GradleTask { .. } => Ok(()),
+        Installer::GradleTask { .. } | Installer::GradleTaskAny { .. } => Ok(()),
         Installer::Custom { program, args } => run_cmd_in(program, args, tool_name, ctx.cwd),
     }
 }
@@ -719,6 +723,10 @@ fn uv_tool_command_runs(package: &str) -> bool {
 }
 
 fn gradle_task_status(ctx: InstallContext<'_>, task: &str) -> ToolStatus {
+    gradle_task_any_status(ctx, &[task])
+}
+
+fn gradle_task_any_status(ctx: InstallContext<'_>, tasks: &[&str]) -> ToolStatus {
     let Some(cwd) = ctx.cwd else {
         return ToolStatus::Missing;
     };
@@ -736,15 +744,22 @@ fn gradle_task_status(ctx: InstallContext<'_>, task: &str) -> ToolStatus {
         return ToolStatus::Missing;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let suffix = format!(":{task}");
-    if stdout.lines().any(|line| {
-        let first = line.split_whitespace().next().unwrap_or("");
-        first == task || first.ends_with(&suffix)
-    }) {
+    if tasks
+        .iter()
+        .any(|task| gradle_task_list_contains(&stdout, task))
+    {
         ToolStatus::Current
     } else {
         ToolStatus::Missing
     }
+}
+
+fn gradle_task_list_contains(stdout: &str, task: &str) -> bool {
+    let suffix = format!(":{task}");
+    stdout.lines().any(|line| {
+        let first = line.split_whitespace().next().unwrap_or("");
+        first == task || first.ends_with(&suffix)
+    })
 }
 
 fn node_package_status(cwd: Option<&Path>, package: &str, version: Option<&str>) -> ToolStatus {
@@ -812,11 +827,13 @@ fn parse_package_manager_from_manifest(manifest_path: &Path) -> Option<NodePacka
 #[cfg(test)]
 mod tests {
     use super::{
-        NodePackageManager, PythonPackageManager, detect_node_package_manager,
-        detect_python_package_manager, node_package_status, resolve_python_package_manager,
-        rustup_installed_lines_contain_component,
+        CatalogEntry, InstallContext, Installer, NodePackageManager, PythonPackageManager,
+        detect_node_package_manager, detect_python_package_manager, node_package_status,
+        resolve_python_package_manager, rustup_installed_lines_contain_component,
     };
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
     #[test]
@@ -975,5 +992,40 @@ mod tests {
             resolve_python_package_manager(dir.path(), dir.path()).expect("python resolution");
         assert_eq!(resolution.manager, PythonPackageManager::Pip);
         assert_eq!(resolution.kind_label(), "direct_root");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn gradle_task_any_accepts_alternative_task_names() {
+        let dir = TempDir::new().expect("tempdir");
+        let runner = dir.path().join("gradlew");
+        fs::write(
+            &runner,
+            "#!/bin/sh\nprintf '%s\\n' 'jacocoTestReport - Generates coverage report'\n",
+        )
+        .expect("runner");
+        let mut perms = fs::metadata(&runner).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&runner, perms).expect("chmod");
+
+        let entry = CatalogEntry {
+            name: "coverage-report",
+            check: None,
+            installer: Installer::GradleTaskAny {
+                tasks: &["koverXmlReport", "jacocoTestReport"],
+            },
+            for_signals: &[],
+            opt_in: false,
+        };
+
+        assert_eq!(
+            entry.status_in(InstallContext {
+                cwd: Some(dir.path()),
+                node_package_manager: None,
+                python_package_manager: None,
+                gradle_runner: Some("./gradlew"),
+            }),
+            super::ToolStatus::Current
+        );
     }
 }

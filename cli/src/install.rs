@@ -156,6 +156,14 @@ fn installer_summary(inst: &Installer) -> String {
         } => fmt_python_package(package, *version, *dev),
         Installer::UvTool { package, version } => fmt_uv_tool(package, *version),
         Installer::GradleTask { task } => format!("install: provided by Gradle task `{task}`"),
+        Installer::GradleTaskAny { tasks } => format!(
+            "install: provided by one of Gradle tasks {}",
+            tasks
+                .iter()
+                .map(|task| format!("`{task}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Installer::PythonRuntime => String::from("install: (python runtime on PATH)"),
         Installer::Custom { program, args } => format!("install: {} {}", program, args.join(" ")),
     }
