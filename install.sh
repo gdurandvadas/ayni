@@ -129,7 +129,18 @@ checksum_verify() {
   checksums_path="$2"
   archive_name="$3"
 
-  expected="$(sed -n "s/^\([0-9a-fA-F][0-9a-fA-F]*\)  ${archive_name}$/\1/p" "$checksums_path")"
+  expected="$(
+    awk -v archive_name="$archive_name" '
+      {
+        file = $2
+        sub(/^.*\//, "", file)
+        if (file == archive_name) {
+          print $1
+          exit
+        }
+      }
+    ' "$checksums_path"
+  )"
   [ -n "$expected" ] || fail "checksum entry for ${archive_name} not found"
 
   if have_cmd sha256sum; then
@@ -193,6 +204,14 @@ maybe_update_path() {
   say "export PATH=\"$INSTALL_DIR:\$PATH\""
 }
 
+normalize_dir() {
+  case "$1" in
+    "~") printf '%s\n' "$HOME" ;;
+    "~/"*) printf '%s/%s\n' "$HOME" "${1#~/}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
 main() {
   if [ -z "$VERSION" ]; then
     VERSION="$(resolve_latest_version)"
@@ -228,10 +247,3 @@ main() {
 }
 
 main "$@"
-normalize_dir() {
-  case "$1" in
-    "~") printf '%s\n' "$HOME" ;;
-    "~/"*) printf '%s/%s\n' "$HOME" "${1#~/}" ;;
-    *) printf '%s\n' "$1" ;;
-  esac
-}
