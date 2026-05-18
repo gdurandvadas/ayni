@@ -29,12 +29,43 @@ repair targets.
 - writes machine-readable artifacts under `.ayni/`
 - prints terminal or Markdown reports for local workflows and AI repair loops
 
-## Quick Start
+## Install
 
-From this repository:
+### macOS and Linux
+
+Install the latest published release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | sh
+```
+
+The installer detects the current platform, installs `ayni` into
+`~/.local/bin` by default, verifies checksums when possible, and can
+optionally help add the install directory to `PATH` in interactive shells.
+
+Pin a specific release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | VERSION=v0.1.2 sh
+```
+
+Choose a custom install directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | INSTALL_DIR="$HOME/bin" sh
+```
+
+### From source
+
+Build and install directly from this repository:
 
 ```sh
 cargo install --path cli
+```
+
+## Quick Start
+
+```sh
 ayni install
 ayni analyze
 ```

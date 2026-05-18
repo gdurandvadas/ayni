@@ -1,25 +1,22 @@
 name: release
 
 on:
-  workflow_dispatch:
-    inputs:
-      semver_type:
-        description: "Semver bump type for this release"
-        required: true
-        type: choice
-        options:
-          - major
-          - minor
-          - patch
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
 
 jobs:
-  prepare-release:
+  release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
-      release_tag: ${{ steps.version.outputs.next_tag }}
-      release_version: ${{ steps.version.outputs.next_version }}
+      release_created: ${{ steps.release.outputs.release_created }}
+      release_tag: ${{ steps.release.outputs.tag_name }}
+      release_version: ${{ steps.release.outputs.version }}
 
     steps:
       - name: Create release app token
@@ -29,126 +26,37 @@ jobs:
           client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
 
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Run release
+        id: release
+        uses: googleapis/release-action@v4
         with:
-          fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
+          config-file: release-config.json
+          manifest-file: .release-manifest.json
 
-      - name: Calculate next release tag
-        id: version
-        env:
-          BUMP_TYPE: ${{ github.event.inputs.semver_type }}
-        run: |
-          set -euo pipefail
-
-          latest_tag="$(
-            git tag --list \
-              | awk '/^v?[0-9]+\.[0-9]+\.[0-9]+$/' \
-              | sort -V \
-              | awk 'END { print }'
-          )"
-
-          if [ -z "${latest_tag}" ]; then
-            case "${BUMP_TYPE}" in
-              major) next_tag="v1.0.0" ;;
-              minor) next_tag="v0.1.0" ;;
-              patch) next_tag="v0.0.1" ;;
-              *)
-                echo "Unknown semver_type: ${BUMP_TYPE}" >&2
-                exit 1
-                ;;
-            esac
-          else
-            version="${latest_tag#v}"
-            IFS='.' read -r major minor patch <<< "${version}"
-
-            case "${BUMP_TYPE}" in
-              major)
-                major=$((major + 1))
-                minor=0
-                patch=0
-                ;;
-              minor)
-                minor=$((minor + 1))
-                patch=0
-                ;;
-              patch)
-                patch=$((patch + 1))
-                ;;
-              *)
-                echo "Unknown semver_type: ${BUMP_TYPE}" >&2
-                exit 1
-                ;;
-            esac
-
-            next_tag="v${major}.${minor}.${patch}"
-          fi
-
-          echo "next_tag=${next_tag}" >> "${GITHUB_OUTPUT}"
-          echo "next_version=${next_tag#v}" >> "${GITHUB_OUTPUT}"
-          echo "Calculated next tag: ${next_tag}"
-
-      - name: Bump workspace version
-        env:
-          NEXT_VERSION: ${{ steps.version.outputs.next_version }}
-        run: |
-          set -euo pipefail
-          perl -0pi -e 's/^version = "\d+\.\d+\.\d+"$/version = "'${NEXT_VERSION}'"/m' Cargo.toml
-          echo "Updated Cargo.toml workspace version to ${NEXT_VERSION}"
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Refresh lockfile
-        run: cargo check --workspace --all-features
-
-      - name: Commit release version bump
-        env:
-          NEXT_VERSION: ${{ steps.version.outputs.next_version }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add Cargo.toml Cargo.lock
-          if git diff --cached --quiet; then
-            echo "No version change to commit."
-          else
-            git commit -m "chore(release): v${NEXT_VERSION}"
-            git push origin HEAD:"${GITHUB_REF_NAME}"
-          fi
-
-      - name: Create and push release tag
-        env:
-          TAG: ${{ steps.version.outputs.next_tag }}
-        run: |
-          set -euo pipefail
-
-          if git rev-parse "${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists locally." >&2
-            exit 1
-          fi
-
-          git tag "${TAG}" HEAD
-          git push origin "${TAG}"
-
-  build-macos:
-    runs-on: macos-latest
-    needs: prepare-release
+  build:
+    needs: release
+    if: ${{ needs.release.outputs.release_created == 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - aarch64-apple-darwin
-          - x86_64-apple-darwin
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare-release.outputs.release_tag }}
+          ref: ${{ needs.release.outputs.release_tag }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -164,53 +72,9 @@ jobs:
       - name: Package binary
         env:
           TARGET: ${{ matrix.target }}
-          TAG: ${{ needs.prepare-release.outputs.release_tag }}
+          TAG: ${{ needs.release.outputs.release_tag }}
         run: |
-          mkdir -p dist
-          mkdir -p "dist/ayni-${TAG}-${TARGET}"
-          cp "target/${TARGET}/release/ayni" "dist/ayni-${TAG}-${TARGET}/"
-          cp LICENSE NOTICE "dist/ayni-${TAG}-${TARGET}/"
-          ARCHIVE="ayni-${TAG}-${TARGET}.tar.gz"
-          tar -C dist -czf "dist/${ARCHIVE}" "ayni-${TAG}-${TARGET}"
-          shasum -a 256 "dist/${ARCHIVE}" > "dist/${ARCHIVE}.sha256"
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.target }}
-          path: dist/*
-
-  build-linux:
-    runs-on: ubuntu-latest
-    needs: prepare-release
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare-release.outputs.release_tag }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build ayni
-        run: cargo build -p ayni-cli --release --target ${{ matrix.target }}
-
-      - name: Package binary
-        env:
-          TARGET: ${{ matrix.target }}
-          TAG: ${{ needs.prepare-release.outputs.release_tag }}
-        run: |
+          set -euo pipefail
           mkdir -p dist
           mkdir -p "dist/ayni-${TAG}-${TARGET}"
           cp "target/${TARGET}/release/ayni" "dist/ayni-${TAG}-${TARGET}/"
@@ -228,11 +92,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     needs:
-      - prepare-release
-      - build-macos
-      - build-linux
-    permissions:
-      contents: write
+      - release
+      - build
+    if: ${{ needs.release.outputs.release_created == 'true' }}
 
     steps:
       - name: Download build artifacts
@@ -242,12 +104,13 @@ jobs:
 
       - name: Build checksum manifest
         run: |
+          set -euo pipefail
           find dist -type f -name "*.sha256" -print0 | sort -z | xargs -0 cat > dist/SHA256SUMS
 
-      - name: Publish release artifacts
+      - name: Upload release artifacts
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.prepare-release.outputs.release_tag }}
+          tag_name: ${{ needs.release.outputs.release_tag }}
           files: |
             dist/**/*.tar.gz
             dist/SHA256SUMS
