@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.2.0...ayni-v0.2.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* macos runner ([852e18b](https://github.com/gdurandvadas/ayni/commit/852e18b7ff08acd4c4c86a32b07bd9f5e1f55c15))
+
 ## [0.2.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.1.2...ayni-v0.2.0) (2026-05-18)
 
 
