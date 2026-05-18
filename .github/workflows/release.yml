@@ -25,17 +25,14 @@ jobs:
         with:
           client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          permission-contents: write
-          permission-issues: write
-          permission-pull-requests: write
 
       - name: Run release
         id: release
         uses: googleapis/release-please-action@v4
         with:
           token: ${{ steps.app-token.outputs.token }}
-          config-file: release-config.json
-          manifest-file: .release-manifest.json
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   build:
     needs: release
