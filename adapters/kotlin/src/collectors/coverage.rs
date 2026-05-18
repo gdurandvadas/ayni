@@ -1,6 +1,6 @@
 use super::util::{
     attr_u64, command_failure_from_output, find_reports, format_command, gradle_command,
-    run_command_for_context, setup_failure, to_repo_relative_path,
+    resolve_gradle_task, run_command_for_context, setup_failure, to_repo_relative_path,
 };
 use ayni_core::{
     Budget, CoverageOffender, CoveragePolicy, CoverageResult, Language, Level, Offenders,
@@ -12,7 +12,8 @@ use std::fs;
 use std::path::Path;
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let (program, args) = gradle_command(context, SignalKind::Coverage, "koverXmlReport");
+    let task = resolve_coverage_task(context)?;
+    let (program, args) = gradle_command(context, SignalKind::Coverage, &task);
     let engine = format_command(&program, &args);
     let output = run_command_for_context(context, &program, &args)?;
     if !output.status.success() {
@@ -22,7 +23,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             command_failure_from_output(context, SignalKind::Coverage, &program, &args, &output),
         ));
     }
-    let report_paths = find_reports(&context.workdir, &["build", "reports", "kover"], "xml");
+    let report_paths = coverage_report_paths(context, &task);
     if report_paths.is_empty() {
         return Ok(error_row(
             context,
@@ -30,7 +31,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             setup_failure(
                 context,
                 format_command(&program, &args),
-                "koverXmlReport did not produce a Kover XML report under build/reports/kover",
+                missing_coverage_report_message(&task),
             ),
         ));
     }
@@ -76,6 +77,39 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         delta_vs_previous: None,
         delta_vs_baseline: None,
     })
+}
+
+fn resolve_coverage_task(context: &RunContext) -> Result<String, String> {
+    if context
+        .policy
+        .tool_override_for(Language::Kotlin, SignalKind::Coverage)
+        .is_some()
+    {
+        return Ok(String::from("koverXmlReport"));
+    }
+
+    Ok(
+        resolve_gradle_task(context, &["koverXmlReport", "jacocoTestReport"])?
+            .unwrap_or_else(|| String::from("koverXmlReport")),
+    )
+}
+
+fn coverage_report_paths(context: &RunContext, task: &str) -> Vec<std::path::PathBuf> {
+    match task {
+        "jacocoTestReport" => {
+            find_reports(&context.workdir, &["build", "reports", "jacoco"], "xml")
+        }
+        _ => find_reports(&context.workdir, &["build", "reports", "kover"], "xml"),
+    }
+}
+
+fn missing_coverage_report_message(task: &str) -> &'static str {
+    match task {
+        "jacocoTestReport" => {
+            "jacocoTestReport did not produce a JaCoCo XML report under build/reports/jacoco"
+        }
+        _ => "koverXmlReport did not produce a Kover XML report under build/reports/kover",
+    }
 }
 
 fn error_row(

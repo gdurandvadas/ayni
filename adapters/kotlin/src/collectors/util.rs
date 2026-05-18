@@ -117,6 +117,33 @@ pub fn format_command(program: &str, args: &[String]) -> String {
     }
 }
 
+pub fn resolve_gradle_task(
+    context: &RunContext,
+    preferred_tasks: &[&str],
+) -> Result<Option<String>, String> {
+    let output = Command::new(&context.execution.runner)
+        .args(["tasks", "--all", "--quiet"])
+        .current_dir(&context.execution.exec_cwd)
+        .output()
+        .map_err(|error| format!("failed to execute {}: {error}", context.execution.runner))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(preferred_tasks
+        .iter()
+        .find(|task| gradle_task_list_contains(&stdout, task))
+        .map(|task| (*task).to_string()))
+}
+
+fn gradle_task_list_contains(stdout: &str, task: &str) -> bool {
+    let suffix = format!(":{task}");
+    stdout.lines().any(|line| {
+        let first = line.split_whitespace().next().unwrap_or("");
+        first == task || first.ends_with(&suffix)
+    })
+}
+
 pub fn to_repo_relative_path(repo_root: &Path, candidate: &Path) -> String {
     if let Ok(relative) = candidate.strip_prefix(repo_root) {
         return relative.to_string_lossy().replace('\\', "/");

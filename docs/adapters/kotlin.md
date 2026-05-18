@@ -23,7 +23,7 @@ adapters/kotlin/src/
 | Signal kind | Collector module | Tooling |
 | --- | --- | --- |
 | `test` | `collectors/test.rs` | Gradle `test` + JUnit XML under `build/test-results/test` |
-| `coverage` | `collectors/coverage.rs` | Gradle `koverXmlReport` + Kover/JaCoCo XML |
+| `coverage` | `collectors/coverage.rs` | Auto-discovered Gradle `koverXmlReport` or `jacocoTestReport` + Kover/JaCoCo XML |
 | `size` | `collectors/size.rs` | file walk + `[kotlin.size]` glob budgets |
 | `complexity` | `collectors/complexity.rs` | Gradle `detekt` + Checkstyle XML |
 | `deps` | `collectors/deps.rs` | Gradle `dependencies` project edges |
@@ -77,6 +77,9 @@ line_percent = { warn = 70, fail = 50 }
 
 `ayni install --apply --language kotlin` updates direct Gradle `plugins { }`
 blocks in `build.gradle.kts` or `build.gradle` when supported.
+
+Coverage setup is preserved when Ayni detects an existing JaCoCo-based build.
+When no JaCoCo markers are detected, install defaults to adding Kover.
 
 It adds:
 

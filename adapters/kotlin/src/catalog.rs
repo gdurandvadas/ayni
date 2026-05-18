@@ -9,10 +9,10 @@ pub static KOTLIN_CATALOG: &[CatalogEntry] = &[
         opt_in: false,
     },
     CatalogEntry {
-        name: "koverXmlReport",
+        name: "coverage-report",
         check: None,
-        installer: Installer::GradleTask {
-            task: "koverXmlReport",
+        installer: Installer::GradleTaskAny {
+            tasks: &["koverXmlReport", "jacocoTestReport"],
         },
         for_signals: &[SignalKind::Coverage],
         opt_in: false,
