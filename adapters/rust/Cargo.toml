@@ -1,6 +1,6 @@
 [package]
 name = "ayni-adapters-rust"
-version.workspace = true
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
