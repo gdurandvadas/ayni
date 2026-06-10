@@ -1,102 +1,23 @@
+use ayni_adapters_common::exec::{format_command, run_command_for_context_streaming};
 use ayni_core::{
     Budget, CommandFailure, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
     TestFailure, TestResult,
 };
 use serde_json::json;
-use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
 
 const STDERR_TAIL_LINES: usize = 20;
 
-/// Run `cargo test` and stream each stdout/stderr line through `on_line`.
-pub fn collect_with_lines<F>(context: &RunContext, mut on_line: F) -> Result<SignalRow, String>
+/// Run `cargo test` and stream each stdout line through `on_line`.
+pub fn collect_with_lines<F>(context: &RunContext, on_line: F) -> Result<SignalRow, String>
 where
     F: FnMut(&str),
 {
     let (program, args) = test_command(context);
     let runner = format_command(&program, &args);
-    let mut command = Command::new(&program);
-    command.args(args.iter().map(String::as_str));
-    command.current_dir(&context.execution.exec_cwd);
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("failed to execute {runner}: {error}"))?;
-
-    enum PipeLine {
-        Stdout(String),
-        Stderr(String),
-    }
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| String::from("cargo test stdout missing"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| String::from("cargo test stderr missing"))?;
-
-    let (tx, rx) = mpsc::channel::<PipeLine>();
-    let tx_out = tx.clone();
-    let stdout_thread = thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
-            if tx_out.send(PipeLine::Stdout(line)).is_err() {
-                break;
-            }
-        }
-    });
-    let stderr_thread = thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            if tx.send(PipeLine::Stderr(line)).is_err() {
-                break;
-            }
-        }
-    });
-
-    let mut stdout_text = String::new();
-    let mut stderr_text = String::new();
-    for msg in rx {
-        match msg {
-            PipeLine::Stdout(line) => {
-                on_line(&line);
-                stdout_text.push_str(&line);
-                stdout_text.push('\n');
-            }
-            PipeLine::Stderr(line) => {
-                on_line(&line);
-                stderr_text.push_str(&line);
-                stderr_text.push('\n');
-            }
-        }
-    }
-    let _ = stdout_thread.join();
-    let _ = stderr_thread.join();
-
-    let success = child.wait().map(|s| s.success()).unwrap_or(false);
-    if context.debug {
-        eprintln!(
-            "[debug] runner={} source={} kind={} resolved_from={} confidence={} ambiguous={}",
-            context.execution.runner,
-            context.execution.source,
-            context.execution.kind,
-            context.execution.resolved_from.display(),
-            context.execution.confidence,
-            context.execution.ambiguous
-        );
-        eprintln!(
-            "[debug] cwd={} command={}",
-            context.execution.exec_cwd.display(),
-            runner
-        );
-        eprintln!("[debug] exit={}", if success { 0 } else { -1 });
-    }
+    let output = run_command_for_context_streaming(context, &program, &args, on_line)?;
+    let success = output.status.success();
+    let stdout_text = String::from_utf8_lossy(&output.stdout);
+    let stderr_text = String::from_utf8_lossy(&output.stderr);
     Ok(build_test_row(
         context,
         success,
@@ -161,7 +82,6 @@ fn build_test_row(
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     }
 }
 
@@ -178,14 +98,6 @@ fn test_command(context: &RunContext) -> (String, Vec<String>) {
         return (override_cmd.command.clone(), args);
     }
     (String::from("cargo"), vec![String::from("test")])
-}
-
-fn format_command(program: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        program.to_string()
-    } else {
-        format!("{program} {}", args.join(" "))
-    }
 }
 
 /// Sum every `test result:` line (`cargo test` emits one per crate / phase).

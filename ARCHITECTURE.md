@@ -5,27 +5,31 @@ Ayni is an open-source, multi-language signal tool with strict layer boundaries.
 ## Dependency Flow
 
 ```text
-core  <-  adapters  <-  cli
+core  <-  adapters/common  <-  adapters/<lang>  <-  cli
 ```
 
-Changes flow outward: core defines contracts, adapters implement local signal
-collection, and the CLI orchestrates user intent and output.
+Changes flow outward: core defines contracts, `adapters/common` provides shared
+execution infrastructure (command runner with timeouts, path normalization,
+failure scaffolding, catalog execution), language adapters implement local
+signal collection, and the CLI orchestrates user intent and output.
 
 ## Layer Responsibilities
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
-| `core/` | Signal schema, policy model, adapter traits, runtime context | Tool invocation, CLI ergonomics, persistence |
-| `adapters/` | Local tool execution, output parsing, normalization to core types | New signal kinds, untyped payloads, CLI coupling |
+| `core/` | Signal schema, policy model, adapter traits, runtime context, catalog contract types | Tool invocation, CLI ergonomics, persistence |
+| `adapters/common/` | Command execution with timeouts, catalog status/install execution, shared path/XML/failure/discovery helpers | Language-specific tool selection or parsing |
+| `adapters/<lang>/` | Local tool execution, output parsing, normalization to core types | New signal kinds, untyped payloads, CLI coupling |
 | `cli/` | User interface, orchestration, argument parsing, local output | Product semantics, adapter internals |
 
 ## Dependency Rules
 
 1. `core` has zero dependencies on other workspace crates.
-2. `adapters/*` depend only on `core`.
-3. `cli` depends on `core` and `adapters/*`.
-4. No reverse dependencies are permitted.
-5. Default analysis runs from the repository checkout and writes local artifacts.
+2. `adapters/common` depends only on `core`.
+3. Language adapters depend only on `core` and `adapters/common`.
+4. `cli` depends on `core`, `adapters/common`, and `adapters/*`.
+5. No reverse dependencies are permitted.
+6. Default analysis runs from the repository checkout and writes local artifacts.
 
 ## Decision Guide
 
@@ -34,7 +38,8 @@ collection, and the CLI orchestrates user intent and output.
 | Where do I add a new signal kind? | `core/` defines the schema first, then adapters implement it |
 | Where do I add a new language? | `adapters/<lang>/` implements core traits |
 | Where do I change CLI flags? | `cli/` |
-| Where do I add local tool invocation? | `adapters/` |
+| Where do I add local tool invocation? | `adapters/<lang>/`, through the `adapters/common` command runner |
+| Where do I add shared adapter plumbing? | `adapters/common/` |
 | Where do I add policy thresholds? | `core/` policy model, read from `.ayni.toml` |
 | Where do I add report formatting? | `cli/` output modules |
 

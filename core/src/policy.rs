@@ -65,6 +65,7 @@ pub struct AyniPolicy {
     pub languages: LanguageSelection,
     pub report: ReportPolicy,
     pub concurrency: ConcurrencyPolicy,
+    pub execution: ExecutionPolicy,
     #[serde(default)]
     pub rust: LanguageTooling,
     #[serde(default)]
@@ -75,8 +76,6 @@ pub struct AyniPolicy {
     pub python: LanguageTooling,
     #[serde(default)]
     pub kotlin: LanguageTooling,
-    #[serde(flatten)]
-    pub extras: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -89,6 +88,22 @@ impl Default for ReportPolicy {
     fn default() -> Self {
         Self {
             offenders_limit: usize::MAX,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ExecutionPolicy {
+    /// Maximum seconds a single adapter tool invocation may run before it is
+    /// killed and reported as a timeout failure.
+    pub tool_timeout_seconds: u64,
+}
+
+impl Default for ExecutionPolicy {
+    fn default() -> Self {
+        Self {
+            tool_timeout_seconds: 1800,
         }
     }
 }
@@ -215,8 +230,64 @@ impl AyniPolicy {
         if self.concurrency.amount == 0 {
             return Err(String::from("concurrency.amount must be at least 1"));
         }
+        if self.execution.tool_timeout_seconds == 0 {
+            return Err(String::from(
+                "execution.tool_timeout_seconds must be at least 1",
+            ));
+        }
+        for (language, tooling) in [
+            ("rust", &self.rust),
+            ("go", &self.go),
+            ("node", &self.node),
+            ("python", &self.python),
+            ("kotlin", &self.kotlin),
+        ] {
+            validate_language_thresholds(language, tooling)?;
+        }
         Ok(())
     }
+}
+
+fn validate_language_thresholds(language: &str, tooling: &LanguageTooling) -> Result<(), String> {
+    for (pattern, rule) in &tooling.size {
+        if rule.warn > rule.fail {
+            return Err(format!(
+                "{language}.size rule '{pattern}': warn ({}) must not exceed fail ({})",
+                rule.warn, rule.fail
+            ));
+        }
+    }
+    if let Some(complexity) = &tooling.complexity {
+        for (name, threshold) in [
+            ("fn_cyclomatic", complexity.fn_cyclomatic),
+            ("fn_cognitive", complexity.fn_cognitive),
+        ] {
+            if let Some(threshold) = threshold
+                && threshold.warn > threshold.fail
+            {
+                return Err(format!(
+                    "{language}.complexity.{name}: warn ({}) must not exceed fail ({})",
+                    threshold.warn, threshold.fail
+                ));
+            }
+        }
+    }
+    if let Some(coverage) = &tooling.coverage {
+        for (name, threshold) in [
+            ("line_percent", coverage.line_percent),
+            ("branch_percent", coverage.branch_percent),
+        ] {
+            if let Some(threshold) = threshold
+                && threshold.warn < threshold.fail
+            {
+                return Err(format!(
+                    "{language}.coverage.{name}: warn ({}) must be at least fail ({}) because coverage thresholds are minimums",
+                    threshold.warn, threshold.fail
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

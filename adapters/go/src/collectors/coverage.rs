@@ -1,5 +1,7 @@
-use super::util::to_repo_relative_path;
-use super::util::{command_failure_from_output, run_tool_for_context};
+use super::util::run_tool_for_context;
+use ayni_adapters_common::exec::format_command;
+use ayni_adapters_common::failure::command_failure_from_output;
+use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
     Budget, CoverageOffender, CoveragePolicy, CoverageResult, Language, Level, Offenders,
     RunContext, Scope, SignalKind, SignalResult, SignalRow,
@@ -83,7 +85,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Coverage(coverage_budget),
         offenders: Offenders::Coverage(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -110,14 +111,6 @@ fn coverage_test_command(context: &RunContext, profile_arg: &str) -> (String, Ve
     ];
     let engine = format_command("go", &args);
     (String::from("go"), args, engine)
-}
-
-fn format_command(program: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        program.to_string()
-    } else {
-        format!("{program} {}", args.join(" "))
-    }
 }
 
 fn parse_total_percent(text: &str) -> Option<f64> {

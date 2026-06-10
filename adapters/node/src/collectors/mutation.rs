@@ -1,5 +1,5 @@
-use super::util::package_manager_for_context;
-use super::util::{command_failure_from_output, run_command_for_context, run_tool};
+use super::util::{command_failure_from_output, package_manager_for_context, run_tool};
+use ayni_adapters_common::exec::{format_command, run_command_for_context};
 use ayni_core::{
     Budget, MutationResult, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
 };
@@ -29,7 +29,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             budget: Budget::Mutation(json!({"enabled": false})),
             offenders: Offenders::Mutation(Vec::new()),
             delta_vs_previous: None,
-            delta_vs_baseline: None,
         });
     }
 
@@ -68,15 +67,17 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         result: SignalResult::Mutation(MutationResult {
             engine,
             killed: 0,
-            survived: if status_ok { 0 } else { 1 },
+            survived: 0,
             timeout: 0,
-            score: if status_ok { Some(1.0) } else { Some(0.0) },
+            // Stryker enforces its own thresholds via exit status; without
+            // parsing its report we cannot report a real score, so don't
+            // fabricate one.
+            score: None,
             failure,
         }),
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(Vec::new()),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -95,14 +96,6 @@ fn mutation_override_command(context: &RunContext) -> Option<(String, Vec<String
     };
     let engine = format_command(&override_cmd.command, &args);
     Some((override_cmd.command.clone(), args, engine))
-}
-
-fn format_command(program: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        program.to_string()
-    } else {
-        format!("{program} {}", args.join(" "))
-    }
 }
 
 #[cfg(test)]

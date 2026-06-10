@@ -1,18 +1,14 @@
+use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::failure::concise_failure_message;
 use ayni_core::{
     Budget, CommandFailure, CoverageOffender, CoveragePolicy, CoverageResult, Level, Offenders,
     RunContext, Scope, SignalKind, SignalResult, SignalRow,
 };
 use serde_json::{Value as JsonValue, json};
-use std::process::Command;
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let (program, args, engine_label) = coverage_command(context);
-    let command_text = format_command(&program, &args);
-    let output = Command::new(&program)
-        .args(args.iter().map(String::as_str))
-        .current_dir(&context.execution.exec_cwd)
-        .output()
-        .map_err(|error| format!("failed to execute {command_text}: {error}"))?;
+    let output = run_command_for_context(context, &program, &args)?;
 
     let (status, percent, line_percent, branch_percent) = if output.status.success() {
         let payload: JsonValue = serde_json::from_slice(&output.stdout)
@@ -65,7 +61,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Coverage(coverage_budget),
         offenders: Offenders::Coverage(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -84,17 +79,6 @@ fn command_failure(
         exit_code: output.status.code(),
         message: concise_failure_message(output),
     }
-}
-
-fn concise_failure_message(output: &std::process::Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    format!("{stderr}\n{stdout}")
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| String::from("command failed without stdout/stderr output"))
 }
 
 fn coverage_command(context: &RunContext) -> (String, Vec<String>, String) {
@@ -125,14 +109,6 @@ fn coverage_command(context: &RunContext) -> (String, Vec<String>, String) {
         ],
         String::from("cargo-llvm-cov"),
     )
-}
-
-fn format_command(program: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        program.to_string()
-    } else {
-        format!("{program} {}", args.join(" "))
-    }
 }
 
 fn build_offenders(

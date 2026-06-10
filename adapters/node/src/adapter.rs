@@ -111,6 +111,36 @@ impl LanguageAdapter for NodeAdapter {
     fn collector(&self) -> &dyn SignalCollector {
         &self.collector
     }
+
+    fn prepare_install(&self, execution: &ExecutionResolution) -> Result<(), String> {
+        let manager = NodePackageManager::from_executable(&execution.runner)
+            .unwrap_or(NodePackageManager::Npm);
+        install_node_dependencies(&execution.install_cwd, manager)
+    }
+}
+
+fn install_node_dependencies(root_path: &Path, manager: NodePackageManager) -> Result<(), String> {
+    let status = std::process::Command::new(manager.executable())
+        .arg("install")
+        .current_dir(root_path)
+        .status()
+        .map_err(|error| {
+            format!(
+                "failed to run {} install in {}: {error}",
+                manager.executable(),
+                root_path.display()
+            )
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} install failed in {} (exit {})",
+            manager.executable(),
+            root_path.display(),
+            status.code().unwrap_or(-1)
+        ))
+    }
 }
 
 fn node_resolution(

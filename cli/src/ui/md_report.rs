@@ -279,7 +279,6 @@ mod tests {
                         "metrics": { "percent": { "from": 43.0, "to": 41.0, "delta": -2.0 } }
                     }),
                 }),
-                delta_vs_baseline: None,
             }],
         };
 

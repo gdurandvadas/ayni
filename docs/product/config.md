@@ -21,6 +21,7 @@ telemetry, see [`runtime.md`](runtime.md).
 | `[checks]`                                     | Turn individual signal kinds on or off (`test`, `coverage`, `size`, `complexity`, `deps`, `mutation`).           |
 | `[languages]`                                  | Explicit language list, for example `enabled = ["rust", "node"]`.                                                |
 | `[concurrency]`                                | Scheduler settings for running independent analyze roots in parallel.                                            |
+| `[execution]`                                  | Tool execution settings such as the per-command timeout.                                                          |
 | `[report]`                                     | Console report rendering settings such as offender list limits.                                                  |
 | `[rust.*]`, `[go.*]`, `[node.*]`, `[python.*]`, `[kotlin.*]` | Per-language settings (roots, thresholds, optional foundation settings, and optional tooling command overrides). |
 
@@ -258,6 +259,27 @@ amount = 2
 Allows up to two Rust roots and two Node roots to run at the same time. For a
 repo with `rust/backend`, `rust/worker`, and `node/web`, that means Rust can
 run two targets concurrently while Node gets its own separate capacity.
+
+Languages whose tooling serializes on shared state may cap their own pool:
+the Rust adapter, for example, never runs more than one target at a time
+because Cargo serializes builds on the target-directory lock.
+
+---
+
+## Execution
+
+Use `[execution]` to bound how long a single tool invocation may run. When a
+command exceeds the timeout, Ayni kills it and reports the signal as a failed
+row with a timeout message instead of hanging the analyze run.
+
+```toml
+[execution]
+tool_timeout_seconds = 1800
+```
+
+| Field                  | Meaning                                                                  |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `tool_timeout_seconds` | Wall-clock limit per tool invocation in seconds. Default `1800` (30 min). Must be at least `1`. |
 
 ---
 

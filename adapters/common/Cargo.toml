@@ -1,5 +1,5 @@
 [package]
-name = "ayni-core"
+name = "ayni-adapters-common"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,11 +13,9 @@ homepage.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-glob = "0.3"
-serde = { version = "1", features = ["derive"] }
+ayni-core = { path = "../../core" }
+regex = "1"
 serde_json = "1"
-toml.workspace = true
-walkdir = "2"
 
 [dev-dependencies]
 tempfile = "3"

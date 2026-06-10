@@ -133,7 +133,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 

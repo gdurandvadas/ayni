@@ -1,6 +1,6 @@
 [package]
 name = "ayni-cli"
-version = "0.2.2"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -14,6 +14,7 @@ name = "ayni"
 path = "src/main.rs"
 
 [dependencies]
+ayni-adapters-common = { path = "../adapters/common" }
 ayni-core = { path = "../core" }
 ayni-adapters-go = { path = "../adapters/go" }
 ayni-adapters-kotlin = { path = "../adapters/kotlin" }

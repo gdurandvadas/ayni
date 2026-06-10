@@ -42,6 +42,5 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Size(collected.budget),
         offenders: Offenders::Size(collected.offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }

@@ -4,6 +4,7 @@ use crate::{
     AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, AYNI_POLICY_FILE, GO_POLICY_TEMPLATE,
     KOTLIN_POLICY_TEMPLATE, NODE_POLICY_TEMPLATE, PYTHON_POLICY_TEMPLATE, RUST_POLICY_TEMPLATE,
 };
+use ayni_adapters_common::catalog::{install_tool, tool_status};
 use ayni_core::{
     AyniPolicy, CatalogEntry, ExecutionResolution, InstallContext, Installer, Language,
     NodePackageManager, PythonPackageManager, RunArtifact, SignalKind, ToolStatus, VersionCheck,
@@ -11,7 +12,6 @@ use ayni_core::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub(crate) fn install_impl(
     repo_root: &str,
@@ -77,11 +77,11 @@ pub(crate) fn print_install_requirements(
                 execution.ambiguous
             );
             for entry in adapter.catalog() {
-                if entry.opt_in && !check_enabled_for_entry(policy, entry) {
+                if !catalog_entry_enabled_for_policy(policy, entry) {
                     continue;
                 }
                 any_tool_row = true;
-                let status = entry.status_in(install_context);
+                let status = tool_status(entry, install_context);
                 let status_str = match status {
                     ToolStatus::Missing => "missing",
                     ToolStatus::Outdated => "outdated",
@@ -264,8 +264,9 @@ fn install_for_root(
         ));
         return failures;
     };
-    prepare_node_manager(language, root_entry, &execution, &mut failures);
-    prepare_kotlin_gradle_plugins(language, root_entry, &execution, &mut failures);
+    if let Err(error) = adapter.prepare_install(&execution) {
+        failures.push(format!("install prep ({language}:{root_entry}): {error}"));
+    }
     println!(
         "install {language}:{root_entry} runner={} source={} kind={} resolved_from={} confidence={} ambiguous={}",
         execution.runner,
@@ -278,75 +279,19 @@ fn install_for_root(
     let install_context = install_context_for_execution(&execution);
 
     for entry in adapter.catalog() {
-        if entry.opt_in && !check_enabled_for_entry(policy, entry) {
+        if !catalog_entry_enabled_for_policy(policy, entry) {
             continue;
         }
         if matches!(
-            entry.status_in(install_context),
+            tool_status(entry, install_context),
             ToolStatus::Missing | ToolStatus::Outdated
-        ) && let Err(error) = entry.install_in(install_context)
+        ) && let Err(error) = install_tool(entry, install_context)
         {
             failures.push(format!("{} ({language}:{root_entry}): {error}", entry.name));
         }
     }
 
     failures
-}
-
-fn prepare_node_manager(
-    language: Language,
-    root_entry: &str,
-    execution: &ExecutionResolution,
-    failures: &mut Vec<String>,
-) {
-    if language != Language::Node {
-        return;
-    }
-
-    let manager =
-        NodePackageManager::from_executable(&execution.runner).unwrap_or(NodePackageManager::Npm);
-    if let Err(error) = install_node_dependencies(&execution.install_cwd, manager) {
-        failures.push(format!("node install ({language}:{root_entry}): {error}"));
-    }
-}
-
-fn prepare_kotlin_gradle_plugins(
-    language: Language,
-    root_entry: &str,
-    execution: &ExecutionResolution,
-    failures: &mut Vec<String>,
-) {
-    if language != Language::Kotlin {
-        return;
-    }
-    if let Err(error) = ayni_adapters_kotlin::install::ensure_gradle_plugins(&execution.install_cwd)
-    {
-        failures.push(format!("kotlin install ({language}:{root_entry}): {error}"));
-    }
-}
-
-fn install_node_dependencies(root_path: &Path, manager: NodePackageManager) -> Result<(), String> {
-    let status = Command::new(manager.executable())
-        .arg("install")
-        .current_dir(root_path)
-        .status()
-        .map_err(|error| {
-            format!(
-                "failed to run {} install in {}: {error}",
-                manager.executable(),
-                root_path.display()
-            )
-        })?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "{} install failed in {} (exit {})",
-            manager.executable(),
-            root_path.display(),
-            status.code().unwrap_or(-1)
-        ))
-    }
 }
 
 fn install_context_for_execution(execution: &ExecutionResolution) -> InstallContext<'_> {
@@ -362,7 +307,7 @@ fn language_enabled(policy: &AyniPolicy, language: Language) -> bool {
     policy.language_allowed(language)
 }
 
-fn check_enabled_for_entry(policy: &AyniPolicy, entry: &CatalogEntry) -> bool {
+pub(crate) fn catalog_entry_enabled_for_policy(policy: &AyniPolicy, entry: &CatalogEntry) -> bool {
     entry.for_signals.iter().all(|kind| match kind {
         SignalKind::Test => policy.checks.test,
         SignalKind::Coverage => policy.checks.coverage,
@@ -438,10 +383,10 @@ pub(crate) fn validate_install_foundation(
             }
             let install_context = install_context_for_execution(&execution);
             for entry in adapter.catalog() {
-                if entry.opt_in && !check_enabled_for_entry(policy, entry) {
+                if !catalog_entry_enabled_for_policy(policy, entry) {
                     continue;
                 }
-                if entry.status_in(install_context) == ToolStatus::Missing {
+                if tool_status(entry, install_context) == ToolStatus::Missing {
                     failures.push(format!(
                         "foundation validation failed ({language}:{root_entry}): repo_setup_issue: {} is not invocable; runner={} source={} kind={} resolved_from={} install_cwd={} exec_cwd={}",
                         entry.name,
@@ -640,6 +585,12 @@ fn managed_agents_block() -> String {
         "```sh",
         "ayni analyze",
         "```",
+        "",
+        "A non-zero exit code means at least one signal failed. For typed,",
+        "machine-readable results (per-signal offenders, budgets, and deltas),",
+        "run `ayni analyze --output json` or read `.ayni/last/signals.json`",
+        "after any analyze run, then repair the listed offenders and re-run",
+        "until every row passes.",
         AGENTS_MANAGED_END,
         "",
     ]
@@ -736,15 +687,5 @@ pub(crate) fn persist_artifact(repo_root: &Path, artifact: &RunArtifact) -> Resu
         format!("{serialized}\n"),
     )
     .map_err(|error| format!("failed to write {}: {error}", crate::SIGNALS_ARTIFACT))?;
-    fs::write(
-        repo_root.join(crate::PREVIOUS_SIGNALS_SNAPSHOT),
-        format!("{serialized}\n"),
-    )
-    .map_err(|error| {
-        format!(
-            "failed to write previous signals snapshot {}: {error}",
-            crate::PREVIOUS_SIGNALS_SNAPSHOT
-        )
-    })?;
     Ok(())
 }

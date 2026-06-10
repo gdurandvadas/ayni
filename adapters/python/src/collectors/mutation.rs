@@ -2,6 +2,7 @@ use super::util::{
     command_failure_from_output, command_for_override_or_default, format_command,
     prepare_report_path, run_command_for_context,
 };
+use ayni_adapters_common::xml;
 use ayni_core::{
     Budget, Language, Level, MutationOffender, MutationResult, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
@@ -34,7 +35,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             budget: Budget::Mutation(json!({"enabled": false})),
             offenders: Offenders::Mutation(Vec::new()),
             delta_vs_previous: None,
-            delta_vs_baseline: None,
         });
     }
 
@@ -109,7 +109,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(report.offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -139,7 +138,6 @@ fn error_row(
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(Vec::new()),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     }
 }
 
@@ -171,17 +169,17 @@ fn parse_junit_xml(content: &str) -> Result<JunitReport, String> {
     let mut report = JunitReport::default();
     for caps in testsuite_re.captures_iter(content) {
         if let Some(attrs) = caps.get(1).map(|value| value.as_str()) {
-            report.tests += attr_u64(attrs, "tests");
-            report.failures += attr_u64(attrs, "failures");
-            report.errors += attr_u64(attrs, "errors");
-            report.skipped += attr_u64(attrs, "skipped");
+            report.tests += xml::attr_u64(attrs, "tests").unwrap_or(0);
+            report.failures += xml::attr_u64(attrs, "failures").unwrap_or(0);
+            report.errors += xml::attr_u64(attrs, "errors").unwrap_or(0);
+            report.skipped += xml::attr_u64(attrs, "skipped").unwrap_or(0);
         }
     }
 
     for caps in testcase_re.captures_iter(content) {
         let attrs = caps.get(1).map(|value| value.as_str()).unwrap_or("");
         let body = caps.get(2).map(|value| value.as_str()).unwrap_or("");
-        let name = attr_string(attrs, "name").unwrap_or_else(|| String::from("mutant"));
+        let name = xml::attr_string(attrs, "name").unwrap_or_else(|| String::from("mutant"));
         for failure in failure_re.captures_iter(body) {
             let kind = failure
                 .get(1)
@@ -189,20 +187,20 @@ fn parse_junit_xml(content: &str) -> Result<JunitReport, String> {
                 .unwrap_or("failure");
             let message = failure
                 .get(3)
-                .map(|value| decode_xml(value.as_str().trim()))
+                .map(|value| xml::decode_xml(value.as_str().trim()))
                 .filter(|value| !value.is_empty())
                 .or_else(|| {
-                    attr_string(
+                    xml::attr_string(
                         failure.get(2).map(|value| value.as_str()).unwrap_or(""),
                         "message",
                     )
                 })
                 .unwrap_or_else(|| format!("mutmut {kind}: {name}"));
             report.offenders.push(MutationOffender {
-                file: attr_string(attrs, "file")
-                    .or_else(|| attr_string(attrs, "classname"))
+                file: xml::attr_string(attrs, "file")
+                    .or_else(|| xml::attr_string(attrs, "classname"))
                     .filter(|value| value.ends_with(".py")),
-                line: attr_u64_option(attrs, "line"),
+                line: xml::attr_u64(attrs, "line"),
                 mutation_kind: kind.to_string(),
                 message,
                 level: Level::Fail,
@@ -220,31 +218,6 @@ fn parse_junit_xml(content: &str) -> Result<JunitReport, String> {
         report.failures = report.offenders.len() as u64;
     }
     Ok(report)
-}
-
-fn attr_u64(attrs: &str, name: &str) -> u64 {
-    attr_u64_option(attrs, name).unwrap_or(0)
-}
-
-fn attr_u64_option(attrs: &str, name: &str) -> Option<u64> {
-    attr_string(attrs, name).and_then(|value| value.parse::<u64>().ok())
-}
-
-fn attr_string(attrs: &str, name: &str) -> Option<String> {
-    let pattern = format!(r#"{name}="([^"]*)""#);
-    let re = Regex::new(&pattern).ok()?;
-    re.captures(attrs)
-        .and_then(|caps| caps.get(1))
-        .map(|value| decode_xml(value.as_str()))
-}
-
-fn decode_xml(value: &str) -> String {
-    value
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
 }
 
 #[cfg(test)]
