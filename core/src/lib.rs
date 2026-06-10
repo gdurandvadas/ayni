@@ -21,14 +21,15 @@ pub use catalog::{
 pub use language::Language;
 pub use policy::{
     AYNI_POLICY_FILE, AyniPolicy, ComplexityPolicy, ConcurrencyPolicy, CoveragePolicy, DepsPolicy,
-    FoundationPolicy, LanguageSelection, LanguageTooling, LanguageToolingOverrides, PolicyChecks,
-    ReportPolicy, SizeThreshold, ThresholdFloat, ThresholdInt, ToolCommandOverride,
+    ExecutionPolicy, FoundationPolicy, LanguageSelection, LanguageTooling,
+    LanguageToolingOverrides, PolicyChecks, ReportPolicy, SizeThreshold, ThresholdFloat,
+    ThresholdInt, ToolCommandOverride,
 };
 pub use registry::AdapterRegistry;
 pub use runtime::{AdapterError, BranchDiff, ExecutionResolution, RunContext, Scope};
 pub use signal::{
     AYNI_SIGNAL_SCHEMA_VERSION, Budget, CommandFailure, ComplexityOffender, ComplexityResult,
     CoverageOffender, CoverageResult, Delta, DepsOffender, DepsResult, Level, MutationOffender,
-    MutationResult, Offenders, RunArtifact, Severity, SignalKind, SignalResult, SignalRow,
-    SizeOffender, SizeResult, TestFailure, TestResult,
+    MutationResult, Offenders, RunArtifact, SignalKind, SignalResult, SignalRow, SizeOffender,
+    SizeResult, TestFailure, TestResult,
 };

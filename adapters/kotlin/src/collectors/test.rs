@@ -1,7 +1,7 @@
-use super::util::{
-    attr_f64, attr_string, attr_u64, command_failure_from_output, format_command, gradle_command,
-    run_command_for_context,
-};
+use super::util::gradle_command;
+use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::failure::command_failure_from_output;
+use ayni_adapters_common::xml::{attr_f64, attr_string, attr_u64};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
     TestFailure, TestResult,
@@ -45,7 +45,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(report.offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 

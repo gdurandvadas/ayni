@@ -40,7 +40,7 @@ Analyze the local repository and print a quality report
 
   Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
-* `--output <OUTPUT>` — Report format: `stdout` (default, coloured console) or `md` (markdown report)
+* `--output <OUTPUT>` — Report format: `stdout` (default, coloured console), `md` (markdown report), or `json` (machine-readable signal artifact on stdout)
 
   Default value: `stdout`
 
@@ -49,6 +49,8 @@ Analyze the local repository and print a quality report
     Coloured console report (default)
   - `md`:
     Markdown report printed to stdout
+  - `json`:
+    Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout
 
 * `--debug` — Print raw command diagnostics and disable the live dashboard
 

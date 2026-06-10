@@ -85,6 +85,12 @@ impl LanguageAdapter for RustAdapter {
     fn collector(&self) -> &dyn SignalCollector {
         &self.collector
     }
+
+    /// Cargo serializes builds on the target-directory lock, so running
+    /// multiple Rust targets in parallel only causes lock contention.
+    fn max_target_concurrency(&self) -> Option<usize> {
+        Some(1)
+    }
 }
 
 fn find_cargo_workspace_ancestor(repo_root: &Path, root: &Path) -> Option<std::path::PathBuf> {

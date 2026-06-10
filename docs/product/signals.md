@@ -17,7 +17,14 @@ Every signal row includes:
 - `budget`: typed threshold payload for the signal kind
 - `offenders`: typed list of violations
 - `delta_vs_previous`: optional change vs previous local run
-- `delta_vs_baseline`: optional change vs baseline run
+
+## Machine-readable artifact
+
+Every `ayni analyze` run writes the full row set to `.ayni/last/signals.json`
+as a `RunArtifact` (`schema_version` plus `rows`). The same payload can be
+printed to stdout with `ayni analyze --output json`. Consumers should check
+`schema_version` before relying on field shapes; Ayni itself ignores previous
+artifacts whose schema version differs when computing `delta_vs_previous`.
 
 Rows for command-backed signals may also include `failure` inside the typed
 result. Failure objects use the shared categories defined in

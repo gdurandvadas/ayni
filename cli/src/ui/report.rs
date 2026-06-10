@@ -632,7 +632,6 @@ mod tests {
                     level: Level::Fail,
                 }]),
                 delta_vs_previous: None,
-                delta_vs_baseline: None,
             },
             SignalRow {
                 kind: SignalKind::Deps,
@@ -647,7 +646,6 @@ mod tests {
                 budget: Budget::Deps(serde_json::json!({})),
                 offenders: Offenders::Deps(Vec::new()),
                 delta_vs_previous: None,
-                delta_vs_baseline: None,
             },
         ];
         let text = build_report_text(&rows, false, 4);
@@ -697,7 +695,6 @@ mod tests {
                     },
                 ]),
                 delta_vs_previous: None,
-                delta_vs_baseline: None,
             },
             SignalRow {
                 kind: SignalKind::Complexity,
@@ -727,7 +724,6 @@ mod tests {
                     level: Level::Warn,
                 }]),
                 delta_vs_previous: None,
-                delta_vs_baseline: None,
             },
         ];
 
@@ -761,7 +757,6 @@ mod tests {
                 budget: Budget::Deps(json!({})),
                 offenders: Offenders::Deps(vec![]),
                 delta_vs_previous: None,
-                delta_vs_baseline: None,
             }],
         };
         let body = serde_json::to_string_pretty(&artifact).expect("serialize");

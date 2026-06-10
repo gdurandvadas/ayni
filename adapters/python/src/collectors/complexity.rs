@@ -94,8 +94,9 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
 
     offenders.sort_by(|left, right| {
-        level_rank(right.level)
-            .cmp(&level_rank(left.level))
+        right
+            .level
+            .cmp(&left.level)
             .then_with(|| {
                 right
                     .cognitive
@@ -131,7 +132,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         })),
         offenders: Offenders::Complexity(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -163,7 +163,6 @@ fn error_row(
         budget: Budget::Complexity(json!({})),
         offenders: Offenders::Complexity(Vec::new()),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     }
 }
 
@@ -242,13 +241,6 @@ fn resolve_file(context: &RunContext, file: &str) -> PathBuf {
         path.to_path_buf()
     } else {
         context.workdir.join(path)
-    }
-}
-
-fn level_rank(level: Level) -> u8 {
-    match level {
-        Level::Warn => 1,
-        Level::Fail => 2,
     }
 }
 

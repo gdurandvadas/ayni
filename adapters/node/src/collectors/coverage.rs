@@ -1,6 +1,6 @@
-use super::util::{
-    command_failure_from_output, run_command_for_context, run_tool, to_repo_relative_path,
-};
+use super::util::{command_failure_from_output, run_tool};
+use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
     Budget, CoverageOffender, CoveragePolicy, CoverageResult, Level, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
@@ -95,7 +95,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Coverage(coverage_budget),
         offenders: Offenders::Coverage(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -115,14 +114,6 @@ fn coverage_override_command(context: &RunContext) -> Option<(String, Vec<String
     };
     let engine = format_command(&override_cmd.command, &args);
     Some((override_cmd.command.clone(), args, engine))
-}
-
-fn format_command(program: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        program.to_string()
-    } else {
-        format!("{program} {}", args.join(" "))
-    }
 }
 
 fn find_coverage_percents(summary: &JsonValue) -> (Option<f64>, Option<f64>, Option<f64>) {

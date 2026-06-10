@@ -78,6 +78,10 @@ impl LanguageAdapter for KotlinAdapter {
     fn collector(&self) -> &dyn SignalCollector {
         &self.collector
     }
+
+    fn prepare_install(&self, execution: &ExecutionResolution) -> Result<(), String> {
+        crate::install::ensure_gradle_plugins(&execution.install_cwd)
+    }
 }
 
 fn has_gradle_marker(root: &Path) -> bool {

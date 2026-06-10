@@ -1,6 +1,6 @@
 [package]
 name = "ayni-adapters-go"
-version = "0.1.2"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -13,6 +13,7 @@ homepage.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+ayni-adapters-common = { path = "../common" }
 ayni-core = { path = "../../core" }
 glob = "0.3"
 regex = "1"
