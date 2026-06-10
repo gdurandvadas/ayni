@@ -77,7 +77,7 @@ pub(crate) fn print_install_requirements(
                 execution.ambiguous
             );
             for entry in adapter.catalog() {
-                if entry.opt_in && !check_enabled_for_entry(policy, entry) {
+                if !catalog_entry_enabled_for_policy(policy, entry) {
                     continue;
                 }
                 any_tool_row = true;
@@ -279,7 +279,7 @@ fn install_for_root(
     let install_context = install_context_for_execution(&execution);
 
     for entry in adapter.catalog() {
-        if entry.opt_in && !check_enabled_for_entry(policy, entry) {
+        if !catalog_entry_enabled_for_policy(policy, entry) {
             continue;
         }
         if matches!(
@@ -307,7 +307,7 @@ fn language_enabled(policy: &AyniPolicy, language: Language) -> bool {
     policy.language_allowed(language)
 }
 
-fn check_enabled_for_entry(policy: &AyniPolicy, entry: &CatalogEntry) -> bool {
+pub(crate) fn catalog_entry_enabled_for_policy(policy: &AyniPolicy, entry: &CatalogEntry) -> bool {
     entry.for_signals.iter().all(|kind| match kind {
         SignalKind::Test => policy.checks.test,
         SignalKind::Coverage => policy.checks.coverage,
@@ -383,7 +383,7 @@ pub(crate) fn validate_install_foundation(
             }
             let install_context = install_context_for_execution(&execution);
             for entry in adapter.catalog() {
-                if entry.opt_in && !check_enabled_for_entry(policy, entry) {
+                if !catalog_entry_enabled_for_policy(policy, entry) {
                     continue;
                 }
                 if tool_status(entry, install_context) == ToolStatus::Missing {

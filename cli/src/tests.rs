@@ -1,10 +1,11 @@
 use super::{AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, LanguageArg, annotate_deltas_vs_previous};
 use crate::install::{
-    default_policy_toml, install_impl, upsert_managed_block, validate_install_foundation,
+    catalog_entry_enabled_for_policy, default_policy_toml, install_impl, upsert_managed_block,
+    validate_install_foundation,
 };
 use ayni_core::{
-    AyniPolicy, Budget, ExecutionResolution, Language, Offenders, RunArtifact, RunContext, Scope,
-    SignalKind, SignalResult, TestResult,
+    AyniPolicy, Budget, CatalogEntry, ExecutionResolution, Installer, Language, Offenders,
+    RunArtifact, RunContext, Scope, SignalKind, SignalResult, TestResult, VersionCheck,
 };
 use serde_json::json;
 use std::fs;
@@ -233,6 +234,44 @@ roots = ["."]
 
     assert!(failures.is_empty());
     assert!(dir.path().join(".ayni/work/rust/workspace").is_dir());
+}
+
+#[test]
+fn disabled_catalog_entries_are_not_required_for_install_validation() {
+    let policy: ayni_core::AyniPolicy = toml::from_str(
+        r#"
+[checks]
+test = false
+coverage = false
+size = true
+complexity = false
+deps = false
+mutation = false
+
+[languages]
+enabled = ["rust"]
+
+[rust.size]
+"*.rs" = { warn = 400, fail = 800 }
+"#,
+    )
+    .expect("policy");
+    let entry = CatalogEntry {
+        name: "rust-code-analysis-cli",
+        check: Some(VersionCheck {
+            command: "rust-code-analysis-cli",
+            args: &["--version"],
+            contains: None,
+        }),
+        installer: Installer::Cargo {
+            crate_name: "rust-code-analysis-cli",
+            version: None,
+        },
+        for_signals: &[SignalKind::Complexity],
+        opt_in: false,
+    };
+
+    assert!(!catalog_entry_enabled_for_policy(&policy, &entry));
 }
 
 #[test]

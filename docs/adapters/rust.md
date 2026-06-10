@@ -140,7 +140,7 @@ ayni install --language rust --repo-root <path>
 1. Creates `.ayni.toml` at the repo root if missing — policy config with default thresholds for size, complexity, deps, and coverage toggle
 2. Ensures `.ayni/` is in `.gitignore` — keeps generated artifacts out of source control
 3. For each entry in the Rust catalog:
-   - Skip if the entry is `opt_in` and its corresponding check is disabled in `.ayni.toml`
+   - Skip if the entry's corresponding check is disabled in `.ayni.toml`
    - Run `check_cmd`. If it exits zero, the tool is already present — skip.
    - Otherwise, run `install_cmd` to install the missing tool.
 4. Reports a summary: which tools were installed, which were already present, which were skipped, and any install failures.
