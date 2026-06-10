@@ -1,4 +1,6 @@
-use super::util::{command_failure_from_output, run_tool_for_context};
+use super::util::run_tool_for_context;
+use ayni_adapters_common::exec::format_command;
+use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
     TestFailure, TestResult,
@@ -110,7 +112,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -138,14 +139,6 @@ fn test_command(context: &RunContext) -> (String, Vec<String>) {
             String::from("-json"),
         ],
     )
-}
-
-fn format_command(program: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        program.to_string()
-    } else {
-        format!("{program} {}", args.join(" "))
-    }
 }
 
 #[cfg(test)]

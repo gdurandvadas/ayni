@@ -1,4 +1,6 @@
-use super::util::{run_tool, to_repo_relative_path};
+use super::util::run_tool;
+use ayni_adapters_common::failure::setup_failure;
+use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
@@ -31,8 +33,13 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         ],
     )?;
     let stdout_text = String::from_utf8_lossy(&output.stdout);
-    let report = serde_json::from_str::<JsonValue>(&stdout_text).unwrap_or_else(|_| json!([]));
-    let entries = report.as_array().cloned().unwrap_or_default();
+    let report = serde_json::from_str::<JsonValue>(&stdout_text).ok();
+    let report_missing = report.as_ref().and_then(JsonValue::as_array).is_none();
+    let entries = report
+        .as_ref()
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
 
     let re_complexity = Regex::new(r"complexity of (\d+)").map_err(|e| e.to_string())?;
     let mut offenders = Vec::<ComplexityOffender>::new();
@@ -97,8 +104,9 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
 
     offenders.sort_by(|left, right| {
-        level_rank(right.level)
-            .cmp(&level_rank(left.level))
+        right
+            .level
+            .cmp(&left.level)
             .then_with(|| right.cyclomatic.total_cmp(&left.cyclomatic))
             .then_with(|| left.file.cmp(&right.file))
     });
@@ -115,7 +123,14 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         );
     }
 
-    let pass = output.status.success() && fail_count == 0;
+    let pass = output.status.success() && fail_count == 0 && !report_missing;
+    let failure = report_missing.then(|| {
+        setup_failure(
+            context,
+            String::from("eslint . --format json"),
+            "eslint produced no parseable JSON report; complexity cannot be measured",
+        )
+    });
     Ok(SignalRow {
         kind: SignalKind::Complexity,
         language: Language::Node,
@@ -134,19 +149,12 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             max_fn_cognitive: max_fn_cognitive.take(),
             warn_count,
             fail_count,
-            failure: None,
+            failure,
         }),
         budget: Budget::Complexity(budget),
         offenders: Offenders::Complexity(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
-fn level_rank(level: Level) -> u8 {
-    match level {
-        Level::Warn => 1,
-        Level::Fail => 2,
-    }
-}
 use std::path::Path;

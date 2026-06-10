@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: ayni ayni-sandbox-analyze ayni-sandbox-install \
+.PHONY: ayni \
 	docker-build docker-install docker-analyze docker-example docker-examples \
 	docker-build-rust docker-build-go docker-build-node docker-build-python docker-build-kotlin \
 	docker-install-rust-single docker-install-go-single docker-install-node-single docker-install-python-single docker-install-kotlin-single \
@@ -31,12 +31,6 @@ DOCKER_RUN = docker run --rm \
 
 ayni:
 	@cargo run -p ayni-cli -- analyze --config ./.ayni.toml
-
-ayni-sandbox-analyze:
-	@cargo run -p ayni-cli -- analyze --config fixtures/ayni-sandbox/.ayni.toml
-
-ayni-sandbox-install:
-	@cargo run -p ayni-cli -- install --repo-root fixtures/ayni-sandbox
 
 docker-build:
 	@docker build -f $(DOCKERFILE) -t $(DOCKER_IMAGE) .

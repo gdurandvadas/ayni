@@ -13,6 +13,7 @@ struct CompiledRule<'a> {
     excludes: Vec<Pattern>,
 }
 
+#[derive(Debug)]
 pub struct SizeCollection {
     pub result: SizeResult,
     pub offenders: Vec<SizeOffender>,
@@ -139,4 +140,119 @@ fn to_repo_relative_path(repo_root: &Path, candidate: &Path) -> String {
         return relative.to_string_lossy().replace('\\', "/");
     }
     candidate.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_size;
+    use crate::SizeThreshold;
+    use crate::signal::Level;
+    use std::collections::BTreeMap;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn lines(count: usize) -> String {
+        "line\n".repeat(count)
+    }
+
+    fn size_map(
+        glob: &str,
+        warn: u64,
+        fail: u64,
+        exclude: Vec<String>,
+    ) -> BTreeMap<String, SizeThreshold> {
+        BTreeMap::from([(
+            glob.to_string(),
+            SizeThreshold {
+                warn,
+                fail,
+                exclude,
+            },
+        )])
+    }
+
+    #[test]
+    fn classifies_warn_and_fail_offenders() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(dir.path().join("small.rs"), lines(3)).expect("small");
+        fs::write(dir.path().join("warn.rs"), lines(12)).expect("warn");
+        fs::write(dir.path().join("fail.rs"), lines(30)).expect("fail");
+
+        let collection = collect_size(
+            dir.path(),
+            dir.path(),
+            &size_map("*.rs", 10, 20, Vec::new()),
+            &[],
+        )
+        .expect("collect");
+
+        assert_eq!(collection.result.total_files, 3);
+        assert_eq!(collection.result.max_lines, 30);
+        assert_eq!(collection.result.warn_count, 1);
+        assert_eq!(collection.result.fail_count, 1);
+        assert_eq!(collection.offenders.len(), 2);
+        let warn = collection
+            .offenders
+            .iter()
+            .find(|offender| offender.file == "warn.rs")
+            .expect("warn offender");
+        assert_eq!(warn.level, Level::Warn);
+        let fail = collection
+            .offenders
+            .iter()
+            .find(|offender| offender.file == "fail.rs")
+            .expect("fail offender");
+        assert_eq!(fail.level, Level::Fail);
+    }
+
+    #[test]
+    fn exclude_globs_and_excluded_dirs_skip_files() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::create_dir_all(dir.path().join("generated")).expect("generated dir");
+        fs::create_dir_all(dir.path().join("target/debug")).expect("target dir");
+        fs::write(dir.path().join("ok.rs"), lines(2)).expect("ok");
+        fs::write(dir.path().join("generated/huge.rs"), lines(100)).expect("generated");
+        fs::write(dir.path().join("target/debug/huge.rs"), lines(100)).expect("built");
+
+        let collection = collect_size(
+            dir.path(),
+            dir.path(),
+            &size_map("**/*.rs", 10, 20, vec![String::from("generated/**")]),
+            &["target"],
+        )
+        .expect("collect");
+
+        assert_eq!(collection.result.total_files, 1);
+        assert!(collection.offenders.is_empty());
+    }
+
+    #[test]
+    fn invalid_glob_is_an_error() {
+        let dir = TempDir::new().expect("tempdir");
+        let error = collect_size(
+            dir.path(),
+            dir.path(),
+            &size_map("[", 10, 20, Vec::new()),
+            &[],
+        )
+        .expect_err("invalid glob");
+        assert!(error.contains("invalid size glob"));
+    }
+
+    #[test]
+    fn budget_lists_rules() {
+        let dir = TempDir::new().expect("tempdir");
+        let collection = collect_size(
+            dir.path(),
+            dir.path(),
+            &size_map("*.rs", 5, 9, Vec::new()),
+            &[],
+        )
+        .expect("collect");
+        let rules = collection.budget["rules"].as_array().expect("rules array");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0]["glob"], "*.rs");
+        assert_eq!(rules[0]["warn"], 5);
+        assert_eq!(rules[0]["fail"], 9);
+    }
 }

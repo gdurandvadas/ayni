@@ -87,6 +87,20 @@ impl ProjectDiscovery {
 
 pub trait SignalCollector: Send + Sync {
     fn collect(&self, kind: SignalKind, context: &RunContext) -> Result<SignalRow, AdapterError>;
+
+    /// Collect while streaming live tool output lines through `on_line`.
+    /// The default implementation ignores streaming and delegates to
+    /// [`Self::collect`]; adapters whose tools produce useful progress output
+    /// (long test runs, for example) should override it.
+    fn collect_streaming(
+        &self,
+        kind: SignalKind,
+        context: &RunContext,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<SignalRow, AdapterError> {
+        let _ = on_line;
+        self.collect(kind, context)
+    }
 }
 
 pub trait LanguageAdapter: Send + Sync {
@@ -109,4 +123,21 @@ pub trait LanguageAdapter: Send + Sync {
     fn profile(&self) -> LanguageProfile;
     fn catalog(&self) -> &'static [CatalogEntry];
     fn collector(&self) -> &dyn SignalCollector;
+
+    /// Maximum number of analyze targets for this language that may run
+    /// concurrently. `None` means the global concurrency policy applies
+    /// unchanged. Adapters whose tooling serializes on shared state (for
+    /// example Cargo's target-directory lock) should return `Some(1)`.
+    fn max_target_concurrency(&self) -> Option<usize> {
+        None
+    }
+
+    /// Language-specific environment preparation run during
+    /// `ayni install --apply`, before catalog tools are checked or installed
+    /// (for example installing package-manager dependencies or wiring build
+    /// plugins). The default does nothing.
+    fn prepare_install(&self, execution: &ExecutionResolution) -> Result<(), String> {
+        let _ = execution;
+        Ok(())
+    }
 }

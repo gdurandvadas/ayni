@@ -16,14 +16,9 @@ pub enum SignalKind {
     Mutation,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Severity {
-    Passed,
-    Failed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Offender severity. Ordered so that `Warn < Fail`, which lets consumers sort
+/// offenders by severity without ad-hoc rank helpers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
     Warn,
@@ -63,8 +58,6 @@ pub struct SignalRow {
     pub offenders: Offenders,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_vs_previous: Option<Delta>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delta_vs_baseline: Option<Delta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -246,6 +239,63 @@ pub struct MutationOffender {
     pub mutation_kind: String,
     pub message: String,
     pub level: Level,
+}
+
+#[cfg(test)]
+mod run_artifact_tests {
+    use super::*;
+    use crate::language::Language;
+    use crate::runtime::Scope;
+
+    #[test]
+    fn run_artifact_json_roundtrip_preserves_rows() {
+        let artifact = RunArtifact {
+            schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
+            rows: vec![SignalRow {
+                kind: SignalKind::Test,
+                language: Language::Rust,
+                scope: Scope {
+                    workspace_root: String::from("."),
+                    path: Some(String::from("crates/api")),
+                    package: None,
+                    file: None,
+                },
+                pass: false,
+                result: SignalResult::Test(TestResult {
+                    total_tests: 10,
+                    passed: 9,
+                    failed: 1,
+                    duration_ms: Some(1234),
+                    runner: String::from("cargo test"),
+                    failure: Some(CommandFailure {
+                        category: String::from("repo_code_issue"),
+                        classification: String::from("command_error"),
+                        command: String::from("cargo test"),
+                        cwd: String::from("."),
+                        exit_code: Some(101),
+                        message: String::from("1 test failed"),
+                    }),
+                }),
+                budget: Budget::Test(serde_json::json!({})),
+                offenders: Offenders::Test(vec![TestFailure {
+                    file: Some(String::from("src/lib.rs")),
+                    line: Some(42),
+                    message: String::from("assertion failed"),
+                    test_name: Some(String::from("does_thing")),
+                }]),
+                delta_vs_previous: None,
+            }],
+        };
+
+        let serialized = serde_json::to_string_pretty(&artifact).expect("serialize");
+        let deserialized = serde_json::from_str::<RunArtifact>(&serialized).expect("deserialize");
+        assert_eq!(deserialized, artifact);
+
+        let value: serde_json::Value = serde_json::from_str(&serialized).expect("json value");
+        assert_eq!(value["schema_version"], AYNI_SIGNAL_SCHEMA_VERSION);
+        assert_eq!(value["rows"][0]["kind"], "test");
+        assert_eq!(value["rows"][0]["offenders"]["kind"], "test");
+    }
 }
 
 #[cfg(test)]

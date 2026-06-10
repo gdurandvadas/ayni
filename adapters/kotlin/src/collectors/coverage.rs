@@ -1,7 +1,8 @@
-use super::util::{
-    attr_u64, command_failure_from_output, find_reports, format_command, gradle_command,
-    resolve_gradle_task, run_command_for_context, setup_failure, to_repo_relative_path,
-};
+use super::util::{find_reports, gradle_command, resolve_gradle_task};
+use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
+use ayni_adapters_common::paths::to_repo_relative_path;
+use ayni_adapters_common::xml::attr_u64;
 use ayni_core::{
     Budget, CoverageOffender, CoveragePolicy, CoverageResult, Language, Level, Offenders,
     RunContext, Scope, SignalKind, SignalResult, SignalRow,
@@ -75,7 +76,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Coverage(budget),
         offenders: Offenders::Coverage(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -138,7 +138,6 @@ fn error_row(
         budget: Budget::Coverage(json!({})),
         offenders: Offenders::Coverage(Vec::new()),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     }
 }
 

@@ -1,4 +1,4 @@
-use super::util::{resolve_repo_path, to_repo_relative_path};
+use ayni_adapters_common::paths::{resolve_repo_path, to_repo_relative_path};
 use ayni_core::{
     Budget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope, SignalKind,
     SignalResult, SignalRow,
@@ -73,7 +73,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Deps(json!({ "forbidden": rules })),
         offenders: Offenders::Deps(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 

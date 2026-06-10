@@ -1,4 +1,6 @@
-use super::util::{command_failure_from_output, run_tool_for_context};
+use super::util::run_tool_for_context;
+use ayni_adapters_common::exec::format_command;
+use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
     Budget, Language, MutationResult, Offenders, RunContext, Scope, SignalKind, SignalResult,
     SignalRow,
@@ -29,7 +31,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             budget: Budget::Mutation(json!({"enabled": false})),
             offenders: Offenders::Mutation(Vec::new()),
             delta_vs_previous: None,
-            delta_vs_baseline: None,
         });
     }
 
@@ -59,7 +60,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(Vec::new()),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -85,14 +85,6 @@ fn mutation_command(context: &RunContext) -> (String, Vec<String>, String) {
         args.clone(),
         format!("{} (mutation proxy)", format_command("go", &args)),
     )
-}
-
-fn format_command(program: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        program.to_string()
-    } else {
-        format!("{program} {}", args.join(" "))
-    }
 }
 
 #[cfg(test)]

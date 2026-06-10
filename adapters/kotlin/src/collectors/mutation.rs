@@ -1,7 +1,7 @@
-use super::util::{
-    attr_string, command_failure_from_output, find_reports, format_command, gradle_command,
-    run_command_for_context, setup_failure,
-};
+use super::util::{find_reports, gradle_command};
+use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
+use ayni_adapters_common::xml::{attr_string, decode_xml};
 use ayni_core::{
     Budget, Language, Level, MutationOffender, MutationResult, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
@@ -34,7 +34,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             budget: Budget::Mutation(json!({"enabled": false})),
             offenders: Offenders::Mutation(Vec::new()),
             delta_vs_previous: None,
-            delta_vs_baseline: None,
         });
     }
 
@@ -95,7 +94,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(report.offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -125,7 +123,6 @@ fn error_row(
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(Vec::new()),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     }
 }
 
@@ -159,7 +156,7 @@ fn parse_pitest_content(content: &str) -> Result<PitestReport, String> {
             .filter_map(|tag| {
                 Some((
                     tag.get(1)?.as_str().to_string(),
-                    super::util::decode_xml(tag.get(2)?.as_str().trim()),
+                    decode_xml(tag.get(2)?.as_str().trim()),
                 ))
             })
             .collect::<std::collections::BTreeMap<_, _>>();

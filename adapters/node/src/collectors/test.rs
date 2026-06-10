@@ -1,6 +1,6 @@
-use super::util::{
-    command_failure_from_output, package_manager_for_context, run_command_for_context, run_tool,
-};
+use super::util::{command_failure_from_output, package_manager_for_context, run_tool};
+use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::failure::setup_failure;
 use ayni_core::{
     Budget, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, TestFailure,
     TestResult,
@@ -24,6 +24,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let stdout_text = String::from_utf8_lossy(&output.stdout);
     let stderr_text = String::from_utf8_lossy(&output.stderr);
     let report = parse_vitest_report(&stdout_text).or_else(|| parse_vitest_report(&stderr_text));
+    let report_missing = report.is_none();
 
     let mut total_tests = 0_u64;
     let mut passed = 0_u64;
@@ -64,9 +65,9 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         });
     }
 
-    let pass = status_ok && failed == 0;
-    let failure = (!status_ok).then(|| {
-        command_failure_from_output(
+    let pass = status_ok && failed == 0 && !report_missing;
+    let failure = if !status_ok {
+        Some(command_failure_from_output(
             context,
             SignalKind::Test,
             runner.split_whitespace().next().unwrap_or("node"),
@@ -76,8 +77,17 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
                 .map(ToString::to_string)
                 .collect::<Vec<_>>(),
             &output,
-        )
-    });
+        ))
+    } else if report_missing {
+        Some(setup_failure(
+            context,
+            runner.clone(),
+            "test runner exited successfully but produced no parseable JSON report; \
+             cannot verify test results (check the reporter configuration)",
+        ))
+    } else {
+        None
+    };
     Ok(SignalRow {
         kind: SignalKind::Test,
         language: ayni_core::Language::Node,
@@ -99,7 +109,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -118,14 +127,6 @@ fn test_override_command(context: &RunContext) -> Option<(String, Vec<String>, S
     };
     let runner = format_command(&override_cmd.command, &args);
     Some((override_cmd.command.clone(), args, runner))
-}
-
-fn format_command(program: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        program.to_string()
-    } else {
-        format!("{program} {}", args.join(" "))
-    }
 }
 
 fn parse_vitest_report(raw: &str) -> Option<JsonValue> {

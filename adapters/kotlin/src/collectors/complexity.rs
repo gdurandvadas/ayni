@@ -1,7 +1,8 @@
-use super::util::{
-    attr_string, attr_u64, command_failure_from_output, find_reports, format_command,
-    gradle_command, run_command_for_context, setup_failure, to_repo_relative_path,
-};
+use super::util::{find_reports, gradle_command};
+use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
+use ayni_adapters_common::paths::to_repo_relative_path;
+use ayni_adapters_common::xml::{attr_string, attr_u64};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
@@ -66,8 +67,9 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
     offenders.retain(|offender| offender.cyclomatic > cyclomatic.warn);
     offenders.sort_by(|left, right| {
-        level_rank(right.level)
-            .cmp(&level_rank(left.level))
+        right
+            .level
+            .cmp(&left.level)
             .then_with(|| right.cyclomatic.total_cmp(&left.cyclomatic))
             .then_with(|| left.file.cmp(&right.file))
     });
@@ -97,7 +99,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         })),
         offenders: Offenders::Complexity(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -129,7 +130,6 @@ fn error_row(
         budget: Budget::Complexity(json!({})),
         offenders: Offenders::Complexity(Vec::new()),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     }
 }
 
@@ -186,13 +186,6 @@ fn parse_checkstyle_content(
         }
     }
     Ok(offenders)
-}
-
-fn level_rank(level: Level) -> u8 {
-    match level {
-        Level::Warn => 1,
-        Level::Fail => 2,
-    }
 }
 
 #[cfg(test)]

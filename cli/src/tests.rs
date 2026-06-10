@@ -394,6 +394,5 @@ fn test_row(pass: bool, passed: u64, failed: u64) -> ayni_core::SignalRow {
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(Vec::new()),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     }
 }

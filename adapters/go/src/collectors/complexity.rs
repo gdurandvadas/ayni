@@ -1,4 +1,5 @@
-use super::util::{run_tool, to_repo_relative_path};
+use super::util::run_tool_for_context;
+use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
@@ -18,7 +19,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .fn_cyclomatic
         .ok_or_else(|| String::from("missing go.complexity.fn_cyclomatic"))?;
 
-    let output = run_tool(&context.workdir, "gocyclo", &["."])?;
+    let output = run_tool_for_context(context, "gocyclo", &[String::from(".")])?;
     let status_ok = output.status.success();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -83,8 +84,9 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
 
     offenders.sort_by(|left, right| {
-        level_rank(right.level)
-            .cmp(&level_rank(left.level))
+        right
+            .level
+            .cmp(&left.level)
             .then_with(|| right.cyclomatic.total_cmp(&left.cyclomatic))
             .then_with(|| left.file.cmp(&right.file))
             .then_with(|| left.line.cmp(&right.line))
@@ -125,13 +127,5 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Complexity(budget),
         offenders: Offenders::Complexity(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
-}
-
-fn level_rank(level: Level) -> u8 {
-    match level {
-        Level::Warn => 1,
-        Level::Fail => 2,
-    }
 }

@@ -1,4 +1,6 @@
-use super::util::{command_failure_from_output, gradle_command, run_command_for_context};
+use super::util::gradle_command;
+use ayni_adapters_common::exec::run_command_for_context;
+use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
     Budget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope, SignalKind,
     SignalResult, SignalRow,
@@ -73,7 +75,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Deps(json!({ "forbidden": rules })),
         offenders: Offenders::Deps(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -96,7 +97,6 @@ fn error_row(context: &RunContext, _failure: ayni_core::CommandFailure) -> Signa
         budget: Budget::Deps(json!({})),
         offenders: Offenders::Deps(Vec::new()),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     }
 }
 

@@ -1,3 +1,4 @@
+use ayni_adapters_common::exec::{DEFAULT_TOOL_TIMEOUT, run_command};
 use ayni_core::{
     Budget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope, SignalKind,
     SignalResult, SignalRow,
@@ -6,7 +7,6 @@ use glob::Pattern;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let rules = context
@@ -40,7 +40,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Deps(json!({ "forbidden": rules })),
         offenders: Offenders::Deps(analysis.offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -88,13 +87,12 @@ struct DepsAnalysis {
 }
 
 fn load_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
-    let output = Command::new("cargo")
-        .arg("metadata")
-        .arg("--format-version")
-        .arg("1")
-        .current_dir(repo_root)
-        .output()
-        .map_err(|error| format!("failed to execute cargo metadata: {error}"))?;
+    let args = vec![
+        String::from("metadata"),
+        String::from("--format-version"),
+        String::from("1"),
+    ];
+    let output = run_command(repo_root, "cargo", &args, DEFAULT_TOOL_TIMEOUT)?;
     if !output.status.success() {
         return Err(format!(
             "cargo metadata failed (exit {}): {}",

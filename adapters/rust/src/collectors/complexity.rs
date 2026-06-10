@@ -1,10 +1,10 @@
+use ayni_adapters_common::exec::{DEFAULT_TOOL_TIMEOUT, run_command};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
 };
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let config = context
@@ -103,7 +103,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Complexity(budget),
         offenders: Offenders::Complexity(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
@@ -170,14 +169,13 @@ fn resolve_package_path(repo_root: &Path, package: &str) -> Result<PathBuf, Stri
 }
 
 fn load_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
-    let output = Command::new("cargo")
-        .arg("metadata")
-        .arg("--format-version")
-        .arg("1")
-        .arg("--no-deps")
-        .current_dir(repo_root)
-        .output()
-        .map_err(|error| format!("failed to execute cargo metadata: {error}"))?;
+    let args = vec![
+        String::from("metadata"),
+        String::from("--format-version"),
+        String::from("1"),
+        String::from("--no-deps"),
+    ];
+    let output = run_command(repo_root, "cargo", &args, DEFAULT_TOOL_TIMEOUT)?;
     if !output.status.success() {
         return Err(format!(
             "cargo metadata failed (exit {}): {}",
@@ -194,29 +192,30 @@ fn run_rust_code_analysis(
     workdir: &Path,
     target: &Path,
 ) -> Result<Vec<FunctionMetric>, String> {
-    let mut command = Command::new("rust-code-analysis-cli");
-    command
-        .arg("--metrics")
-        .arg("--paths")
-        .arg(target)
-        .arg("--language-type")
-        .arg("rust")
-        .arg("--output-format")
-        .arg("json")
-        .current_dir(workdir);
+    let mut args = vec![
+        String::from("--metrics"),
+        String::from("--paths"),
+        target.to_string_lossy().into_owned(),
+        String::from("--language-type"),
+        String::from("rust"),
+        String::from("--output-format"),
+        String::from("json"),
+    ];
     if target.is_dir() {
-        command.arg("--include").arg("*.rs");
+        args.push(String::from("--include"));
+        args.push(String::from("*.rs"));
     }
 
-    let output = command.output().map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            String::from(
-                "rust-code-analysis-cli is not installed; run `cargo install rust-code-analysis-cli`",
-            )
-        } else {
-            format!("failed to execute rust-code-analysis-cli: {error}")
-        }
-    })?;
+    let output = run_command(workdir, "rust-code-analysis-cli", &args, DEFAULT_TOOL_TIMEOUT)
+        .map_err(|error| {
+            if error.contains("os error 2") {
+                String::from(
+                    "rust-code-analysis-cli is not installed; run `cargo install rust-code-analysis-cli`",
+                )
+            } else {
+                error
+            }
+        })?;
     if !output.status.success() {
         return Err(format!(
             "rust-code-analysis-cli failed (exit {}): {}",

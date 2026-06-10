@@ -26,9 +26,7 @@ use delta::annotate_deltas_vs_previous;
 use install::{enabled_signal_kinds, install_impl, persist_artifact};
 
 const ARTIFACTS_DIR: &str = ".ayni/last";
-const HISTORY_DIR: &str = ".ayni/history";
 const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
-const PREVIOUS_SIGNALS_SNAPSHOT: &str = ".ayni/history/previous-signals.jsonl";
 const AGENTS_MANAGED_BEGIN: &str = "<!-- AYNI:BEGIN -->";
 const AGENTS_MANAGED_END: &str = "<!-- AYNI:END -->";
 const RUST_POLICY_TEMPLATE: &str = include_str!("../templates/policy/rust.toml");
@@ -57,7 +55,8 @@ enum Commands {
         package: Option<String>,
         #[arg(long, value_enum)]
         language: Option<LanguageArg>,
-        /// Report format: `stdout` (default, coloured console) or `md` (markdown report).
+        /// Report format: `stdout` (default, coloured console), `md` (markdown report),
+        /// or `json` (machine-readable signal artifact on stdout).
         #[arg(long, value_enum, default_value = "stdout")]
         output: OutputArg,
         /// Print raw command diagnostics and disable the live dashboard.
@@ -95,6 +94,8 @@ enum OutputArg {
     Stdout,
     /// Markdown report printed to stdout.
     Md,
+    /// Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout.
+    Json,
 }
 
 impl LanguageArg {
@@ -268,15 +269,19 @@ fn collect_targets_with_ui(
                 .or_default()
                 .push((index, target));
         }
+        let registry = build_registry();
         let mut group_handles = Vec::new();
         for (language, jobs) in by_language {
             let ctx = ctx.clone();
             let result_slots = Arc::clone(&result_slots);
-            let worker_limit = if language == Language::Rust {
-                1
-            } else {
-                concurrency.amount
-            };
+            let adapter_cap = registry
+                .adapters()
+                .iter()
+                .find(|adapter| adapter.language() == language)
+                .and_then(|adapter| adapter.max_target_concurrency());
+            let worker_limit = adapter_cap.map_or(concurrency.amount, |cap| {
+                cap.clamp(1, concurrency.amount.max(1))
+            });
             group_handles.push(thread::spawn(move || {
                 run_target_jobs(&ctx, jobs, worker_limit, result_slots)
             }));
@@ -328,20 +333,12 @@ fn collect_target_with_ui(
         }
         let tool = ctx.tool(&tool_id(target.language, &target.root, kind))?;
         tool.started();
-        let row_result = match (target.language, kind) {
-            (Language::Rust, SignalKind::Test) => {
-                ayni_adapters_rust::collectors::test::collect_with_lines(
-                    &target.run_context,
-                    |line| {
-                        tool.line(line);
-                    },
-                )
-            }
-            _ => adapter
-                .collector()
-                .collect(kind, &target.run_context)
-                .map_err(|e| e.to_string()),
-        };
+        let row_result = adapter
+            .collector()
+            .collect_streaming(kind, &target.run_context, &mut |line| {
+                tool.line(line);
+            })
+            .map_err(|e| e.to_string());
         match row_result {
             Ok(row) => {
                 tool.line(signal_outcome_line(kind, &row));
@@ -463,7 +460,6 @@ fn failed_signal_row(
         budget,
         offenders,
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     }
 }
 
@@ -734,7 +730,6 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<AnalyzeOut
 
 fn ensure_analyze_directories(workspace_root: &Path) -> Result<(), String> {
     fs::create_dir_all(workspace_root.join(ARTIFACTS_DIR)).map_err(|error| error.to_string())?;
-    fs::create_dir_all(workspace_root.join(HISTORY_DIR)).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -751,7 +746,7 @@ fn execute_analyze_plan(
             .map(|outcome| outcome.aborted);
     }
     match output_mode {
-        OutputArg::Md => {
+        OutputArg::Md | OutputArg::Json => {
             ui::runner::run_plain(plan, execution, |_| {}).map(|outcome| outcome.aborted)
         }
         OutputArg::Stdout => run_stdout_plan(plan, execution),
@@ -832,6 +827,11 @@ fn emit_analyze_outputs(
         OutputArg::Md => {
             let summary = ui::md_report::build_markdown(artifact, policy.report.offenders_limit);
             println!("{summary}");
+        }
+        OutputArg::Json => {
+            let serialized = serde_json::to_string_pretty(artifact)
+                .map_err(|error| format!("failed to serialize artifact: {error}"))?;
+            println!("{serialized}");
         }
     }
     Ok(())
@@ -926,21 +926,16 @@ fn canonicalize_relative_posix(value: &str) -> String {
     }
 }
 
+/// Reads the previous run artifact for delta computation. Artifacts from a
+/// different schema version are ignored so deltas never mix incompatible shapes.
 fn load_previous_artifact(repo_root: &Path) -> Option<RunArtifact> {
-    let candidates = [
-        repo_root.join(PREVIOUS_SIGNALS_SNAPSHOT),
-        repo_root.join(SIGNALS_ARTIFACT),
-    ];
-    for candidate in candidates {
-        let content = match fs::read_to_string(&candidate) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        if let Ok(artifact) = serde_json::from_str::<RunArtifact>(&content) {
-            return Some(artifact);
-        }
+    let content = fs::read_to_string(repo_root.join(SIGNALS_ARTIFACT)).ok()?;
+    let artifact = serde_json::from_str::<RunArtifact>(&content).ok()?;
+    if artifact.schema_version == AYNI_SIGNAL_SCHEMA_VERSION {
+        Some(artifact)
+    } else {
+        None
     }
-    None
 }
 
 #[cfg(test)]

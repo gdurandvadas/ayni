@@ -72,7 +72,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Deps(json!({ "forbidden": rules })),
         offenders: Offenders::Deps(offenders),
         delta_vs_previous: None,
-        delta_vs_baseline: None,
     })
 }
 
