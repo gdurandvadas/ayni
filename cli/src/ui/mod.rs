@@ -4,6 +4,7 @@ use std::io::{self, IsTerminal};
 pub mod fallback;
 pub mod layout;
 pub mod md_report;
+pub mod progress_log;
 pub mod report;
 pub mod runner;
 
