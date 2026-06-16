@@ -747,7 +747,8 @@ fn execute_analyze_plan(
     }
     match output_mode {
         OutputArg::Md | OutputArg::Json => {
-            ui::runner::run_plain(plan, execution, |_| {}).map(|outcome| outcome.aborted)
+            ui::runner::run_plain(plan, execution, ui::progress_log::log_started_check)
+                .map(|outcome| outcome.aborted)
         }
         OutputArg::Stdout => run_stdout_plan(plan, execution),
     }
