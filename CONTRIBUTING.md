@@ -32,11 +32,28 @@ Run local analysis:
 cargo run -p ayni-cli -- analyze --config ./.ayni.toml
 ```
 
-Regenerate CLI docs after changing commands or flags:
+## Documentation
+
+The docs site lives under `docs/` and uses the root npm scripts:
+
+```sh
+npm install
+npm run docs:dev
+npm run docs:build
+npm run docs:preview
+```
+
+Use `npm ci` instead of `npm install` when you want a clean, lockfile-driven install.
+
+Regenerate the CLI reference after changing commands or flags:
 
 ```sh
 cargo doc-cli > docs/cli.md
 ```
+
+Release docs are built from the released code when release-please publishes a GitHub Release, and the same workflow can also be triggered manually with `workflow_dispatch`. The docs workflow regenerates `docs/cli.md`, builds VitePress, and publishes only the static site output to the `documentation` branch for GitHub Pages.
+
+The `documentation` branch is generated deployment output only; the source of truth for docs remains the normal source branch under `docs/`.
 
 ## Architecture
 
