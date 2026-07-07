@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2](https://github.com/gdurandvadas/ayni/compare/ayni-v0.4.1...ayni-v0.4.2) (2026-07-07)
+
+
+### Bug Fixes
+
+* **docs:** preserve custom domain during deploy ([#26](https://github.com/gdurandvadas/ayni/issues/26)) ([400a98c](https://github.com/gdurandvadas/ayni/commit/400a98c8b57f48047d42d942b35d80dcf3d0fbf6))
+* **docs:** preserve custom domain on deploy ([400a98c](https://github.com/gdurandvadas/ayni/commit/400a98c8b57f48047d42d942b35d80dcf3d0fbf6))
+
 ## [0.4.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.4.0...ayni-v0.4.1) (2026-07-07)
 
 
