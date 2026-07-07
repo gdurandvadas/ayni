@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.3.0...ayni-v0.4.0) (2026-07-07)
+
+
+### Features
+
+* **docs:** add documentation ([#22](https://github.com/gdurandvadas/ayni/issues/22)) ([6d6d6a1](https://github.com/gdurandvadas/ayni/commit/6d6d6a1436ff8cbd05f3da95143acb5fa010b594))
+
 ## [0.3.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.2.2...ayni-v0.3.0) (2026-06-16)
 
 
