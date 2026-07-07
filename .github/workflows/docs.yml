@@ -47,6 +47,8 @@ jobs:
         run: cargo doc-cli > docs/cli.md
 
       - name: Build VitePress
+        env:
+          VITEPRESS_BASE: /
         run: npm run docs:build
 
       - name: Deploy docs to documentation branch
