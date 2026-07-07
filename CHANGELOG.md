@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.4.0...ayni-v0.4.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **docs:** build VitePress for custom domain ([#24](https://github.com/gdurandvadas/ayni/issues/24)) ([2696adc](https://github.com/gdurandvadas/ayni/commit/2696adce04bdcb47f58913f57f9c37ef8d1a5d27))
+
 ## [0.4.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.3.0...ayni-v0.4.0) (2026-07-07)
 
 
