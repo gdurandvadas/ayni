@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitepress'
 
-const base = process.env.VITEPRESS_BASE ?? '/ayni/'
+const base = process.env.VITEPRESS_BASE ?? '/'
 
 export default defineConfig({
   title: 'Ayni',
