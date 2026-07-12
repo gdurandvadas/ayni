@@ -182,8 +182,12 @@ fn summarize(row: &SignalRow) -> String {
             )
         }
         SignalResult::Size(result) => format!(
-            "measured max_lines={} files={} warn_count={} fail_count={}",
-            result.max_lines, result.total_files, result.warn_count, result.fail_count
+            "measured max_lines={} files={} warn_count={} fail_count={}{}",
+            result.max_lines,
+            result.total_files,
+            result.warn_count,
+            result.fail_count,
+            failure_suffix(result.failure.as_ref())
         ),
         SignalResult::Complexity(result) => {
             let budget = match &row.budget {
@@ -222,8 +226,11 @@ fn summarize(row: &SignalRow) -> String {
             )
         }
         SignalResult::Deps(result) => format!(
-            "measured crates={} edges={} violations={}",
-            result.crate_count, result.edge_count, result.violation_count
+            "measured crates={} edges={} violations={}{}",
+            result.crate_count,
+            result.edge_count,
+            result.violation_count,
+            failure_suffix(result.failure.as_ref())
         ),
         SignalResult::Mutation(result) => format!(
             "measured score={} killed={} survived={} timeout={} engine={}{}",
@@ -295,9 +302,10 @@ fn command_failure_for_row(row: &SignalRow) -> Option<&CommandFailure> {
     match &row.result {
         SignalResult::Test(result) => result.failure.as_ref(),
         SignalResult::Coverage(result) => result.failure.as_ref(),
+        SignalResult::Size(result) => result.failure.as_ref(),
         SignalResult::Complexity(result) => result.failure.as_ref(),
+        SignalResult::Deps(result) => result.failure.as_ref(),
         SignalResult::Mutation(result) => result.failure.as_ref(),
-        SignalResult::Size(_) | SignalResult::Deps(_) => None,
     }
 }
 
@@ -622,6 +630,7 @@ mod tests {
                     total_files: 3,
                     warn_count: 0,
                     fail_count: 1,
+                    failure: None,
                 }),
                 budget: Budget::Size(serde_json::json!({})),
                 offenders: Offenders::Size(vec![ayni_core::SizeOffender {
@@ -642,6 +651,7 @@ mod tests {
                     crate_count: 3,
                     edge_count: 1,
                     violation_count: 0,
+                    failure: None,
                 }),
                 budget: Budget::Deps(serde_json::json!({})),
                 offenders: Offenders::Deps(Vec::new()),
@@ -754,6 +764,7 @@ mod tests {
                     crate_count: 2,
                     edge_count: 1,
                     violation_count: 0,
+                    failure: None,
                 }),
                 budget: Budget::Deps(json!({})),
                 offenders: Offenders::Deps(vec![]),

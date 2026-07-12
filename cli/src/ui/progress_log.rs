@@ -59,8 +59,8 @@ mod tests {
     use super::*;
     use crate::ui::runner::{ProgressEvent, ToolState};
     use ayni_core::{
-        Budget, CommandFailure, Language, Offenders, RunArtifact, Scope, SignalKind, SignalResult,
-        SignalRow, TestResult,
+        Budget, CommandFailure, DepsResult, Language, Offenders, RunArtifact, Scope, SignalKind,
+        SignalResult, SignalRow, SizeResult, TestResult,
     };
     use std::time::Duration;
 
@@ -143,5 +143,68 @@ mod tests {
                 "command failure kind=Test language=rust workspace=workspace category=tool classification=command_error\n  command: cargo test\n  cwd: /tmp/ayni\n  exit_code: 101\n  message: test command failed"
             )]
         );
+    }
+
+    #[test]
+    fn command_failure_diagnostics_include_size_and_deps_failures() {
+        let failure = |kind: &str, exit_code| CommandFailure {
+            category: format!("{kind}_category"),
+            classification: format!("{kind}_classification"),
+            command: format!("{kind} command"),
+            cwd: format!("/{kind}"),
+            exit_code,
+            message: format!("{kind} message"),
+        };
+        let artifact = RunArtifact {
+            schema_version: String::from("0.2.0"),
+            metadata: Default::default(),
+            rows: vec![
+                SignalRow {
+                    kind: SignalKind::Size,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Size(SizeResult {
+                        max_lines: 0,
+                        total_files: 0,
+                        warn_count: 0,
+                        fail_count: 1,
+                        failure: Some(failure("size", Some(17))),
+                    }),
+                    budget: Budget::Size(serde_json::json!({})),
+                    offenders: Offenders::Size(Vec::new()),
+                    delta_vs_previous: None,
+                },
+                SignalRow {
+                    kind: SignalKind::Deps,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Deps(DepsResult {
+                        crate_count: 0,
+                        edge_count: 0,
+                        violation_count: 1,
+                        failure: Some(failure("deps", None)),
+                    }),
+                    budget: Budget::Deps(serde_json::json!({})),
+                    offenders: Offenders::Deps(Vec::new()),
+                    delta_vs_previous: None,
+                },
+            ],
+        };
+
+        let diagnostics = command_failure_diagnostics(&artifact);
+        assert_eq!(diagnostics.len(), 2);
+        for (diagnostic, kind, exit_code) in [
+            (&diagnostics[0], "size", "17"),
+            (&diagnostics[1], "deps", "none"),
+        ] {
+            assert!(diagnostic.contains(&format!("category={kind}_category")));
+            assert!(diagnostic.contains(&format!("classification={kind}_classification")));
+            assert!(diagnostic.contains(&format!("command: {kind} command")));
+            assert!(diagnostic.contains(&format!("cwd: /{kind}")));
+            assert!(diagnostic.contains(&format!("exit_code: {exit_code}")));
+            assert!(diagnostic.contains(&format!("message: {kind} message")));
+        }
     }
 }

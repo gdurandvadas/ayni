@@ -87,6 +87,7 @@ pub fn collect_size(
             total_files,
             warn_count,
             fail_count,
+            failure: None,
         },
         offenders,
         budget: json!({ "rules": budget_rules }),

@@ -199,7 +199,7 @@ impl RunArtifact {
             .rows
             .iter()
             .filter_map(|row| {
-                command_failure(&row.result).map(|failure| FailureSummary {
+                row.result.command_failure().map(|failure| FailureSummary {
                     kind: row.kind,
                     language: row.language,
                     scope: row.scope.clone(),
@@ -309,13 +309,17 @@ impl<'de> Deserialize<'de> for RunArtifact {
     }
 }
 
-fn command_failure(result: &SignalResult) -> Option<&CommandFailure> {
-    match result {
-        SignalResult::Test(value) => value.failure.as_ref(),
-        SignalResult::Coverage(value) => value.failure.as_ref(),
-        SignalResult::Complexity(value) => value.failure.as_ref(),
-        SignalResult::Mutation(value) => value.failure.as_ref(),
-        SignalResult::Size(_) | SignalResult::Deps(_) => None,
+impl SignalResult {
+    #[must_use]
+    pub fn command_failure(&self) -> Option<&CommandFailure> {
+        match self {
+            SignalResult::Test(value) => value.failure.as_ref(),
+            SignalResult::Coverage(value) => value.failure.as_ref(),
+            SignalResult::Size(value) => value.failure.as_ref(),
+            SignalResult::Complexity(value) => value.failure.as_ref(),
+            SignalResult::Deps(value) => value.failure.as_ref(),
+            SignalResult::Mutation(value) => value.failure.as_ref(),
+        }
     }
 }
 
@@ -457,6 +461,8 @@ pub struct SizeResult {
     pub total_files: u64,
     pub warn_count: u64,
     pub fail_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CommandFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -498,6 +504,8 @@ pub struct DepsResult {
     pub crate_count: u64,
     pub edge_count: u64,
     pub violation_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CommandFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -624,6 +632,7 @@ mod run_artifact_tests {
                 total_files: 1,
                 warn_count: 1,
                 fail_count: 0,
+                failure: None,
             }),
             budget: Budget::Size(serde_json::json!({ "warn": 10, "fail": 30 })),
             offenders: Offenders::Size(vec![SizeOffender {
@@ -649,6 +658,81 @@ mod run_artifact_tests {
         let value = serde_json::to_value(&artifact).expect("serialize");
         assert!(value.get("failure_summaries").is_none());
         assert!(serde_json::from_value::<RunArtifact>(value).is_ok());
+    }
+
+    #[test]
+    fn size_and_deps_failures_roundtrip_to_complete_failure_summaries() {
+        let failure = |kind: &str, exit_code| CommandFailure {
+            category: format!("{kind}_category"),
+            classification: format!("{kind}_classification"),
+            command: format!("{kind} command"),
+            cwd: format!("/{kind}"),
+            exit_code,
+            message: format!("{kind} message"),
+        };
+        let artifact = RunArtifact::new(
+            RunArtifactMetadata::default(),
+            vec![
+                SignalRow {
+                    kind: SignalKind::Size,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Size(SizeResult {
+                        max_lines: 0,
+                        total_files: 0,
+                        warn_count: 0,
+                        fail_count: 1,
+                        failure: Some(failure("size", Some(17))),
+                    }),
+                    budget: Budget::Size(serde_json::json!({})),
+                    offenders: Offenders::Size(Vec::new()),
+                    delta_vs_previous: None,
+                },
+                SignalRow {
+                    kind: SignalKind::Deps,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Deps(DepsResult {
+                        crate_count: 0,
+                        edge_count: 0,
+                        violation_count: 1,
+                        failure: Some(failure("deps", None)),
+                    }),
+                    budget: Budget::Deps(serde_json::json!({})),
+                    offenders: Offenders::Deps(Vec::new()),
+                    delta_vs_previous: None,
+                },
+            ],
+        );
+
+        assert_eq!(
+            artifact.rows[0].result.command_failure(),
+            Some(&failure("size", Some(17)))
+        );
+        assert_eq!(
+            artifact.rows[1].result.command_failure(),
+            Some(&failure("deps", None))
+        );
+        let summaries = artifact.failure_summaries().expect("failure summaries");
+        for (summary, kind, exit_code) in [
+            (&summaries[0], "size", Some(17)),
+            (&summaries[1], "deps", None),
+        ] {
+            assert_eq!(summary.category, format!("{kind}_category"));
+            assert_eq!(summary.classification, format!("{kind}_classification"));
+            assert_eq!(summary.command, format!("{kind} command"));
+            assert_eq!(summary.cwd, format!("/{kind}"));
+            assert_eq!(summary.exit_code, exit_code);
+            assert_eq!(summary.message, format!("{kind} message"));
+        }
+
+        let serialized = serde_json::to_string(&artifact).expect("serialize");
+        assert_eq!(
+            serde_json::from_str::<RunArtifact>(&serialized).expect("roundtrip"),
+            artifact
+        );
     }
 }
 

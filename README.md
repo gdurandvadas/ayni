@@ -170,8 +170,8 @@ complexity
 </details>
 
 Markdown always groups typed findings in **Offenders**. It adds **Failures** only
-when a collector command failed; each failure includes its classification,
-command, working directory, exit code when available, and message. Reports and
+when a collector command failed; each failure includes its category,
+classification, command, working directory, exit code when available, and message. Reports and
 JSON artifacts can therefore expose repository paths and raw tool output; treat
 them as repository diagnostics when sharing them.
 

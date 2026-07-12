@@ -71,6 +71,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
                 .len() as u64,
             edge_count: edges.len() as u64,
             violation_count: offenders.len() as u64,
+            failure: None,
         }),
         budget: Budget::Deps(json!({ "forbidden": rules })),
         offenders: Offenders::Deps(offenders),
@@ -78,7 +79,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     })
 }
 
-fn error_row(context: &RunContext, _failure: ayni_core::CommandFailure) -> SignalRow {
+fn error_row(context: &RunContext, failure: ayni_core::CommandFailure) -> SignalRow {
     SignalRow {
         kind: SignalKind::Deps,
         language: Language::Kotlin,
@@ -93,6 +94,7 @@ fn error_row(context: &RunContext, _failure: ayni_core::CommandFailure) -> Signa
             crate_count: 0,
             edge_count: 0,
             violation_count: 1,
+            failure: Some(failure),
         }),
         budget: Budget::Deps(json!({})),
         offenders: Offenders::Deps(Vec::new()),

@@ -212,6 +212,7 @@ fn analyze_deps(
             crate_count: visible_members.len() as u64,
             edge_count: edges.len() as u64,
             violation_count: offenders.len() as u64,
+            failure: None,
         },
         offenders,
     })

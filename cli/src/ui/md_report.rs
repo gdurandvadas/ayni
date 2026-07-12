@@ -302,8 +302,8 @@ mod tests {
     use super::build_markdown;
     use ayni_core::{
         AYNI_SIGNAL_SCHEMA_VERSION, Budget, CommandFailure, CoverageOffender, CoverageResult,
-        Delta, Language, Level, Offenders, RunArtifact, Scope, SignalKind, SignalResult, SignalRow,
-        TestFailure, TestResult,
+        Delta, DepsResult, Language, Level, Offenders, RunArtifact, Scope, SignalKind,
+        SignalResult, SignalRow, SizeResult, TestFailure, TestResult,
     };
     use serde_json::json;
 
@@ -440,5 +440,68 @@ mod tests {
         assert!(test_failure < coverage_failure);
         let coverage_section = &text[coverage_failure..];
         assert!(!coverage_section.contains("**Exit code:**"));
+    }
+
+    #[test]
+    fn build_markdown_renders_complete_size_and_deps_failures() {
+        let failure = |kind: &str, exit_code| CommandFailure {
+            category: format!("{kind}_category"),
+            classification: format!("{kind}_classification"),
+            command: format!("{kind} command"),
+            cwd: format!("/{kind}"),
+            exit_code,
+            message: format!("{kind} message"),
+        };
+        let artifact = RunArtifact {
+            schema_version: String::from("0.2.0"),
+            metadata: Default::default(),
+            rows: vec![
+                SignalRow {
+                    kind: SignalKind::Size,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Size(SizeResult {
+                        max_lines: 0,
+                        total_files: 0,
+                        warn_count: 0,
+                        fail_count: 1,
+                        failure: Some(failure("size", Some(17))),
+                    }),
+                    budget: Budget::Size(json!({})),
+                    offenders: Offenders::Size(Vec::new()),
+                    delta_vs_previous: None,
+                },
+                SignalRow {
+                    kind: SignalKind::Deps,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Deps(DepsResult {
+                        crate_count: 0,
+                        edge_count: 0,
+                        violation_count: 1,
+                        failure: Some(failure("deps", None)),
+                    }),
+                    budget: Budget::Deps(json!({})),
+                    offenders: Offenders::Deps(Vec::new()),
+                    delta_vs_previous: None,
+                },
+            ],
+        };
+
+        let text = build_markdown(&artifact, 1);
+        for (kind, exit_code) in [("size", Some(17)), ("deps", None)] {
+            assert!(text.contains(&format!("### {kind} (rust)")));
+            assert!(text.contains(&format!("{}{}_category", "```text\n", kind)));
+            assert!(text.contains(&format!("{}{}_classification", "```text\n", kind)));
+            assert!(text.contains(&format!("{}{} command", "```text\n", kind)));
+            assert!(text.contains(&format!("{}{}", "```text\n/", kind)));
+            assert!(text.contains(&format!("{}{} message", "```text\n", kind)));
+            match exit_code {
+                Some(code) => assert!(text.contains(&format!("**Exit code:**\n\n```text\n{code}"))),
+                None => assert!(!text.contains("**Exit code:**\n\n```text\nnone")),
+            }
+        }
     }
 }
