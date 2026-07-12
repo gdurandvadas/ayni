@@ -73,12 +73,12 @@ fn upsert_managed_block_appends_when_missing() {
 #[test]
 fn annotate_deltas_vs_previous_marks_metric_and_pass_changes() {
     let previous = RunArtifact {
-        schema_version: String::from("0.1.0"),
+        schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
         metadata: Default::default(),
         rows: vec![test_row(false, 18, 2)],
     };
     let mut current = RunArtifact {
-        schema_version: String::from("0.1.0"),
+        schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
         metadata: Default::default(),
         rows: vec![test_row(true, 20, 0)],
     };
@@ -98,7 +98,7 @@ fn annotate_deltas_vs_previous_marks_metric_and_pass_changes() {
 #[test]
 fn annotate_deltas_vs_previous_marks_missing_history() {
     let mut current = RunArtifact {
-        schema_version: String::from("0.1.0"),
+        schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
         metadata: Default::default(),
         rows: vec![test_row(true, 20, 0)],
     };

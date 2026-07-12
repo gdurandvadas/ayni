@@ -1,6 +1,5 @@
 use crate::language::Language;
 use crate::runtime::Scope;
-use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 
 /// Semantic version of the JSON `RunArtifact` contract (`schema_version` field).
@@ -222,24 +221,43 @@ impl Serialize for RunArtifact {
     where
         S: serde::Serializer,
     {
-        let failures = self.failure_summaries();
-        let mut state =
-            serializer.serialize_struct("RunArtifact", if failures.is_some() { 12 } else { 11 })?;
-        state.serialize_field("schema_version", &self.schema_version)?;
-        state.serialize_field("generated_at", &self.metadata.generated_at)?;
-        state.serialize_field("ayni_version", &self.metadata.ayni_version)?;
-        state.serialize_field("invocation", &self.metadata.invocation)?;
-        state.serialize_field("output", &self.metadata.output)?;
-        state.serialize_field("config_path", &self.metadata.config_path)?;
-        state.serialize_field("repository_root", &self.metadata.repository_root)?;
-        state.serialize_field("aggregate", &self.aggregate())?;
-        state.serialize_field("applied_thresholds", &self.applied_thresholds())?;
-        state.serialize_field("rows", &self.rows)?;
-        state.serialize_field("offender_summaries", &self.offender_summaries())?;
-        if let Some(failures) = failures {
-            state.serialize_field("failure_summaries", &failures)?;
+        RunArtifactSerialization::from(self).serialize(serializer)
+    }
+}
+
+#[derive(Serialize)]
+struct RunArtifactSerialization<'a> {
+    schema_version: &'a str,
+    generated_at: &'a str,
+    ayni_version: &'a str,
+    invocation: &'a InvocationContext,
+    output: &'a OutputContext,
+    config_path: &'a str,
+    repository_root: &'a str,
+    aggregate: AggregateSummary,
+    applied_thresholds: Vec<AppliedThreshold>,
+    rows: &'a [SignalRow],
+    offender_summaries: Vec<OffenderSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_summaries: Option<Vec<FailureSummary>>,
+}
+
+impl<'a> From<&'a RunArtifact> for RunArtifactSerialization<'a> {
+    fn from(artifact: &'a RunArtifact) -> Self {
+        Self {
+            schema_version: &artifact.schema_version,
+            generated_at: &artifact.metadata.generated_at,
+            ayni_version: &artifact.metadata.ayni_version,
+            invocation: &artifact.metadata.invocation,
+            output: &artifact.metadata.output,
+            config_path: &artifact.metadata.config_path,
+            repository_root: &artifact.metadata.repository_root,
+            aggregate: artifact.aggregate(),
+            applied_thresholds: artifact.applied_thresholds(),
+            rows: &artifact.rows,
+            offender_summaries: artifact.offender_summaries(),
+            failure_summaries: artifact.failure_summaries(),
         }
-        state.end()
     }
 }
 

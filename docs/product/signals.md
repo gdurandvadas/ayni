@@ -65,9 +65,10 @@ persisted artifact and both JSON selectors use the same v2 payload.
 
 Markdown is a human view of those rows: **Offenders** lists typed warn/fail
 findings, while **Failures** is omitted unless command failures exist and then
-summarizes their classification, command, cwd, exit code when present, and
-message. These diagnostics, as well as `config_path`, `repository_root`, and
-offender paths in JSON, may reveal repository paths or tool output.
+summarizes their category, classification, command, cwd, exit code when
+present, and message. These diagnostics, as well as `config_path`,
+`repository_root`, and offender paths in JSON, may reveal repository paths or
+tool output.
 
 ## Signal kinds
 

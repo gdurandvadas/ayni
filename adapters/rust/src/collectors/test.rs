@@ -21,6 +21,7 @@ where
     Ok(build_test_row(
         context,
         success,
+        output.status.code(),
         &stdout_text,
         &stderr_text,
         &runner,
@@ -34,6 +35,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
 fn build_test_row(
     context: &RunContext,
     success: bool,
+    exit_code: Option<i32>,
     stdout: &str,
     stderr: &str,
     runner: &str,
@@ -75,7 +77,7 @@ fn build_test_row(
                 classification: String::from("command_error"),
                 command: runner.to_string(),
                 cwd: context.execution.exec_cwd.display().to_string(),
-                exit_code: None,
+                exit_code,
                 message: stderr_tail(stderr, STDERR_TAIL_LINES),
             }),
         }),
@@ -234,5 +236,35 @@ args = ["nextest", "run"]
         let (program, args) = test_command(&context);
         assert_eq!(program, "cargo");
         assert_eq!(args, vec!["nextest", "run"]);
+    }
+
+    #[test]
+    fn failed_test_row_preserves_command_exit_code() {
+        let row = build_test_row(
+            &context_with_policy(
+                r#"
+[checks]
+test = true
+coverage = false
+size = false
+complexity = false
+deps = false
+mutation = false
+
+[languages]
+enabled = ["rust"]
+"#,
+            ),
+            false,
+            Some(17),
+            "",
+            "forced failure",
+            "cargo test",
+        );
+
+        let SignalResult::Test(result) = row.result else {
+            panic!("test result");
+        };
+        assert_eq!(result.failure.expect("failure").exit_code, Some(17));
     }
 }

@@ -88,6 +88,7 @@ fn render_failures(out: &mut String, failures: Option<Vec<FailureSummary>>) {
             signal_kind_label_from_summary(&failure),
             failure.language.as_str(),
         ));
+        markdown_failure_field(out, "Category", &failure.category);
         markdown_failure_field(out, "Classification", &failure.classification);
         markdown_failure_field(out, "Command", &failure.command);
         markdown_failure_field(out, "Working directory", &failure.cwd);
@@ -300,16 +301,16 @@ fn has_warn_offenders(offenders: &Offenders) -> bool {
 mod tests {
     use super::build_markdown;
     use ayni_core::{
-        Budget, CommandFailure, CoverageOffender, CoverageResult, Delta, Language, Level,
-        Offenders, RunArtifact, Scope, SignalKind, SignalResult, SignalRow, TestFailure,
-        TestResult,
+        AYNI_SIGNAL_SCHEMA_VERSION, Budget, CommandFailure, CoverageOffender, CoverageResult,
+        Delta, Language, Level, Offenders, RunArtifact, Scope, SignalKind, SignalResult, SignalRow,
+        TestFailure, TestResult,
     };
     use serde_json::json;
 
     #[test]
     fn build_markdown_renders_grouped_table() {
         let artifact = RunArtifact {
-            schema_version: String::from("0.1.0"),
+            schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
             metadata: Default::default(),
             rows: vec![SignalRow {
                 kind: SignalKind::Coverage,
@@ -428,6 +429,7 @@ mod tests {
         assert!(!text.contains("second_failure"));
         assert!(text.contains("## Failures"));
         assert!(text.contains("### test (rust)"));
+        assert!(text.contains("**Category:**\n\n```text\ntool"));
         assert!(text.contains("**Classification:**\n\n```text\ncommand_error"));
         assert!(text.contains("**Command:**\n\n```text\ncargo test `weird`"));
         assert!(text.contains("**Working directory:**\n\n```text\n/tmp/a[yni]"));
