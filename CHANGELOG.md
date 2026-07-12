@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.4.2...ayni-v0.5.0) (2026-07-12)
+
+
+### Features
+
+* **feedback:** [0001] Improve error handling, documentation and agents instructions sync ([#28](https://github.com/gdurandvadas/ayni/issues/28)) ([eefd46f](https://github.com/gdurandvadas/ayni/commit/eefd46fcb5e5bfd19e5348967ac2602efcda0505))
+
 ## [0.4.2](https://github.com/gdurandvadas/ayni/compare/ayni-v0.4.1...ayni-v0.4.2) (2026-07-07)
 
 
