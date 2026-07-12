@@ -1,8 +1,8 @@
 use crate::discovery::discover_language_roots;
 use crate::signal_kind_slug;
 use crate::{
-    AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, AYNI_POLICY_FILE, GO_POLICY_TEMPLATE,
-    KOTLIN_POLICY_TEMPLATE, NODE_POLICY_TEMPLATE, PYTHON_POLICY_TEMPLATE, RUST_POLICY_TEMPLATE,
+    AYNI_POLICY_FILE, GO_POLICY_TEMPLATE, KOTLIN_POLICY_TEMPLATE, NODE_POLICY_TEMPLATE,
+    PYTHON_POLICY_TEMPLATE, RUST_POLICY_TEMPLATE,
 };
 use ayni_adapters_common::catalog::{install_tool, tool_status};
 use ayni_core::{
@@ -47,9 +47,7 @@ pub(crate) fn print_install_requirements(
     selected_languages: &BTreeSet<Language>,
 ) {
     println!("Ayni tooling requirements (from adapter catalogs)");
-    println!(
-        "Scaffolding is already updated (`.ayni.toml`, `.gitignore`, `AGENTS.md` when needed)."
-    );
+    println!("Scaffolding is already updated (`.ayni.toml`, `.gitignore`).");
     println!(
         "Run `ayni install --apply` to install missing or outdated tools (may use cargo, rustup, go, npm, …).\n"
     );
@@ -432,7 +430,6 @@ fn scaffold_files(
             .map_err(|error| format!("failed to create {}: {error}", policy_path.display()))?;
     }
     ensure_ayni_gitignore_entry(&repo_root.join(".gitignore"))?;
-    ensure_agents_managed_section(repo_root)?;
     Ok(ScaffoldOutcome { policy_created })
 }
 
@@ -589,90 +586,6 @@ fn update_foundation_settings(
         .map_err(|error| format!("failed to serialize {}: {error}", policy_path.display()))?;
     fs::write(&policy_path, format!("{serialized}\n"))
         .map_err(|error| format!("failed to write {}: {error}", policy_path.display()))
-}
-
-fn ensure_agents_managed_section(repo_root: &Path) -> Result<(), String> {
-    let path = repo_root.join("AGENTS.md");
-    let content = if path.exists() {
-        fs::read_to_string(&path)
-            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
-    } else {
-        String::new()
-    };
-    let managed = managed_agents_block();
-    let updated = upsert_managed_block(&content, &managed);
-    if updated != content {
-        fs::write(&path, updated)
-            .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
-    }
-    Ok(())
-}
-
-fn managed_agents_block() -> String {
-    [
-        AGENTS_MANAGED_BEGIN,
-        "## Code quality guidance for AI agents",
-        "",
-        "When modifying this repository:",
-        "",
-        "- Preserve clear module boundaries.",
-        "- Prefer small, testable units.",
-        "- Keep CLI, core logic, command execution, and reporting separate.",
-        "- Avoid adding network dependencies unless explicitly required.",
-        "- Update tests when behavior changes.",
-        "",
-        "Run:",
-        "",
-        "```sh",
-        "ayni analyze",
-        "```",
-        "",
-        "A non-zero exit code means at least one signal failed. For typed,",
-        "machine-readable results (per-signal offenders, budgets, and deltas),",
-        "run `ayni analyze --output json` or read `.ayni/last/signals.json`",
-        "after any analyze run, then repair the listed offenders and re-run",
-        "until every row passes.",
-        AGENTS_MANAGED_END,
-        "",
-    ]
-    .join("\n")
-}
-
-pub(crate) fn upsert_managed_block(existing: &str, managed: &str) -> String {
-    let normalized_existing = if existing.is_empty() {
-        String::new()
-    } else if existing.ends_with('\n') {
-        existing.to_string()
-    } else {
-        format!("{existing}\n")
-    };
-
-    let begin = normalized_existing.find(AGENTS_MANAGED_BEGIN);
-    let end = normalized_existing.find(AGENTS_MANAGED_END);
-    if let (Some(begin_idx), Some(end_idx)) = (begin, end)
-        && begin_idx <= end_idx
-    {
-        let end_exclusive = end_idx + AGENTS_MANAGED_END.len();
-        let mut result = String::new();
-        result.push_str(&normalized_existing[..begin_idx]);
-        result.push_str(managed);
-        if end_exclusive < normalized_existing.len() {
-            let remainder = normalized_existing[end_exclusive..].trim_start_matches('\n');
-            if !remainder.is_empty() {
-                result.push_str(remainder);
-                if !result.ends_with('\n') {
-                    result.push('\n');
-                }
-            }
-        }
-        return result;
-    }
-
-    if normalized_existing.is_empty() {
-        managed.to_string()
-    } else {
-        format!("{normalized_existing}\n{managed}")
-    }
 }
 
 fn ensure_ayni_gitignore_entry(path: &Path) -> Result<(), String> {

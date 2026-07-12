@@ -1,9 +1,10 @@
 use super::{
-    AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, Cli, Commands, LanguageArg,
-    annotate_deltas_vs_previous, selected_install_languages,
+    AgentsCommands, Cli, Commands, LanguageArg, annotate_deltas_vs_previous,
+    selected_install_languages,
 };
+use crate::agents::{MANAGED_BEGIN, MANAGED_END, managed_block, sync_impl, upsert_managed_block};
 use crate::install::{
-    catalog_entry_enabled_for_policy, default_policy_toml, install_impl, upsert_managed_block,
+    catalog_entry_enabled_for_policy, default_policy_toml, install_impl,
     validate_install_foundation,
 };
 use ayni_core::{
@@ -18,32 +19,54 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 #[test]
-fn upsert_managed_block_appends_when_missing() {
-    let existing = "# Repository Rules\n\nKeep this text.\n";
-    let managed = format!("{AGENTS_MANAGED_BEGIN}\n## Ayni\nx\n{AGENTS_MANAGED_END}\n");
-    let updated = upsert_managed_block(existing, &managed);
-    assert!(updated.contains("Keep this text."));
-    assert!(updated.contains(AGENTS_MANAGED_BEGIN));
-    assert!(updated.contains(AGENTS_MANAGED_END));
+fn agents_sync_creates_managed_file_when_absent() {
+    let dir = TempDir::new().expect("tempdir");
+
+    sync_impl(&dir.path().to_string_lossy()).expect("sync");
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("AGENTS.md")).expect("agents"),
+        managed_block()
+    );
 }
 
 #[test]
-fn upsert_managed_block_replaces_existing_managed_section() {
-    let existing = format!("head\n\n{AGENTS_MANAGED_BEGIN}\nold\n{AGENTS_MANAGED_END}\n\ntail\n");
-    let managed = format!("{AGENTS_MANAGED_BEGIN}\nnew\n{AGENTS_MANAGED_END}\n");
-    let updated = upsert_managed_block(&existing, &managed);
+fn agents_sync_replaces_only_managed_section_and_preserves_user_content() {
+    let dir = TempDir::new().expect("tempdir");
+    let path = dir.path().join("AGENTS.md");
+    fs::write(
+        &path,
+        format!("head\n\n{MANAGED_BEGIN}\nold\n{MANAGED_END}\n\ntail\n"),
+    )
+    .expect("agents");
+
+    sync_impl(&dir.path().to_string_lossy()).expect("sync");
+
+    let updated = fs::read_to_string(path).expect("agents");
     assert!(updated.contains("head"));
     assert!(updated.contains("tail"));
-    assert!(updated.contains("\nnew\n"));
+    assert!(updated.contains("## Code quality guidance for AI agents"));
     assert!(!updated.contains("\nold\n"));
 }
 
 #[test]
-fn upsert_managed_block_is_idempotent() {
-    let managed = format!("{AGENTS_MANAGED_BEGIN}\n## Ayni\nx\n{AGENTS_MANAGED_END}\n");
-    let once = upsert_managed_block("", &managed);
-    let twice = upsert_managed_block(&once, &managed);
+fn agents_sync_is_idempotent() {
+    let dir = TempDir::new().expect("tempdir");
+    sync_impl(&dir.path().to_string_lossy()).expect("first sync");
+    let once = fs::read_to_string(dir.path().join("AGENTS.md")).expect("agents");
+    sync_impl(&dir.path().to_string_lossy()).expect("second sync");
+    let twice = fs::read_to_string(dir.path().join("AGENTS.md")).expect("agents");
+
     assert_eq!(once, twice);
+}
+
+#[test]
+fn upsert_managed_block_appends_when_missing() {
+    let existing = "# Repository Rules\n\nKeep this text.\n";
+    let updated = upsert_managed_block(existing, &managed_block());
+    assert!(updated.contains("Keep this text."));
+    assert!(updated.contains(MANAGED_BEGIN));
+    assert!(updated.contains(MANAGED_END));
 }
 
 #[test]
@@ -141,6 +164,20 @@ fn install_parser_defaults_to_no_language_selection() {
 }
 
 #[test]
+fn agents_sync_parser_accepts_repo_root() {
+    let cli = Cli::try_parse_from(["ayni", "agents", "sync", "--repo-root", "fixture"])
+        .expect("arguments parse");
+    let Commands::Agents {
+        command: AgentsCommands::Sync { repo_root },
+    } = cli.command
+    else {
+        panic!("agents sync command");
+    };
+
+    assert_eq!(repo_root, "fixture");
+}
+
+#[test]
 fn default_policy_templates_are_valid_for_each_language() {
     for language in [
         Language::Rust,
@@ -218,6 +255,20 @@ fn install_bootstraps_policy_for_every_selected_language() {
     );
     assert_eq!(policy.roots_for(Language::Rust), ["."]);
     assert_eq!(policy.roots_for(Language::Node), ["."]);
+}
+
+#[test]
+fn install_does_not_create_or_modify_agents_file() {
+    let absent = TempDir::new().expect("tempdir");
+    install_impl(&absent.path().to_string_lossy(), &BTreeSet::new(), false).expect("install");
+    assert!(!absent.path().join("AGENTS.md").exists());
+
+    let existing = TempDir::new().expect("tempdir");
+    let path = existing.path().join("AGENTS.md");
+    let original = String::from("# User instructions\n\nDo not change this.\n");
+    fs::write(&path, &original).expect("agents");
+    install_impl(&existing.path().to_string_lossy(), &BTreeSet::new(), false).expect("install");
+    assert_eq!(fs::read_to_string(path).expect("agents"), original);
 }
 
 #[test]

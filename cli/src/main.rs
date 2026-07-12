@@ -7,11 +7,13 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+mod agents;
 mod delta;
 mod discovery;
 mod install;
 mod ui;
 
+use agents::sync_impl;
 use ayni_adapters_node::NodeAdapter;
 use ayni_adapters_python::PythonAdapter;
 use ayni_adapters_rust::RustAdapter;
@@ -27,8 +29,6 @@ use install::{enabled_signal_kinds, install_impl, persist_artifact};
 
 const ARTIFACTS_DIR: &str = ".ayni/last";
 const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
-const AGENTS_MANAGED_BEGIN: &str = "<!-- AYNI:BEGIN -->";
-const AGENTS_MANAGED_END: &str = "<!-- AYNI:END -->";
 const RUST_POLICY_TEMPLATE: &str = include_str!("../templates/policy/rust.toml");
 const GO_POLICY_TEMPLATE: &str = include_str!("../templates/policy/go.toml");
 const NODE_POLICY_TEMPLATE: &str = include_str!("../templates/policy/node.toml");
@@ -73,10 +73,24 @@ enum Commands {
         #[arg(long)]
         apply: bool,
     },
+    /// Manage Ayni's agent instructions.
+    Agents {
+        #[command(subcommand)]
+        command: AgentsCommands,
+    },
     /// Print the Ayni CLI version.
     Version,
     #[command(hide = true)]
     GenerateDocs,
+}
+
+#[derive(Subcommand, Debug)]
+enum AgentsCommands {
+    /// Create or update Ayni's managed section in AGENTS.md.
+    Sync {
+        #[arg(long, default_value = ".")]
+        repo_root: String,
+    },
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -134,6 +148,9 @@ fn main() -> ExitCode {
             language,
             apply,
         } => install(&repo_root, selected_install_languages(language), apply),
+        Commands::Agents {
+            command: AgentsCommands::Sync { repo_root },
+        } => agents_sync(&repo_root),
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -141,6 +158,16 @@ fn main() -> ExitCode {
         Commands::GenerateDocs => {
             println!("{}", clap_markdown::help_markdown::<Cli>());
             ExitCode::SUCCESS
+        }
+    }
+}
+
+fn agents_sync(repo_root: &str) -> ExitCode {
+    match sync_impl(repo_root) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
         }
     }
 }
