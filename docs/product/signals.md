@@ -22,7 +22,9 @@ Every signal row includes:
 
 Every `ayni analyze` run writes a schema-v2 `RunArtifact` to
 `.ayni/last/signals.json`. The same payload can be printed to stdout with
-`ayni analyze --output json`. Consumers must check `schema_version` before
+either `ayni analyze --json` or `ayni analyze --output json`. The selectors are
+equivalent; `--json` cannot be combined with `--output stdout` or `--output md`.
+Consumers must check `schema_version` before
 relying on field shapes; Ayni ignores previous artifacts whose schema version
 differs when computing `delta_vs_previous`.
 
@@ -53,6 +55,19 @@ independently editable state.
 Rows for command-backed signals may also include `failure` inside the typed
 result. Failure objects use the shared categories defined in
 [`runtime.md`](runtime.md).
+
+### JSON v2 migration and report views
+
+Schema v2 is a breaking replacement for v1 JSON consumers: migrate parsers to
+the v2 top-level run envelope and typed `rows` rather than assuming a v1 shape.
+There is no compatibility payload or automatic v1-to-v2 conversion. The
+persisted artifact and both JSON selectors use the same v2 payload.
+
+Markdown is a human view of those rows: **Offenders** lists typed warn/fail
+findings, while **Failures** is omitted unless command failures exist and then
+summarizes their classification, command, cwd, exit code when present, and
+message. These diagnostics, as well as `config_path`, `repository_root`, and
+offender paths in JSON, may reveal repository paths or tool output.
 
 ## Signal kinds
 

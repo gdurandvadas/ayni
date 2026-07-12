@@ -67,10 +67,11 @@ enum Commands {
         #[arg(long)]
         debug: bool,
     },
-    /// Scaffold repo guidance and show required tools; use `--apply` to install them.
+    /// Scaffold repository policy and show required tools; use `--apply` to install them.
     Install {
         #[arg(long, default_value = ".")]
         repo_root: String,
+        /// Limit setup to one or more languages; repeat `--language` for polyglot repositories.
         #[arg(long, value_enum)]
         language: Vec<LanguageArg>,
         /// Install missing or outdated tools from adapter catalogs (cargo, rustup, go, npm, …).

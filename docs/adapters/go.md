@@ -58,6 +58,18 @@ Go tools are declared in `catalog.rs` using `CatalogEntry` + `Installer`:
 
 Each entry declares `for_signals`, so `ayni install` can derive required tools from enabled checks.
 
+## Setup contract
+
+**Runtime and build assumption:** a Go module (`go.mod`), optionally under a
+`go.work` workspace, with the Go toolchain on `PATH`. Ayni detects/expects the
+toolchain; it does not install Go itself. `--apply` uses `go install` only for
+catalog-managed tools whose checks are enabled.
+
+| Tool | Signals | Required or optional | Ownership |
+| --- | --- | --- | --- |
+| `go` | test, coverage, size, deps, mutation | required | Ayni detects/expects it; Go toolchain installation is user-owned |
+| `gocyclo` | complexity | required when complexity is enabled | Ayni installs with `go install` under `--apply`, otherwise detects/reports |
+
 ## Policy expectations
 
 Go collectors read these `.ayni.toml` sections:
@@ -109,7 +121,9 @@ line_percent = { warn = 70, fail = 50 }
 
 ## `ayni install --language go`
 
-`--language go` scopes installation to Go catalog entries only.
+`--language go` scopes installation to Go catalog entries only. Repeat
+`--language` for multiple adapters (for example `--language go --language node`);
+duplicates are ignored.
 
 ```bash
 ayni install --language go --repo-root <path>
@@ -123,6 +137,9 @@ The install flow:
 4. Optionally install missing tools when `--apply` is passed.
 
 The flow is deterministic and idempotent.
+
+`install` never updates `AGENTS.md`; use `ayni agents sync --repo-root <path>`
+to update only Ayni's marked guidance section.
 
 ## `ayni analyze --language go`
 

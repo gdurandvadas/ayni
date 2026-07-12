@@ -22,7 +22,7 @@ repair targets.
 
 ## What Ayni Does
 
-- adds or updates agent-facing guidance in `AGENTS.md`
+- can create or update its marked agent-facing guidance in `AGENTS.md` with an explicit command
 - defines the repository-agent quality contract in `.ayni.toml`
 - collects `test`, `coverage`, `size`, `complexity`, `deps`, and `mutation` signals
 - runs language-specific tooling locally through adapters
@@ -67,6 +67,7 @@ cargo install --path cli
 
 ```sh
 ayni install
+ayni agents sync
 ayni analyze
 ```
 
@@ -77,11 +78,33 @@ tools from local language ecosystems:
 ayni install --apply
 ```
 
+`install` bootstraps policy, ignores `.ayni/`, and lists or (with `--apply`)
+installs catalog tools. It never changes `AGENTS.md`; run `ayni agents sync`
+when you intentionally want its marked Ayni section created or refreshed.
+
+For a polyglot repository, repeat `--language`; duplicate values are ignored:
+
+```sh
+ayni install --repo-root . --language rust --language node --language python --apply
+```
+
+Single-language setup remains valid, for example `ayni install --language go`.
+
 Generate Markdown output:
 
 ```sh
 ayni analyze --output md
 ```
+
+Emit the schema-v2 artifact for scripts with either equivalent selector:
+
+```sh
+ayni analyze --json
+ayni analyze --output json
+```
+
+Do not combine `--json` with `--output stdout` or `--output md`; use one JSON
+selector instead. JSON is written to stdout and progress to stderr.
 
 For the full CLI reference, see [`docs/cli.md`](docs/cli.md).
 
@@ -90,7 +113,7 @@ For the full CLI reference, see [`docs/cli.md`](docs/cli.md).
 <!-- ayni:md branch=feat/kotlin -->
 # ayni analyze
 
-**5** / **5** checks passing · schema `0.1.0`
+**5** / **5** checks passing · schema `0.2.0`
 
 ## rust (workspace) — 5/5 passing
 
@@ -146,6 +169,12 @@ complexity
 
 </details>
 
+Markdown always groups typed findings in **Offenders**. It adds **Failures** only
+when a collector command failed; each failure includes its classification,
+command, working directory, exit code when available, and message. Reports and
+JSON artifacts can therefore expose repository paths and raw tool output; treat
+them as repository diagnostics when sharing them.
+
 ## Signals
 
 Ayni emits a closed signal vocabulary shared across language adapters.
@@ -188,6 +217,12 @@ fn_cyclomatic = { warn = 10, fail = 20 }
 
 For the full configuration reference, see
 [`docs/product/config.md`](docs/product/config.md).
+
+Size and complexity are maximums: at `warn` or higher they warn, and at `fail`
+or higher they fail. Coverage is a minimum: below `warn` it warns and below
+`fail` it fails. Thus `{ warn = 400, fail = 700 }` warns at 400 lines and fails
+at 700, while `{ warn = 80, fail = 70 }` warns below 80% coverage and fails
+below 70%. Warnings remain visible but do not make a row fail.
 
 ## How It Fits Together
 

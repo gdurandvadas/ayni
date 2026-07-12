@@ -68,8 +68,12 @@ cargo doc-cli > docs/cli.md
 ## Ayni (Rust)
 
 - `cargo run -p ayni-cli -- install --repo-root . --language rust` scaffolds
-  `.ayni.toml`, ensures `.gitignore` contains `.ayni/`, updates the Ayni-managed
-  `AGENTS.md` block, and lists Rust adapter tools; add `--apply` to install them.
+  `.ayni.toml`, ensures `.gitignore` contains `.ayni/`, and lists Rust adapter
+  tools; add `--apply` to install them. It does not update `AGENTS.md`.
+- `cargo run -p ayni-cli -- agents sync --repo-root .` is the only command that
+  creates or refreshes the Ayni-managed `AGENTS.md` block.
+- Repeat install languages for polyglot fixtures, for example
+  `--language rust --language node`; repeated values are deduplicated.
 - `cargo test -p <pkg>` runs package-scoped tests.
 - `cargo run -p ayni-cli -- analyze --config ./.ayni.toml --package <pkg>`
   runs scoped analysis.
@@ -100,4 +104,10 @@ Run:
 ```sh
 ayni analyze
 ```
+
+A non-zero exit code means at least one signal failed. For typed,
+machine-readable schema-v2 results (per-signal offenders, budgets, and deltas),
+run `ayni analyze --json` (or `--output json`) or read `.ayni/last/signals.json`
+after any analyze run, then repair the listed offenders and re-run
+until every row passes.
 <!-- AYNI:END -->

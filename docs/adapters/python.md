@@ -69,6 +69,23 @@ Each entry declares install/check behavior, required signal kinds
 | `for_signals` | required signal kinds |
 | `opt_in` | expensive or optional checks such as mutation |
 
+## Setup contract
+
+**Runtime and package-manager assumption:** Python is available on `PATH` and
+each root has one of the documented `uv`, Poetry, PDM, Pipenv, Hatch, or plain
+`pyproject.toml`/`requirements.txt` contexts. Ayni resolves the runner from
+those markers and expects the runtime/package manager to be installed; it does
+not install Python, `uv`, Poetry, PDM, Pipenv, or Hatch. With `--apply`, local
+packages use the resolved manager and `complexipy` uses `uv tool`.
+
+| Tool/package | Signals | Required or optional | Ownership |
+| --- | --- | --- | --- |
+| `python` | all Python signals | required | Ayni detects/expects it; runtime installation is user-owned |
+| `pytest`, `pytest-json-report` | test | required when test is enabled | Ayni installs local dev packages with `--apply`, otherwise detects/reports |
+| `pytest`, `pytest-cov`, `coverage` | coverage | required when coverage is enabled | Ayni installs local dev packages with `--apply`, otherwise detects/reports |
+| `complexipy` | complexity | required when complexity is enabled | Ayni installs with `uv tool` under `--apply`, otherwise detects/reports |
+| `mutmut` | mutation | optional (`mutation` is opt-in) | Ayni installs a local dev package with `--apply` when enabled, otherwise detects/reports |
+
 ## Policy expectations
 
 Python collectors read these `.ayni.toml` sections:
@@ -124,7 +141,9 @@ line_percent = { warn = 80, fail = 60 }
 
 ## `ayni install --language python`
 
-`--language python` scopes installation to Python catalog entries only.
+`--language python` scopes installation to Python catalog entries only. Repeat
+the flag for polyglot setup (for example `--language python --language kotlin`);
+duplicates are ignored.
 
 ```sh
 ayni install --language python --repo-root <path>
@@ -132,6 +151,8 @@ ayni install --language python --repo-root <path>
 
 The flow is deterministic and idempotent. `ayni install --apply` also validates
 that the resolved runner can invoke the installed Python tools for each root.
+It does not update `AGENTS.md`; run `ayni agents sync --repo-root <path>` to
+update Ayni's marked block explicitly.
 
 ## `ayni analyze --language python`
 

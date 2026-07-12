@@ -298,6 +298,11 @@ complexity), a value at or above `warn` is a warning and a value at or above
 "src/**/*.rs" = { warn = 400, fail = 700 }
 ```
 
+For that size rule, a 399-line file passes, a 400-line file is a visible warning
+but does not fail the row, and a 700-line file is a fail-level offender that
+makes the row fail. Complexity uses the same direction: with
+`{ warn = 10, fail = 20 }`, a function at 10 warns and one at 20 fails.
+
 For **minimum** metrics (coverage), a value below `warn` is a warning and a
 value below `fail` fails the signal, so `warn` must be at least `fail`:
 
@@ -306,8 +311,26 @@ value below `fail` fails the signal, so `warn` must be at least `fail`:
 line_percent = { warn = 80, fail = 70 }
 ```
 
+For that coverage rule, 80% passes, 79% is a warning, and 69% is a failing
+offender. Coverage reverses the comparison because more coverage is better.
+Warnings are retained in reports and aggregate warning counts, while only
+fail-level offenders make a row and the aggregate run status fail.
+
 The effective typed budgets applied to each analyzed row are preserved in the
 schema-v2 artifact's `applied_thresholds` field; see [`signals.md`](signals.md).
+
+## Output and report safety
+
+`ayni analyze --output md` renders typed findings under **Offenders** and adds a
+**Failures** section only when a collector command failed. Failure entries can
+include the command, working directory, exit code, and tool message. Markdown
+and the schema-v2 JSON artifact can consequently expose repository paths and raw
+tool output; do not publish them without reviewing that diagnostic data.
+
+For machine consumers, `ayni analyze --json` and `ayni analyze --output json`
+select the same schema-v2 artifact. `--json` conflicts with an explicit
+non-JSON `--output` value (`stdout` or `md`); choose one output mode. See
+[`signals.md`](signals.md) for the schema and migration contract.
 
 ---
 

@@ -7,6 +7,8 @@ This document contains the help content for the `ayni` command-line program.
 * [`ayni`↴](#ayni)
 * [`ayni analyze`↴](#ayni-analyze)
 * [`ayni install`↴](#ayni-install)
+* [`ayni agents`↴](#ayni-agents)
+* [`ayni agents sync`↴](#ayni-agents-sync)
 * [`ayni version`↴](#ayni-version)
 
 ## `ayni`
@@ -18,7 +20,8 @@ Open-source code quality signals for AI agents
 ###### **Subcommands:**
 
 * `analyze` — Analyze the local repository and print a quality report
-* `install` — Scaffold repo guidance and show required tools; use `--apply` to install them
+* `install` — Scaffold repository policy and show required tools; use `--apply` to install them
+* `agents` — Manage Ayni's agent instructions
 * `version` — Print the Ayni CLI version
 
 
@@ -42,8 +45,6 @@ Analyze the local repository and print a quality report
 
 * `--output <OUTPUT>` — Report format: `stdout` (default, coloured console), `md` (markdown report), or `json` (machine-readable signal artifact on stdout)
 
-  Default value: `stdout`
-
   Possible values:
   - `stdout`:
     Coloured console report (default)
@@ -52,13 +53,14 @@ Analyze the local repository and print a quality report
   - `json`:
     Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout
 
+* `--json` — Print the machine-readable signal artifact to stdout (equivalent to `--output json`)
 * `--debug` — Print raw command diagnostics and disable the live dashboard
 
 
 
 ## `ayni install`
 
-Scaffold repo guidance and show required tools; use `--apply` to install them
+Scaffold repository policy and show required tools; use `--apply` to install them
 
 **Usage:** `ayni install [OPTIONS]`
 
@@ -67,11 +69,37 @@ Scaffold repo guidance and show required tools; use `--apply` to install them
 * `--repo-root <REPO_ROOT>`
 
   Default value: `.`
-* `--language <LANGUAGE>`
+* `--language <LANGUAGE>` — Limit setup to one or more languages; repeat `--language` for polyglot repositories
 
   Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
 * `--apply` — Install missing or outdated tools from adapter catalogs (cargo, rustup, go, npm, …)
+
+
+
+## `ayni agents`
+
+Manage Ayni's agent instructions
+
+**Usage:** `ayni agents <COMMAND>`
+
+###### **Subcommands:**
+
+* `sync` — Create or update Ayni's managed section in AGENTS.md
+
+
+
+## `ayni agents sync`
+
+Create or update Ayni's managed section in AGENTS.md
+
+**Usage:** `ayni agents sync [OPTIONS]`
+
+###### **Options:**
+
+* `--repo-root <REPO_ROOT>`
+
+  Default value: `.`
 
 
 

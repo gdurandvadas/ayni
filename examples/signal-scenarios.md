@@ -1,7 +1,8 @@
 # Intentional signal scenarios
 
 ## Single repos (`examples/<lang>/single`)
-- No `.ayni.toml` and no `.ayni/` folder: validates `install` bootstrap.
+- No `.ayni.toml` and no `.ayni/` folder: validates `install` bootstrap. `install`
+  does not write `AGENTS.md`; validate that separately with `ayni agents sync`.
 - Greeting service endpoint exists.
 - Intentional complexity hotspot in `complex*` function to trigger complexity/readability signals.
 
