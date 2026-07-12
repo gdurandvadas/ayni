@@ -28,8 +28,9 @@ pub use policy::{
 pub use registry::AdapterRegistry;
 pub use runtime::{AdapterError, BranchDiff, ExecutionResolution, RunContext, Scope};
 pub use signal::{
-    AYNI_SIGNAL_SCHEMA_VERSION, Budget, CommandFailure, ComplexityOffender, ComplexityResult,
-    CoverageOffender, CoverageResult, Delta, DepsOffender, DepsResult, Level, MutationOffender,
-    MutationResult, Offenders, RunArtifact, SignalKind, SignalResult, SignalRow, SizeOffender,
-    SizeResult, TestFailure, TestResult,
+    AYNI_SIGNAL_SCHEMA_VERSION, AggregateStatus, AggregateSummary, AppliedThreshold, Budget,
+    CommandFailure, ComplexityOffender, ComplexityResult, CoverageOffender, CoverageResult, Delta,
+    DepsOffender, DepsResult, FailureSummary, InvocationContext, Level, MutationOffender,
+    MutationResult, OffenderSummary, Offenders, OutputContext, RunArtifact, RunArtifactMetadata,
+    SignalKind, SignalResult, SignalRow, SizeOffender, SizeResult, TestFailure, TestResult,
 };

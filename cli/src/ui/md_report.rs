@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use ayni_core::{Level, Offenders, RunArtifact, SignalResult, SignalRow};
+use ayni_core::{FailureSummary, Level, Offenders, RunArtifact, SignalResult, SignalRow};
 
 const PASS_IMAGE_URL: &str =
     "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg";
@@ -72,7 +72,64 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
             out.push_str("</details>\n\n");
         }
     }
+    render_failures(&mut out, artifact.failure_summaries());
     out
+}
+
+fn render_failures(out: &mut String, failures: Option<Vec<FailureSummary>>) {
+    let Some(failures) = failures else {
+        return;
+    };
+
+    out.push_str("## Failures\n\n");
+    for failure in failures {
+        out.push_str(&format!(
+            "### {} ({})\n\n",
+            signal_kind_label_from_summary(&failure),
+            failure.language.as_str(),
+        ));
+        markdown_failure_field(out, "Category", &failure.category);
+        markdown_failure_field(out, "Classification", &failure.classification);
+        markdown_failure_field(out, "Command", &failure.command);
+        markdown_failure_field(out, "Working directory", &failure.cwd);
+        if let Some(exit_code) = failure.exit_code {
+            markdown_failure_field(out, "Exit code", &exit_code.to_string());
+        }
+        markdown_failure_field(out, "Message", &failure.message);
+    }
+}
+
+fn signal_kind_label_from_summary(failure: &FailureSummary) -> &'static str {
+    match failure.kind {
+        ayni_core::SignalKind::Test => "test",
+        ayni_core::SignalKind::Coverage => "coverage",
+        ayni_core::SignalKind::Size => "size",
+        ayni_core::SignalKind::Complexity => "complexity",
+        ayni_core::SignalKind::Deps => "deps",
+        ayni_core::SignalKind::Mutation => "mutation",
+    }
+}
+
+fn markdown_failure_field(out: &mut String, label: &str, value: &str) {
+    out.push_str(&format!(
+        "**{label}:**\n\n{}\n\n",
+        markdown_code_block(value)
+    ));
+}
+
+fn markdown_code_block(value: &str) -> String {
+    let fence = "`"
+        .repeat(longest_backtick_run(value) + 1)
+        .max("```".to_string());
+    format!("{fence}text\n{value}\n{fence}")
+}
+
+fn longest_backtick_run(value: &str) -> usize {
+    value
+        .split(|character| character != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0)
 }
 
 fn row_status_label(row: &SignalRow) -> &'static str {
@@ -244,15 +301,17 @@ fn has_warn_offenders(offenders: &Offenders) -> bool {
 mod tests {
     use super::build_markdown;
     use ayni_core::{
-        Budget, CoverageOffender, CoverageResult, Delta, Language, Level, Offenders, RunArtifact,
-        Scope, SignalKind, SignalResult, SignalRow,
+        AYNI_SIGNAL_SCHEMA_VERSION, Budget, CommandFailure, CoverageOffender, CoverageResult,
+        Delta, DepsResult, Language, Level, Offenders, RunArtifact, Scope, SignalKind,
+        SignalResult, SignalRow, SizeResult, TestFailure, TestResult,
     };
     use serde_json::json;
 
     #[test]
     fn build_markdown_renders_grouped_table() {
         let artifact = RunArtifact {
-            schema_version: String::from("0.1.0"),
+            schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
+            metadata: Default::default(),
             rows: vec![SignalRow {
                 kind: SignalKind::Coverage,
                 language: Language::Rust,
@@ -292,5 +351,157 @@ mod tests {
         assert!(text.contains("<details>\n<summary>Offenders</summary>\n\n"));
         assert!(text.contains("\ncoverage\n- "));
         assert!(text.contains("**FAIL** `src/lib.rs` 41.0%"));
+        assert!(!text.contains("## Failures"));
+    }
+
+    #[test]
+    fn build_markdown_renders_all_failures_without_truncating_them() {
+        let artifact = RunArtifact {
+            schema_version: String::from("0.2.0"),
+            metadata: Default::default(),
+            rows: vec![
+                SignalRow {
+                    kind: SignalKind::Test,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Test(TestResult {
+                        total_tests: 2,
+                        passed: 0,
+                        failed: 2,
+                        duration_ms: None,
+                        runner: String::from("cargo test"),
+                        failure: Some(CommandFailure {
+                            category: String::from("tool"),
+                            classification: String::from("command_error"),
+                            command: String::from("cargo test `weird`"),
+                            cwd: String::from("/tmp/a[yni]"),
+                            exit_code: Some(101),
+                            message: String::from("failed *badly*\n```"),
+                        }),
+                    }),
+                    budget: Budget::Test(json!({})),
+                    offenders: Offenders::Test(vec![
+                        TestFailure {
+                            file: None,
+                            line: None,
+                            message: String::from("first"),
+                            test_name: Some(String::from("first_failure")),
+                        },
+                        TestFailure {
+                            file: None,
+                            line: None,
+                            message: String::from("second"),
+                            test_name: Some(String::from("second_failure")),
+                        },
+                    ]),
+                    delta_vs_previous: None,
+                },
+                SignalRow {
+                    kind: SignalKind::Coverage,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Coverage(CoverageResult {
+                        percent: None,
+                        line_percent: None,
+                        branch_percent: None,
+                        engine: String::from("coverage"),
+                        status: String::from("failed"),
+                        failure: Some(CommandFailure {
+                            category: String::from("tool"),
+                            classification: String::from("timeout"),
+                            command: String::from("coverage run"),
+                            cwd: String::from("/tmp/ayni"),
+                            exit_code: None,
+                            message: String::from("timed out"),
+                        }),
+                    }),
+                    budget: Budget::Coverage(json!({})),
+                    offenders: Offenders::Coverage(Vec::new()),
+                    delta_vs_previous: None,
+                },
+            ],
+        };
+
+        let text = build_markdown(&artifact, 1);
+        assert!(text.contains("first_failure"));
+        assert!(!text.contains("second_failure"));
+        assert!(text.contains("## Failures"));
+        assert!(text.contains("### test (rust)"));
+        assert!(text.contains("**Category:**\n\n```text\ntool"));
+        assert!(text.contains("**Classification:**\n\n```text\ncommand_error"));
+        assert!(text.contains("**Command:**\n\n```text\ncargo test `weird`"));
+        assert!(text.contains("**Working directory:**\n\n```text\n/tmp/a[yni]"));
+        assert!(text.contains("**Exit code:**\n\n```text\n101"));
+        assert!(text.contains("**Message:**\n\n````text\nfailed *badly*\n```\n````"));
+        let test_failure = text.find("### test (rust)").expect("test failure");
+        let coverage_failure = text.find("### coverage (rust)").expect("coverage failure");
+        assert!(test_failure < coverage_failure);
+        let coverage_section = &text[coverage_failure..];
+        assert!(!coverage_section.contains("**Exit code:**"));
+    }
+
+    #[test]
+    fn build_markdown_renders_complete_size_and_deps_failures() {
+        let failure = |kind: &str, exit_code| CommandFailure {
+            category: format!("{kind}_category"),
+            classification: format!("{kind}_classification"),
+            command: format!("{kind} command"),
+            cwd: format!("/{kind}"),
+            exit_code,
+            message: format!("{kind} message"),
+        };
+        let artifact = RunArtifact {
+            schema_version: String::from("0.2.0"),
+            metadata: Default::default(),
+            rows: vec![
+                SignalRow {
+                    kind: SignalKind::Size,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Size(SizeResult {
+                        max_lines: 0,
+                        total_files: 0,
+                        warn_count: 0,
+                        fail_count: 1,
+                        failure: Some(failure("size", Some(17))),
+                    }),
+                    budget: Budget::Size(json!({})),
+                    offenders: Offenders::Size(Vec::new()),
+                    delta_vs_previous: None,
+                },
+                SignalRow {
+                    kind: SignalKind::Deps,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Deps(DepsResult {
+                        crate_count: 0,
+                        edge_count: 0,
+                        violation_count: 1,
+                        failure: Some(failure("deps", None)),
+                    }),
+                    budget: Budget::Deps(json!({})),
+                    offenders: Offenders::Deps(Vec::new()),
+                    delta_vs_previous: None,
+                },
+            ],
+        };
+
+        let text = build_markdown(&artifact, 1);
+        for (kind, exit_code) in [("size", Some(17)), ("deps", None)] {
+            assert!(text.contains(&format!("### {kind} (rust)")));
+            assert!(text.contains(&format!("{}{}_category", "```text\n", kind)));
+            assert!(text.contains(&format!("{}{}_classification", "```text\n", kind)));
+            assert!(text.contains(&format!("{}{} command", "```text\n", kind)));
+            assert!(text.contains(&format!("{}{}", "```text\n/", kind)));
+            assert!(text.contains(&format!("{}{} message", "```text\n", kind)));
+            match exit_code {
+                Some(code) => assert!(text.contains(&format!("**Exit code:**\n\n```text\n{code}"))),
+                None => assert!(!text.contains("**Exit code:**\n\n```text\nnone")),
+            }
+        }
     }
 }

@@ -55,6 +55,21 @@ Rust tools are declared in `catalog.rs` using `CatalogEntry` + `Installer`:
 
 Each entry declares `for_signals`, so `ayni install` can infer install needs from enabled signal kinds.
 
+## Setup contract
+
+**Runtime and build assumption:** a Cargo project or workspace with `cargo` on
+`PATH`; Ayni executes member commands from the workspace root. Cargo/Rustup are
+host prerequisites: Ayni detects them but does not install a Rust toolchain.
+With `--apply`, Ayni installs catalog-managed tools only when their associated
+check is enabled.
+
+| Tool | Signals | Required or optional | Ownership |
+| --- | --- | --- | --- |
+| `cargo` | test (and Cargo execution) | required | Ayni detects/expects it; Rustup/Cargo installation is user-owned |
+| `llvm-tools-preview`, `cargo-llvm-cov` | coverage | required when coverage is enabled | Ayni installs via Rustup/Cargo with `--apply`, otherwise detects/reports |
+| `rust-code-analysis-cli` | complexity | required when complexity is enabled | Ayni installs via Cargo with `--apply`, otherwise detects/reports |
+| `cargo-mutants` | mutation | optional (`mutation` is opt-in) | Ayni installs via Cargo with `--apply` when enabled, otherwise detects/reports |
+
 ## Policy expectations
 
 Rust collectors read these policy sections:
@@ -129,10 +144,11 @@ Every tool documented in the catalog section above must be present in this data 
 
 ## `ayni install --language rust`
 
-`--language rust` scopes installation to Rust only. Omitting `--language` installs for every enabled language.
+`--language rust` scopes installation to Rust only. Omitting `--language` installs for every enabled language. Repeat the flag for polyglot setup; values are deduplicated.
 
 ```bash
 ayni install --language rust --repo-root <path>
+ayni install --language rust --language node --repo-root <path>
 ```
 
 **What it does:**
@@ -144,6 +160,9 @@ ayni install --language rust --repo-root <path>
    - Run `check_cmd`. If it exits zero, the tool is already present — skip.
    - Otherwise, run `install_cmd` to install the missing tool.
 4. Reports a summary: which tools were installed, which were already present, which were skipped, and any install failures.
+
+`install` does not change `AGENTS.md`. Run `ayni agents sync --repo-root <path>`
+to intentionally create or refresh Ayni's marked guidance block.
 
 The flow is deterministic and idempotent. Running `ayni install --language rust` twice in a row performs zero installs the second time.
 

@@ -66,6 +66,23 @@ Each entry declares:
 | `for_signals` | required signal kinds |
 | `opt_in` | expensive or optional checks such as mutation |
 
+## Setup contract
+
+**Runtime and package-manager assumption:** Node.js is available on `PATH` and
+each root has a supported package-manager context. Ayni resolves `pnpm`, Yarn,
+npm, or Bun from lockfiles and `packageManager` metadata in the documented
+precedence; without a confident match it expects npm-compatible behavior. Ayni
+does not install Node or a package manager. It installs catalog packages as
+root-local development dependencies only with `install --apply`.
+
+| Tool/package | Signals | Required or optional | Ownership |
+| --- | --- | --- | --- |
+| `node` | all Node signals | required | Ayni detects/expects it; runtime installation is user-owned |
+| `vitest` | test, coverage | required when either check is enabled | Ayni adds the local dev dependency with `--apply`, otherwise detects/reports |
+| `@vitest/coverage-v8` | coverage | required when coverage is enabled | Ayni adds the local dev dependency with `--apply`, otherwise detects/reports |
+| `eslint`, `@stylistic/eslint-plugin` | complexity | required when complexity is enabled | Ayni adds local dev dependencies with `--apply`, otherwise detects/reports |
+| `@stryker-mutator/core` | mutation | optional (`mutation` is opt-in) | Ayni adds the local dev dependency with `--apply` when enabled, otherwise detects/reports |
+
 ## Policy expectations
 
 Node collectors read these `.ayni.toml` sections:
@@ -134,13 +151,18 @@ The same shape applies to `coverage` and `mutation`.
 
 ## `ayni install --language node`
 
-`--language node` scopes installation to Node catalog entries only.
+`--language node` scopes installation to Node catalog entries only. Repeat the
+flag for a polyglot repository, such as `--language node --language python`;
+repeated values are deduplicated.
 
 ```bash
 ayni install --language node --repo-root <path>
 ```
 
 The flow is deterministic and idempotent.
+
+It does not modify `AGENTS.md`; run `ayni agents sync --repo-root <path>` for
+the explicit, idempotent managed-guidance update.
 
 ## `ayni analyze --language node`
 

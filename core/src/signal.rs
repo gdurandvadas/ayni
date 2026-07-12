@@ -2,8 +2,8 @@ use crate::language::Language;
 use crate::runtime::Scope;
 use serde::{Deserialize, Serialize};
 
-/// Semantic version of the JSON `RunArtifact` contract (`schema_version` field). Pre-1.0; bump when breaking.
-pub const AYNI_SIGNAL_SCHEMA_VERSION: &str = "0.1.0";
+/// Semantic version of the JSON `RunArtifact` contract (`schema_version` field).
+pub const AYNI_SIGNAL_SCHEMA_VERSION: &str = "0.2.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -31,10 +31,88 @@ pub struct Delta {
     pub changes: serde_json::Value,
 }
 
+/// Serializable inputs supplied by the orchestration layer when building an artifact.
+/// Core deliberately does not read the clock, environment, or filesystem for these values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct RunArtifactMetadata {
+    pub generated_at: String,
+    pub ayni_version: String,
+    pub invocation: InvocationContext,
+    pub output: OutputContext,
+    pub config_path: String,
+    pub repository_root: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct InvocationContext {
+    pub command: String,
+    #[serde(default)]
+    pub languages: Vec<Language>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct OutputContext {
+    pub format: String,
+    pub destination: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AggregateStatus {
+    Pass,
+    Fail,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AggregateSummary {
+    pub status: AggregateStatus,
+    pub total_rows: u64,
+    pub passing_rows: u64,
+    pub failing_rows: u64,
+    pub warning_offenders: u64,
+    pub failing_offenders: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppliedThreshold {
+    pub kind: SignalKind,
+    pub language: Language,
+    pub scope: Scope,
+    pub budget: Budget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OffenderSummary {
+    pub kind: SignalKind,
+    pub language: Language,
+    pub scope: Scope,
+    pub total: u64,
+    pub warning_count: u64,
+    pub failing_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FailureSummary {
+    pub kind: SignalKind,
+    pub language: Language,
+    pub scope: Scope,
+    pub category: String,
+    pub classification: String,
+    pub command: String,
+    pub cwd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub message: String,
+}
+
+/// Schema-v2 artifact. Rows are the sole canonical analysis result; all aggregate,
+/// threshold, offender, and failure views are derived during serialization.
+#[derive(Debug, Clone, PartialEq)]
 pub struct RunArtifact {
     pub schema_version: String,
-    #[serde(default)]
+    pub metadata: RunArtifactMetadata,
     pub rows: Vec<SignalRow>,
 }
 
@@ -42,9 +120,225 @@ impl Default for RunArtifact {
     fn default() -> Self {
         Self {
             schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
+            metadata: RunArtifactMetadata::default(),
             rows: Vec::new(),
         }
     }
+}
+
+impl RunArtifact {
+    #[must_use]
+    pub fn new(metadata: RunArtifactMetadata, rows: Vec<SignalRow>) -> Self {
+        Self {
+            schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
+            metadata,
+            rows,
+        }
+    }
+
+    #[must_use]
+    pub fn aggregate(&self) -> AggregateSummary {
+        let total_rows = self.rows.len() as u64;
+        let passing_rows = self.rows.iter().filter(|row| row.pass).count() as u64;
+        let (warning_offenders, failing_offenders) = self
+            .rows
+            .iter()
+            .map(offender_counts)
+            .fold((0, 0), |(warnings, failures), (warn, fail)| {
+                (warnings + warn, failures + fail)
+            });
+        AggregateSummary {
+            status: if passing_rows == total_rows {
+                AggregateStatus::Pass
+            } else {
+                AggregateStatus::Fail
+            },
+            total_rows,
+            passing_rows,
+            failing_rows: total_rows - passing_rows,
+            warning_offenders,
+            failing_offenders,
+        }
+    }
+
+    #[must_use]
+    pub fn applied_thresholds(&self) -> Vec<AppliedThreshold> {
+        self.rows
+            .iter()
+            .map(|row| AppliedThreshold {
+                kind: row.kind,
+                language: row.language,
+                scope: row.scope.clone(),
+                budget: row.budget.clone(),
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn offender_summaries(&self) -> Vec<OffenderSummary> {
+        self.rows
+            .iter()
+            .filter_map(|row| {
+                let (warning_count, failing_count) = offender_counts(row);
+                let total = warning_count + failing_count;
+                (total > 0).then(|| OffenderSummary {
+                    kind: row.kind,
+                    language: row.language,
+                    scope: row.scope.clone(),
+                    total,
+                    warning_count,
+                    failing_count,
+                })
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn failure_summaries(&self) -> Option<Vec<FailureSummary>> {
+        let failures: Vec<_> = self
+            .rows
+            .iter()
+            .filter_map(|row| {
+                row.result.command_failure().map(|failure| FailureSummary {
+                    kind: row.kind,
+                    language: row.language,
+                    scope: row.scope.clone(),
+                    category: failure.category.clone(),
+                    classification: failure.classification.clone(),
+                    command: failure.command.clone(),
+                    cwd: failure.cwd.clone(),
+                    exit_code: failure.exit_code,
+                    message: failure.message.clone(),
+                })
+            })
+            .collect();
+        (!failures.is_empty()).then_some(failures)
+    }
+}
+
+impl Serialize for RunArtifact {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        RunArtifactSerialization::from(self).serialize(serializer)
+    }
+}
+
+#[derive(Serialize)]
+struct RunArtifactSerialization<'a> {
+    schema_version: &'a str,
+    generated_at: &'a str,
+    ayni_version: &'a str,
+    invocation: &'a InvocationContext,
+    output: &'a OutputContext,
+    config_path: &'a str,
+    repository_root: &'a str,
+    aggregate: AggregateSummary,
+    applied_thresholds: Vec<AppliedThreshold>,
+    rows: &'a [SignalRow],
+    offender_summaries: Vec<OffenderSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_summaries: Option<Vec<FailureSummary>>,
+}
+
+impl<'a> From<&'a RunArtifact> for RunArtifactSerialization<'a> {
+    fn from(artifact: &'a RunArtifact) -> Self {
+        Self {
+            schema_version: &artifact.schema_version,
+            generated_at: &artifact.metadata.generated_at,
+            ayni_version: &artifact.metadata.ayni_version,
+            invocation: &artifact.metadata.invocation,
+            output: &artifact.metadata.output,
+            config_path: &artifact.metadata.config_path,
+            repository_root: &artifact.metadata.repository_root,
+            aggregate: artifact.aggregate(),
+            applied_thresholds: artifact.applied_thresholds(),
+            rows: &artifact.rows,
+            offender_summaries: artifact.offender_summaries(),
+            failure_summaries: artifact.failure_summaries(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct RunArtifactWire {
+    schema_version: String,
+    generated_at: String,
+    ayni_version: String,
+    invocation: InvocationContext,
+    output: OutputContext,
+    config_path: String,
+    repository_root: String,
+    aggregate: AggregateSummary,
+    applied_thresholds: Vec<AppliedThreshold>,
+    rows: Vec<SignalRow>,
+    offender_summaries: Vec<OffenderSummary>,
+    #[serde(default)]
+    failure_summaries: Option<Vec<FailureSummary>>,
+}
+
+impl<'de> Deserialize<'de> for RunArtifact {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = RunArtifactWire::deserialize(deserializer)?;
+        let artifact = Self {
+            schema_version: wire.schema_version,
+            metadata: RunArtifactMetadata {
+                generated_at: wire.generated_at,
+                ayni_version: wire.ayni_version,
+                invocation: wire.invocation,
+                output: wire.output,
+                config_path: wire.config_path,
+                repository_root: wire.repository_root,
+            },
+            rows: wire.rows,
+        };
+        if artifact.aggregate() != wire.aggregate
+            || artifact.applied_thresholds() != wire.applied_thresholds
+            || artifact.offender_summaries() != wire.offender_summaries
+            || artifact.failure_summaries() != wire.failure_summaries
+        {
+            return Err(serde::de::Error::custom(
+                "artifact summaries must match canonical rows",
+            ));
+        }
+        Ok(artifact)
+    }
+}
+
+impl SignalResult {
+    #[must_use]
+    pub fn command_failure(&self) -> Option<&CommandFailure> {
+        match self {
+            SignalResult::Test(value) => value.failure.as_ref(),
+            SignalResult::Coverage(value) => value.failure.as_ref(),
+            SignalResult::Size(value) => value.failure.as_ref(),
+            SignalResult::Complexity(value) => value.failure.as_ref(),
+            SignalResult::Deps(value) => value.failure.as_ref(),
+            SignalResult::Mutation(value) => value.failure.as_ref(),
+        }
+    }
+}
+
+fn offender_counts(row: &SignalRow) -> (u64, u64) {
+    match &row.offenders {
+        Offenders::Test(items) => (0, items.len() as u64),
+        Offenders::Coverage(items) => level_counts(items.iter().map(|item| item.level)),
+        Offenders::Size(items) => level_counts(items.iter().map(|item| item.level)),
+        Offenders::Complexity(items) => level_counts(items.iter().map(|item| item.level)),
+        Offenders::Deps(items) => level_counts(items.iter().map(|item| item.level)),
+        Offenders::Mutation(items) => level_counts(items.iter().map(|item| item.level)),
+    }
+}
+
+fn level_counts(levels: impl Iterator<Item = Level>) -> (u64, u64) {
+    levels.fold((0, 0), |(warnings, failures), level| match level {
+        Level::Warn => (warnings + 1, failures),
+        Level::Fail => (warnings, failures + 1),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -167,6 +461,8 @@ pub struct SizeResult {
     pub total_files: u64,
     pub warn_count: u64,
     pub fail_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CommandFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -208,6 +504,8 @@ pub struct DepsResult {
     pub crate_count: u64,
     pub edge_count: u64,
     pub violation_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CommandFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -249,9 +547,23 @@ mod run_artifact_tests {
 
     #[test]
     fn run_artifact_json_roundtrip_preserves_rows() {
-        let artifact = RunArtifact {
-            schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
-            rows: vec![SignalRow {
+        let artifact = RunArtifact::new(
+            RunArtifactMetadata {
+                generated_at: String::from("2026-07-12T00:00:00Z"),
+                ayni_version: String::from("0.4.2"),
+                invocation: InvocationContext {
+                    command: String::from("analyze"),
+                    languages: vec![Language::Rust],
+                    scope: None,
+                },
+                output: OutputContext {
+                    format: String::from("json"),
+                    destination: String::from("stdout"),
+                },
+                config_path: String::from(".ayni.toml"),
+                repository_root: String::from("."),
+            },
+            vec![SignalRow {
                 kind: SignalKind::Test,
                 language: Language::Rust,
                 scope: Scope {
@@ -285,7 +597,7 @@ mod run_artifact_tests {
                 }]),
                 delta_vs_previous: None,
             }],
-        };
+        );
 
         let serialized = serde_json::to_string_pretty(&artifact).expect("serialize");
         let deserialized = serde_json::from_str::<RunArtifact>(&serialized).expect("deserialize");
@@ -293,8 +605,134 @@ mod run_artifact_tests {
 
         let value: serde_json::Value = serde_json::from_str(&serialized).expect("json value");
         assert_eq!(value["schema_version"], AYNI_SIGNAL_SCHEMA_VERSION);
+        assert_eq!(value["generated_at"], "2026-07-12T00:00:00Z");
+        assert_eq!(value["aggregate"]["status"], "fail");
+        assert_eq!(value["aggregate"]["total_rows"], 1);
+        assert_eq!(value["aggregate"]["failing_offenders"], 1);
+        assert_eq!(value["applied_thresholds"][0]["kind"], "test");
+        assert_eq!(value["offender_summaries"][0]["failing_count"], 1);
+        assert_eq!(
+            value["failure_summaries"][0]["classification"],
+            "command_error"
+        );
+        assert_eq!(value["failure_summaries"][0]["exit_code"], 101);
         assert_eq!(value["rows"][0]["kind"], "test");
         assert_eq!(value["rows"][0]["offenders"]["kind"], "test");
+    }
+
+    #[test]
+    fn derived_summaries_are_deterministic_and_empty_failures_are_omitted() {
+        let row = SignalRow {
+            kind: SignalKind::Size,
+            language: Language::Rust,
+            scope: Scope::default(),
+            pass: true,
+            result: SignalResult::Size(SizeResult {
+                max_lines: 20,
+                total_files: 1,
+                warn_count: 1,
+                fail_count: 0,
+                failure: None,
+            }),
+            budget: Budget::Size(serde_json::json!({ "warn": 10, "fail": 30 })),
+            offenders: Offenders::Size(vec![SizeOffender {
+                file: String::from("src/lib.rs"),
+                value: 20,
+                warn: 10,
+                fail: 30,
+                level: Level::Warn,
+            }]),
+            delta_vs_previous: None,
+        };
+        let artifact = RunArtifact::new(RunArtifactMetadata::default(), vec![row]);
+
+        assert_eq!(artifact.aggregate().status, AggregateStatus::Pass);
+        assert_eq!(artifact.aggregate().warning_offenders, 1);
+        assert_eq!(
+            artifact.applied_thresholds()[0].budget,
+            Budget::Size(serde_json::json!({ "warn": 10, "fail": 30 }))
+        );
+        assert_eq!(artifact.offender_summaries()[0].warning_count, 1);
+        assert_eq!(artifact.failure_summaries(), None);
+
+        let value = serde_json::to_value(&artifact).expect("serialize");
+        assert!(value.get("failure_summaries").is_none());
+        assert!(serde_json::from_value::<RunArtifact>(value).is_ok());
+    }
+
+    #[test]
+    fn size_and_deps_failures_roundtrip_to_complete_failure_summaries() {
+        let failure = |kind: &str, exit_code| CommandFailure {
+            category: format!("{kind}_category"),
+            classification: format!("{kind}_classification"),
+            command: format!("{kind} command"),
+            cwd: format!("/{kind}"),
+            exit_code,
+            message: format!("{kind} message"),
+        };
+        let artifact = RunArtifact::new(
+            RunArtifactMetadata::default(),
+            vec![
+                SignalRow {
+                    kind: SignalKind::Size,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Size(SizeResult {
+                        max_lines: 0,
+                        total_files: 0,
+                        warn_count: 0,
+                        fail_count: 1,
+                        failure: Some(failure("size", Some(17))),
+                    }),
+                    budget: Budget::Size(serde_json::json!({})),
+                    offenders: Offenders::Size(Vec::new()),
+                    delta_vs_previous: None,
+                },
+                SignalRow {
+                    kind: SignalKind::Deps,
+                    language: Language::Rust,
+                    scope: Scope::default(),
+                    pass: false,
+                    result: SignalResult::Deps(DepsResult {
+                        crate_count: 0,
+                        edge_count: 0,
+                        violation_count: 1,
+                        failure: Some(failure("deps", None)),
+                    }),
+                    budget: Budget::Deps(serde_json::json!({})),
+                    offenders: Offenders::Deps(Vec::new()),
+                    delta_vs_previous: None,
+                },
+            ],
+        );
+
+        assert_eq!(
+            artifact.rows[0].result.command_failure(),
+            Some(&failure("size", Some(17)))
+        );
+        assert_eq!(
+            artifact.rows[1].result.command_failure(),
+            Some(&failure("deps", None))
+        );
+        let summaries = artifact.failure_summaries().expect("failure summaries");
+        for (summary, kind, exit_code) in [
+            (&summaries[0], "size", Some(17)),
+            (&summaries[1], "deps", None),
+        ] {
+            assert_eq!(summary.category, format!("{kind}_category"));
+            assert_eq!(summary.classification, format!("{kind}_classification"));
+            assert_eq!(summary.command, format!("{kind} command"));
+            assert_eq!(summary.cwd, format!("/{kind}"));
+            assert_eq!(summary.exit_code, exit_code);
+            assert_eq!(summary.message, format!("{kind} message"));
+        }
+
+        let serialized = serde_json::to_string(&artifact).expect("serialize");
+        assert_eq!(
+            serde_json::from_str::<RunArtifact>(&serialized).expect("roundtrip"),
+            artifact
+        );
     }
 }
 

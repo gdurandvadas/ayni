@@ -1,13 +1,13 @@
 use crate::discovery::discover_language_roots;
 use crate::signal_kind_slug;
 use crate::{
-    AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, AYNI_POLICY_FILE, GO_POLICY_TEMPLATE,
-    KOTLIN_POLICY_TEMPLATE, NODE_POLICY_TEMPLATE, PYTHON_POLICY_TEMPLATE, RUST_POLICY_TEMPLATE,
+    AYNI_POLICY_FILE, GO_POLICY_TEMPLATE, KOTLIN_POLICY_TEMPLATE, NODE_POLICY_TEMPLATE,
+    PYTHON_POLICY_TEMPLATE, RUST_POLICY_TEMPLATE,
 };
 use ayni_adapters_common::catalog::{install_tool, tool_status};
 use ayni_core::{
     AyniPolicy, CatalogEntry, ExecutionResolution, InstallContext, Installer, Language,
-    NodePackageManager, PythonPackageManager, RunArtifact, SignalKind, ToolStatus, VersionCheck,
+    NodePackageManager, PythonPackageManager, SignalKind, ToolStatus, VersionCheck,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -15,15 +15,19 @@ use std::path::{Path, PathBuf};
 
 pub(crate) fn install_impl(
     repo_root: &str,
-    language_filter: Option<Language>,
+    selected_languages: &BTreeSet<Language>,
     apply: bool,
 ) -> Result<(), Vec<String>> {
     let root = PathBuf::from(repo_root);
-    let policy = prepare_install_policy(&root, language_filter).map_err(|error| vec![error])?;
+    let policy = prepare_install_policy(&root, selected_languages).map_err(|error| vec![error])?;
     if apply {
-        let mut failures = collect_install_failures(&root, &policy, language_filter);
+        let mut failures = collect_install_failures(&root, &policy, selected_languages);
         if failures.is_empty() {
-            failures.extend(validate_install_foundation(&root, &policy, language_filter));
+            failures.extend(validate_install_foundation(
+                &root,
+                &policy,
+                selected_languages,
+            ));
         }
         if failures.is_empty() {
             println!("foundation validation passed");
@@ -32,7 +36,7 @@ pub(crate) fn install_impl(
             Err(failures)
         }
     } else {
-        print_install_requirements(&root, &policy, language_filter);
+        print_install_requirements(&root, &policy, selected_languages);
         Ok(())
     }
 }
@@ -40,12 +44,10 @@ pub(crate) fn install_impl(
 pub(crate) fn print_install_requirements(
     repo_root: &Path,
     policy: &AyniPolicy,
-    language_filter: Option<Language>,
+    selected_languages: &BTreeSet<Language>,
 ) {
     println!("Ayni tooling requirements (from adapter catalogs)");
-    println!(
-        "Scaffolding is already updated (`.ayni.toml`, `.gitignore`, `AGENTS.md` when needed)."
-    );
+    println!("Scaffolding is already updated (`.ayni.toml`, `.gitignore`).");
     println!(
         "Run `ayni install --apply` to install missing or outdated tools (may use cargo, rustup, go, npm, …).\n"
     );
@@ -53,7 +55,7 @@ pub(crate) fn print_install_requirements(
     let mut any_tool_row = false;
     for adapter in registry.adapters() {
         let language = adapter.language();
-        if should_skip_install_language(policy, language, language_filter) {
+        if should_skip_install_language(policy, language, selected_languages) {
             continue;
         }
         for root_entry in policy.roots_for(language) {
@@ -214,13 +216,13 @@ fn fmt_uv_tool(package: &str, version: Option<&str>) -> String {
 fn collect_install_failures(
     root: &Path,
     policy: &AyniPolicy,
-    language_filter: Option<Language>,
+    selected_languages: &BTreeSet<Language>,
 ) -> Vec<String> {
     let mut failures = Vec::new();
     let registry = crate::build_registry();
     for adapter in registry.adapters() {
         let language = adapter.language();
-        if should_skip_install_language(policy, language, language_filter) {
+        if should_skip_install_language(policy, language, selected_languages) {
             continue;
         }
         for root_entry in policy.roots_for(language) {
@@ -239,9 +241,9 @@ fn collect_install_failures(
 fn should_skip_install_language(
     policy: &AyniPolicy,
     language: Language,
-    language_filter: Option<Language>,
+    selected_languages: &BTreeSet<Language>,
 ) -> bool {
-    matches!(language_filter, Some(filter) if filter != language)
+    (!selected_languages.is_empty() && !selected_languages.contains(&language))
         || !language_enabled(policy, language)
 }
 
@@ -320,15 +322,15 @@ pub(crate) fn catalog_entry_enabled_for_policy(policy: &AyniPolicy, entry: &Cata
 
 fn prepare_install_policy(
     root: &Path,
-    language_filter: Option<Language>,
+    selected_languages: &BTreeSet<Language>,
 ) -> Result<AyniPolicy, String> {
-    let scaffold = scaffold_files(root, language_filter)?;
+    let scaffold = scaffold_files(root, selected_languages)?;
     let policy = AyniPolicy::load(root)?;
     if scaffold.policy_created {
         let enabled_languages = policy.enabled_languages()?;
         let registry = crate::build_registry();
         let discovered_roots =
-            discover_language_roots(root, &enabled_languages, language_filter, &registry);
+            discover_language_roots(root, &enabled_languages, selected_languages, &registry);
         update_policy_roots(root, &discovered_roots)?;
         update_foundation_settings(root, &discovered_roots)?;
     }
@@ -338,13 +340,13 @@ fn prepare_install_policy(
 pub(crate) fn validate_install_foundation(
     repo_root: &Path,
     policy: &AyniPolicy,
-    language_filter: Option<Language>,
+    selected_languages: &BTreeSet<Language>,
 ) -> Vec<String> {
     let mut failures = Vec::new();
     let registry = crate::build_registry();
     for adapter in registry.adapters() {
         let language = adapter.language();
-        if should_skip_install_language(policy, language, language_filter)
+        if should_skip_install_language(policy, language, selected_languages)
             || policy
                 .language_tooling(language)
                 .foundation
@@ -419,21 +421,19 @@ struct ScaffoldOutcome {
 
 fn scaffold_files(
     repo_root: &Path,
-    language_filter: Option<Language>,
+    selected_languages: &BTreeSet<Language>,
 ) -> Result<ScaffoldOutcome, String> {
     let policy_path = repo_root.join(".ayni.toml");
     let policy_created = !policy_path.exists();
     if policy_created {
-        fs::write(&policy_path, default_policy_toml(language_filter))
+        fs::write(&policy_path, default_policy_toml(selected_languages))
             .map_err(|error| format!("failed to create {}: {error}", policy_path.display()))?;
     }
     ensure_ayni_gitignore_entry(&repo_root.join(".gitignore"))?;
-    ensure_agents_managed_section(repo_root)?;
     Ok(ScaffoldOutcome { policy_created })
 }
 
-pub(crate) fn default_policy_toml(language_filter: Option<Language>) -> String {
-    let language = language_filter.unwrap_or(Language::Rust);
+fn policy_template(language: Language) -> &'static str {
     match language {
         Language::Rust => RUST_POLICY_TEMPLATE,
         Language::Go => GO_POLICY_TEMPLATE,
@@ -441,7 +441,45 @@ pub(crate) fn default_policy_toml(language_filter: Option<Language>) -> String {
         Language::Python => PYTHON_POLICY_TEMPLATE,
         Language::Kotlin => KOTLIN_POLICY_TEMPLATE,
     }
-    .to_string()
+}
+
+pub(crate) fn default_policy_toml(selected_languages: &BTreeSet<Language>) -> String {
+    if selected_languages.is_empty() {
+        return RUST_POLICY_TEMPLATE.to_string();
+    }
+    if selected_languages.len() == 1 {
+        return policy_template(*selected_languages.first().expect("one language")).to_string();
+    }
+
+    let mut policy = toml::from_str::<toml::Table>(RUST_POLICY_TEMPLATE)
+        .expect("Rust policy template is valid TOML");
+    let languages = selected_languages
+        .iter()
+        .map(|language| toml::Value::String(language.as_str().to_string()))
+        .collect();
+    policy.insert(
+        String::from("languages"),
+        toml::Value::Table(toml::Table::from_iter([(
+            String::from("enabled"),
+            toml::Value::Array(languages),
+        )])),
+    );
+    if !selected_languages.contains(&Language::Rust) {
+        policy.remove("rust");
+    }
+    for language in selected_languages {
+        if *language == Language::Rust {
+            continue;
+        }
+        let template = toml::from_str::<toml::Table>(policy_template(*language))
+            .expect("language policy template is valid TOML");
+        let language_table = template
+            .get(language.as_str())
+            .expect("language policy template includes its language table")
+            .clone();
+        policy.insert(language.as_str().to_string(), language_table);
+    }
+    toml::to_string_pretty(&policy).expect("combined policy template is serializable")
 }
 
 fn update_policy_roots(
@@ -550,90 +588,6 @@ fn update_foundation_settings(
         .map_err(|error| format!("failed to write {}: {error}", policy_path.display()))
 }
 
-fn ensure_agents_managed_section(repo_root: &Path) -> Result<(), String> {
-    let path = repo_root.join("AGENTS.md");
-    let content = if path.exists() {
-        fs::read_to_string(&path)
-            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
-    } else {
-        String::new()
-    };
-    let managed = managed_agents_block();
-    let updated = upsert_managed_block(&content, &managed);
-    if updated != content {
-        fs::write(&path, updated)
-            .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
-    }
-    Ok(())
-}
-
-fn managed_agents_block() -> String {
-    [
-        AGENTS_MANAGED_BEGIN,
-        "## Code quality guidance for AI agents",
-        "",
-        "When modifying this repository:",
-        "",
-        "- Preserve clear module boundaries.",
-        "- Prefer small, testable units.",
-        "- Keep CLI, core logic, command execution, and reporting separate.",
-        "- Avoid adding network dependencies unless explicitly required.",
-        "- Update tests when behavior changes.",
-        "",
-        "Run:",
-        "",
-        "```sh",
-        "ayni analyze",
-        "```",
-        "",
-        "A non-zero exit code means at least one signal failed. For typed,",
-        "machine-readable results (per-signal offenders, budgets, and deltas),",
-        "run `ayni analyze --output json` or read `.ayni/last/signals.json`",
-        "after any analyze run, then repair the listed offenders and re-run",
-        "until every row passes.",
-        AGENTS_MANAGED_END,
-        "",
-    ]
-    .join("\n")
-}
-
-pub(crate) fn upsert_managed_block(existing: &str, managed: &str) -> String {
-    let normalized_existing = if existing.is_empty() {
-        String::new()
-    } else if existing.ends_with('\n') {
-        existing.to_string()
-    } else {
-        format!("{existing}\n")
-    };
-
-    let begin = normalized_existing.find(AGENTS_MANAGED_BEGIN);
-    let end = normalized_existing.find(AGENTS_MANAGED_END);
-    if let (Some(begin_idx), Some(end_idx)) = (begin, end)
-        && begin_idx <= end_idx
-    {
-        let end_exclusive = end_idx + AGENTS_MANAGED_END.len();
-        let mut result = String::new();
-        result.push_str(&normalized_existing[..begin_idx]);
-        result.push_str(managed);
-        if end_exclusive < normalized_existing.len() {
-            let remainder = normalized_existing[end_exclusive..].trim_start_matches('\n');
-            if !remainder.is_empty() {
-                result.push_str(remainder);
-                if !result.ends_with('\n') {
-                    result.push('\n');
-                }
-            }
-        }
-        return result;
-    }
-
-    if normalized_existing.is_empty() {
-        managed.to_string()
-    } else {
-        format!("{normalized_existing}\n{managed}")
-    }
-}
-
 fn ensure_ayni_gitignore_entry(path: &Path) -> Result<(), String> {
     let mut content = if path.exists() {
         fs::read_to_string(path)
@@ -679,13 +633,8 @@ pub(crate) fn enabled_signal_kinds(policy: &AyniPolicy) -> Vec<SignalKind> {
     kinds
 }
 
-pub(crate) fn persist_artifact(repo_root: &Path, artifact: &RunArtifact) -> Result<(), String> {
-    let serialized = serde_json::to_string_pretty(artifact)
-        .map_err(|error| format!("failed to serialize artifact: {error}"))?;
-    fs::write(
-        repo_root.join(crate::SIGNALS_ARTIFACT),
-        format!("{serialized}\n"),
-    )
-    .map_err(|error| format!("failed to write {}: {error}", crate::SIGNALS_ARTIFACT))?;
+pub(crate) fn persist_artifact(repo_root: &Path, serialized: &str) -> Result<(), String> {
+    fs::write(repo_root.join(crate::SIGNALS_ARTIFACT), serialized)
+        .map_err(|error| format!("failed to write {}: {error}", crate::SIGNALS_ARTIFACT))?;
     Ok(())
 }

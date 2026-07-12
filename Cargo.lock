@@ -90,7 +90,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "ayni-adapters-common"
-version = "0.3.0"
+version = "0.4.2"
 dependencies = [
  "ayni-core",
  "regex",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-go"
-version = "0.3.0"
+version = "0.4.2"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-kotlin"
-version = "0.3.0"
+version = "0.4.2"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-node"
-version = "0.3.0"
+version = "0.4.2"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-python"
-version = "0.3.0"
+version = "0.4.2"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-rust"
-version = "0.3.0"
+version = "0.4.2"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-cli"
-version = "0.3.0"
+version = "0.4.2"
 dependencies = [
  "ayni-adapters-common",
  "ayni-adapters-go",
@@ -191,13 +191,14 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "time",
  "toml",
  "unicode-width",
 ]
 
 [[package]]
 name = "ayni-core"
-version = "0.3.0"
+version = "0.4.2"
 dependencies = [
  "glob",
  "serde",
@@ -1611,12 +1612,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
 dependencies = [
  "deranged",
+ "itoa",
  "libc",
  "num-conv",
  "num_threads",
  "powerfmt",
  "serde_core",
  "time-core",
+ "time-macros",
 ]
 
 [[package]]
@@ -1624,6 +1627,16 @@ name = "time-core"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
+
+[[package]]
+name = "time-macros"
+version = "0.2.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
+dependencies = [
+ "num-conv",
+ "time-core",
+]
 
 [[package]]
 name = "toml"

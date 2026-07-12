@@ -8,6 +8,7 @@ The open-source version currently supports:
 
 - `install` (list required tools; `install --apply` runs catalog installers)
 - `analyze`
+- `agents sync` (explicitly create or refresh Ayni's marked `AGENTS.md` section)
 
 Out of scope:
 
@@ -69,7 +70,7 @@ The `documentation` branch is generated deployment output only; the source of tr
 - No managed service dependency introduced.
 - Local artifact behavior preserved.
 - README or docs updated if behavior changed.
-- `AGENTS.md` install behavior remains deterministic and preserves user content.
+- `install` does not modify `AGENTS.md`; `ayni agents sync` is idempotent and preserves user content outside Ayni's marked block.
 - `cargo fmt`, `cargo clippy`, `cargo test`, and `cargo check` pass.
 
 ## Licensing

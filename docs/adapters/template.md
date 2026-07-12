@@ -71,6 +71,24 @@ Each `CatalogEntry` should include:
 
 Catalog entries are the source of truth for `ayni install`.
 
+## Setup documentation contract
+
+Every language adapter document must explicitly state its runtime and
+package-manager or build-system assumptions, then list every catalog dependency
+as required or optional and say whether Ayni installs it with `install --apply`
+or only detects/expects it. Runtime and package-manager prerequisites that are
+not catalog installers remain user-owned. Mark mutation tooling as optional when
+its catalog entry is `opt_in`.
+
+Document repeated language setup as well as a single-language example:
+
+```sh
+ayni install --language <lang> --language <other-lang> --apply
+```
+
+Repeated values are deduplicated. `install` must not be documented as changing
+`AGENTS.md`; that explicit operation is `ayni agents sync`.
+
 ## Policy conventions
 
 Adapters must read:

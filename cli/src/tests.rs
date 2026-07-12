@@ -1,54 +1,85 @@
-use super::{AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, LanguageArg, annotate_deltas_vs_previous};
+use super::{
+    AgentsCommands, Cli, Commands, LanguageArg, OutputArg, annotate_deltas_vs_previous,
+    resolve_output_mode, selected_install_languages, serialize_artifact,
+};
+use crate::agents::{MANAGED_BEGIN, MANAGED_END, managed_block, sync_impl, upsert_managed_block};
 use crate::install::{
-    catalog_entry_enabled_for_policy, default_policy_toml, install_impl, upsert_managed_block,
+    catalog_entry_enabled_for_policy, default_policy_toml, install_impl, persist_artifact,
     validate_install_foundation,
 };
 use ayni_core::{
-    AyniPolicy, Budget, CatalogEntry, ExecutionResolution, Installer, Language, Offenders,
-    RunArtifact, RunContext, Scope, SignalKind, SignalResult, TestResult, VersionCheck,
+    AYNI_SIGNAL_SCHEMA_VERSION, AyniPolicy, Budget, CatalogEntry, ExecutionResolution, Installer,
+    InvocationContext, Language, Offenders, OutputContext, RunArtifact, RunArtifactMetadata,
+    RunContext, Scope, SignalKind, SignalResult, TestResult, VersionCheck,
 };
+use clap::Parser;
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
 #[test]
-fn upsert_managed_block_appends_when_missing() {
-    let existing = "# Repository Rules\n\nKeep this text.\n";
-    let managed = format!("{AGENTS_MANAGED_BEGIN}\n## Ayni\nx\n{AGENTS_MANAGED_END}\n");
-    let updated = upsert_managed_block(existing, &managed);
-    assert!(updated.contains("Keep this text."));
-    assert!(updated.contains(AGENTS_MANAGED_BEGIN));
-    assert!(updated.contains(AGENTS_MANAGED_END));
+fn agents_sync_creates_managed_file_when_absent() {
+    let dir = TempDir::new().expect("tempdir");
+
+    sync_impl(&dir.path().to_string_lossy()).expect("sync");
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("AGENTS.md")).expect("agents"),
+        managed_block()
+    );
 }
 
 #[test]
-fn upsert_managed_block_replaces_existing_managed_section() {
-    let existing = format!("head\n\n{AGENTS_MANAGED_BEGIN}\nold\n{AGENTS_MANAGED_END}\n\ntail\n");
-    let managed = format!("{AGENTS_MANAGED_BEGIN}\nnew\n{AGENTS_MANAGED_END}\n");
-    let updated = upsert_managed_block(&existing, &managed);
+fn agents_sync_replaces_only_managed_section_and_preserves_user_content() {
+    let dir = TempDir::new().expect("tempdir");
+    let path = dir.path().join("AGENTS.md");
+    fs::write(
+        &path,
+        format!("head\n\n{MANAGED_BEGIN}\nold\n{MANAGED_END}\n\ntail\n"),
+    )
+    .expect("agents");
+
+    sync_impl(&dir.path().to_string_lossy()).expect("sync");
+
+    let updated = fs::read_to_string(path).expect("agents");
     assert!(updated.contains("head"));
     assert!(updated.contains("tail"));
-    assert!(updated.contains("\nnew\n"));
+    assert!(updated.contains("## Code quality guidance for AI agents"));
     assert!(!updated.contains("\nold\n"));
 }
 
 #[test]
-fn upsert_managed_block_is_idempotent() {
-    let managed = format!("{AGENTS_MANAGED_BEGIN}\n## Ayni\nx\n{AGENTS_MANAGED_END}\n");
-    let once = upsert_managed_block("", &managed);
-    let twice = upsert_managed_block(&once, &managed);
+fn agents_sync_is_idempotent() {
+    let dir = TempDir::new().expect("tempdir");
+    sync_impl(&dir.path().to_string_lossy()).expect("first sync");
+    let once = fs::read_to_string(dir.path().join("AGENTS.md")).expect("agents");
+    sync_impl(&dir.path().to_string_lossy()).expect("second sync");
+    let twice = fs::read_to_string(dir.path().join("AGENTS.md")).expect("agents");
+
     assert_eq!(once, twice);
+}
+
+#[test]
+fn upsert_managed_block_appends_when_missing() {
+    let existing = "# Repository Rules\n\nKeep this text.\n";
+    let updated = upsert_managed_block(existing, &managed_block());
+    assert!(updated.contains("Keep this text."));
+    assert!(updated.contains(MANAGED_BEGIN));
+    assert!(updated.contains(MANAGED_END));
 }
 
 #[test]
 fn annotate_deltas_vs_previous_marks_metric_and_pass_changes() {
     let previous = RunArtifact {
-        schema_version: String::from("0.1.0"),
+        schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
+        metadata: Default::default(),
         rows: vec![test_row(false, 18, 2)],
     };
     let mut current = RunArtifact {
-        schema_version: String::from("0.1.0"),
+        schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
+        metadata: Default::default(),
         rows: vec![test_row(true, 20, 0)],
     };
 
@@ -67,7 +98,8 @@ fn annotate_deltas_vs_previous_marks_metric_and_pass_changes() {
 #[test]
 fn annotate_deltas_vs_previous_marks_missing_history() {
     let mut current = RunArtifact {
-        schema_version: String::from("0.1.0"),
+        schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
+        metadata: Default::default(),
         rows: vec![test_row(true, 20, 0)],
     };
 
@@ -86,6 +118,148 @@ fn language_arg_accepts_python() {
 }
 
 #[test]
+fn install_parser_accepts_repeated_languages_and_deduplicates_them() {
+    let cli = Cli::try_parse_from([
+        "ayni",
+        "install",
+        "--language",
+        "python",
+        "--language",
+        "rust",
+        "--language",
+        "python",
+    ])
+    .expect("arguments parse");
+    let Commands::Install { language, .. } = cli.command else {
+        panic!("install command");
+    };
+
+    assert_eq!(
+        selected_install_languages(language),
+        BTreeSet::from([Language::Rust, Language::Python])
+    );
+}
+
+#[test]
+fn install_parser_preserves_single_language_selection() {
+    let cli =
+        Cli::try_parse_from(["ayni", "install", "--language", "kotlin"]).expect("arguments parse");
+    let Commands::Install { language, .. } = cli.command else {
+        panic!("install command");
+    };
+
+    assert_eq!(
+        selected_install_languages(language),
+        BTreeSet::from([Language::Kotlin])
+    );
+}
+
+#[test]
+fn install_parser_defaults_to_no_language_selection() {
+    let cli = Cli::try_parse_from(["ayni", "install"]).expect("arguments parse");
+    let Commands::Install { language, .. } = cli.command else {
+        panic!("install command");
+    };
+
+    assert!(selected_install_languages(language).is_empty());
+}
+
+#[test]
+fn agents_sync_parser_accepts_repo_root() {
+    let cli = Cli::try_parse_from(["ayni", "agents", "sync", "--repo-root", "fixture"])
+        .expect("arguments parse");
+    let Commands::Agents {
+        command: AgentsCommands::Sync { repo_root },
+    } = cli.command
+    else {
+        panic!("agents sync command");
+    };
+
+    assert_eq!(repo_root, "fixture");
+}
+
+#[test]
+fn analyze_json_selector_is_equivalent_to_output_json() {
+    let short = Cli::try_parse_from(["ayni", "analyze", "--json"]).expect("arguments parse");
+    let long =
+        Cli::try_parse_from(["ayni", "analyze", "--output", "json"]).expect("arguments parse");
+    let Commands::Analyze {
+        output: short_output,
+        json: short_json,
+        ..
+    } = short.command
+    else {
+        panic!("analyze command");
+    };
+    let Commands::Analyze {
+        output: long_output,
+        json: long_json,
+        ..
+    } = long.command
+    else {
+        panic!("analyze command");
+    };
+
+    assert_eq!(
+        resolve_output_mode(short_output, short_json).expect("short selector"),
+        resolve_output_mode(long_output, long_json).expect("long selector")
+    );
+}
+
+#[test]
+fn analyze_json_allows_same_output_mode_and_rejects_conflicts() {
+    assert_eq!(
+        resolve_output_mode(Some(OutputArg::Json), true).expect("same mode is allowed"),
+        OutputArg::Json
+    );
+    assert_eq!(
+        resolve_output_mode(None, false).expect("default output"),
+        OutputArg::Stdout
+    );
+    assert_eq!(
+        resolve_output_mode(Some(OutputArg::Md), true).expect_err("conflicting output"),
+        "--json cannot be combined with --output md; use --output json or --json"
+    );
+}
+
+#[test]
+fn serialized_json_is_schema_v2_and_matches_persisted_artifact() {
+    let dir = TempDir::new().expect("tempdir");
+    fs::create_dir_all(dir.path().join(".ayni/last")).expect("artifact directory");
+    let artifact = RunArtifact::new(
+        RunArtifactMetadata {
+            generated_at: String::from("2026-07-12T00:00:00Z"),
+            ayni_version: String::from("0.4.2"),
+            invocation: InvocationContext {
+                command: String::from("analyze"),
+                languages: vec![Language::Rust],
+                scope: None,
+            },
+            output: OutputContext {
+                format: String::from("json"),
+                destination: String::from("stdout"),
+            },
+            config_path: String::from("./.ayni.toml"),
+            repository_root: String::from("."),
+        },
+        vec![test_row(true, 1, 0)],
+    );
+    let serialized = serialize_artifact(&artifact).expect("serialize artifact");
+    persist_artifact(dir.path(), &serialized).expect("persist artifact");
+
+    let value: serde_json::Value = serde_json::from_str(&serialized).expect("valid json");
+    assert_eq!(value["schema_version"], AYNI_SIGNAL_SCHEMA_VERSION);
+    assert_eq!(value["generated_at"], "2026-07-12T00:00:00Z");
+    assert_eq!(value["output"]["format"], "json");
+    assert!(value.get("aggregate").is_some());
+    assert!(value.get("applied_thresholds").is_some());
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".ayni/last/signals.json")).expect("artifact"),
+        serialized
+    );
+}
+
+#[test]
 fn default_policy_templates_are_valid_for_each_language() {
     for language in [
         Language::Rust,
@@ -95,7 +269,7 @@ fn default_policy_templates_are_valid_for_each_language() {
         Language::Kotlin,
     ] {
         let policy: ayni_core::AyniPolicy =
-            toml::from_str(&default_policy_toml(Some(language))).expect("policy");
+            toml::from_str(&default_policy_toml(&BTreeSet::from([language]))).expect("policy");
 
         assert_eq!(policy.enabled_languages().expect("languages"), [language]);
         assert_eq!(policy.roots_for(language), ["."]);
@@ -105,13 +279,78 @@ fn default_policy_templates_are_valid_for_each_language() {
 
 #[test]
 fn default_policy_template_falls_back_to_rust() {
-    let policy: ayni_core::AyniPolicy = toml::from_str(&default_policy_toml(None)).expect("policy");
+    let policy: ayni_core::AyniPolicy =
+        toml::from_str(&default_policy_toml(&BTreeSet::new())).expect("policy");
 
     assert_eq!(
         policy.enabled_languages().expect("languages"),
         [Language::Rust]
     );
     assert_eq!(policy.roots_for(Language::Rust), ["."]);
+}
+
+#[test]
+fn default_policy_template_includes_every_selected_language() {
+    let selected = BTreeSet::from([
+        Language::Rust,
+        Language::Go,
+        Language::Node,
+        Language::Python,
+        Language::Kotlin,
+    ]);
+    let policy: AyniPolicy = toml::from_str(&default_policy_toml(&selected)).expect("policy");
+
+    assert_eq!(
+        policy.enabled_languages().expect("languages"),
+        selected.into_iter().collect::<Vec<_>>()
+    );
+    for language in [
+        Language::Rust,
+        Language::Go,
+        Language::Node,
+        Language::Python,
+        Language::Kotlin,
+    ] {
+        assert_eq!(policy.roots_for(language), ["."]);
+        assert!(!policy.size_rules_for(language).is_empty());
+    }
+}
+
+#[test]
+fn install_bootstraps_policy_for_every_selected_language() {
+    let dir = TempDir::new().expect("tempdir");
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("cargo manifest");
+    fs::write(dir.path().join("package.json"), "{\"name\": \"fixture\"}\n")
+        .expect("package manifest");
+    let selected = BTreeSet::from([Language::Rust, Language::Node]);
+
+    install_impl(&dir.path().to_string_lossy(), &selected, false).expect("install");
+    let policy = AyniPolicy::load(dir.path()).expect("policy");
+
+    assert_eq!(
+        policy.enabled_languages().expect("languages"),
+        selected.into_iter().collect::<Vec<_>>()
+    );
+    assert_eq!(policy.roots_for(Language::Rust), ["."]);
+    assert_eq!(policy.roots_for(Language::Node), ["."]);
+}
+
+#[test]
+fn install_does_not_create_or_modify_agents_file() {
+    let absent = TempDir::new().expect("tempdir");
+    install_impl(&absent.path().to_string_lossy(), &BTreeSet::new(), false).expect("install");
+    assert!(!absent.path().join("AGENTS.md").exists());
+
+    let existing = TempDir::new().expect("tempdir");
+    let path = existing.path().join("AGENTS.md");
+    let original = String::from("# User instructions\n\nDo not change this.\n");
+    fs::write(&path, &original).expect("agents");
+    install_impl(&existing.path().to_string_lossy(), &BTreeSet::new(), false).expect("install");
+    assert_eq!(fs::read_to_string(path).expect("agents"), original);
 }
 
 #[test]
@@ -230,7 +469,8 @@ roots = ["."]
     )
     .expect("policy");
 
-    let failures = validate_install_foundation(dir.path(), &policy, Some(Language::Rust));
+    let failures =
+        validate_install_foundation(dir.path(), &policy, &BTreeSet::from([Language::Rust]));
 
     assert!(failures.is_empty());
     assert!(dir.path().join(".ayni/work/rust/workspace").is_dir());
@@ -304,7 +544,12 @@ exclude = ["services/agent-runtime"]
     )
     .expect("runtime pyproject");
 
-    install_impl(&dir.path().to_string_lossy(), Some(Language::Python), false).expect("install");
+    install_impl(
+        &dir.path().to_string_lossy(),
+        &BTreeSet::from([Language::Python]),
+        false,
+    )
+    .expect("install");
     let policy = ayni_core::AyniPolicy::load(dir.path()).expect("policy");
 
     assert_eq!(
@@ -351,7 +596,12 @@ members = ["packages/*"]
     )
     .expect("config pyproject");
 
-    install_impl(&dir.path().to_string_lossy(), Some(Language::Python), false).expect("install");
+    install_impl(
+        &dir.path().to_string_lossy(),
+        &BTreeSet::from([Language::Python]),
+        false,
+    )
+    .expect("install");
     let policy = ayni_core::AyniPolicy::load(dir.path()).expect("policy");
 
     assert_eq!(policy.roots_for(Language::Python), ["."]);

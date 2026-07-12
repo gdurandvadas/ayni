@@ -30,6 +30,6 @@ target
 .DS_Store
 docs/.vitepress/cache/
 docs/.vitepress/dist/
-docs/initiatives/
+docs/tasks/
 
 **/node_modules/
