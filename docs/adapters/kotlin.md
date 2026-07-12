@@ -108,5 +108,5 @@ Unsupported build shapes fail with a setup error instead of being rewritten.
 
 Repeat `--language` to bootstrap several adapters, for example
 `ayni install --language kotlin --language rust --apply`; duplicate values are
-ignored. `install` does not modify `AGENTS.md`; use `ayni agents sync --repo-root
-<path>` for the separate managed-guidance operation.
+ignored. `install` does not modify `AGENTS.md`; use
+`ayni agents sync --repo-root <path>` for the separate managed-guidance operation.
