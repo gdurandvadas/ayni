@@ -861,6 +861,7 @@ fn emit_analyze_outputs(
             ui::report::print_from_rows(&artifact.rows, policy.report.offenders_limit);
         }
         OutputArg::Md => {
+            ui::progress_log::log_command_failures(artifact);
             let summary = ui::md_report::build_markdown(artifact, policy.report.offenders_limit);
             println!("{summary}");
         }
