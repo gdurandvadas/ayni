@@ -7,7 +7,7 @@ use crate::{
 use ayni_adapters_common::catalog::{install_tool, tool_status};
 use ayni_core::{
     AyniPolicy, CatalogEntry, ExecutionResolution, InstallContext, Installer, Language,
-    NodePackageManager, PythonPackageManager, RunArtifact, SignalKind, ToolStatus, VersionCheck,
+    NodePackageManager, PythonPackageManager, SignalKind, ToolStatus, VersionCheck,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -633,13 +633,8 @@ pub(crate) fn enabled_signal_kinds(policy: &AyniPolicy) -> Vec<SignalKind> {
     kinds
 }
 
-pub(crate) fn persist_artifact(repo_root: &Path, artifact: &RunArtifact) -> Result<(), String> {
-    let serialized = serde_json::to_string_pretty(artifact)
-        .map_err(|error| format!("failed to serialize artifact: {error}"))?;
-    fs::write(
-        repo_root.join(crate::SIGNALS_ARTIFACT),
-        format!("{serialized}\n"),
-    )
-    .map_err(|error| format!("failed to write {}: {error}", crate::SIGNALS_ARTIFACT))?;
+pub(crate) fn persist_artifact(repo_root: &Path, serialized: &str) -> Result<(), String> {
+    fs::write(repo_root.join(crate::SIGNALS_ARTIFACT), serialized)
+        .map_err(|error| format!("failed to write {}: {error}", crate::SIGNALS_ARTIFACT))?;
     Ok(())
 }

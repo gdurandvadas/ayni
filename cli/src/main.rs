@@ -19,9 +19,10 @@ use ayni_adapters_python::PythonAdapter;
 use ayni_adapters_rust::RustAdapter;
 use ayni_core::{
     AYNI_POLICY_FILE, AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, AyniPolicy, Budget,
-    CommandFailure, ComplexityResult, ConcurrencyPolicy, CoverageResult, DepsResult, Language,
-    MutationResult, Offenders, RunArtifact, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    SizeResult, TestResult,
+    CommandFailure, ComplexityResult, ConcurrencyPolicy, CoverageResult, DepsResult,
+    InvocationContext, Language, MutationResult, Offenders, OutputContext, RunArtifact,
+    RunArtifactMetadata, RunContext, Scope, SignalKind, SignalResult, SignalRow, SizeResult,
+    TestResult,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use delta::annotate_deltas_vs_previous;
@@ -57,8 +58,11 @@ enum Commands {
         language: Option<LanguageArg>,
         /// Report format: `stdout` (default, coloured console), `md` (markdown report),
         /// or `json` (machine-readable signal artifact on stdout).
-        #[arg(long, value_enum, default_value = "stdout")]
-        output: OutputArg,
+        #[arg(long, value_enum)]
+        output: Option<OutputArg>,
+        /// Print the machine-readable signal artifact to stdout (equivalent to `--output json`).
+        #[arg(long)]
+        json: bool,
         /// Print raw command diagnostics and disable the live dashboard.
         #[arg(long)]
         debug: bool,
@@ -112,6 +116,29 @@ enum OutputArg {
     Json,
 }
 
+fn resolve_output_mode(output: Option<OutputArg>, json: bool) -> Result<OutputArg, String> {
+    match (output, json) {
+        (Some(OutputArg::Json), true) | (Some(OutputArg::Json), false) => Ok(OutputArg::Json),
+        (Some(output), true) => Err(format!(
+            "--json cannot be combined with --output {}; use --output json or --json",
+            output.as_str()
+        )),
+        (Some(output), false) => Ok(output),
+        (None, true) => Ok(OutputArg::Json),
+        (None, false) => Ok(OutputArg::Stdout),
+    }
+}
+
+impl OutputArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Md => "md",
+            Self::Json => "json",
+        }
+    }
+}
+
 impl LanguageArg {
     fn as_language(&self) -> Language {
         match self {
@@ -132,17 +159,24 @@ fn main() -> ExitCode {
             package,
             language,
             output,
+            json,
             debug,
-        } => analyze(
-            &config,
-            AnalyzeOptions {
-                package,
-                file,
-                language_filter: language.map(|value| value.as_language()),
-                output_mode: output,
-                debug,
-            },
-        ),
+        } => match resolve_output_mode(output, json) {
+            Ok(output_mode) => analyze(
+                &config,
+                AnalyzeOptions {
+                    package,
+                    file,
+                    language_filter: language.map(|value| value.as_language()),
+                    output_mode,
+                    debug,
+                },
+            ),
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        },
         Commands::Install {
             repo_root,
             language,
@@ -740,6 +774,7 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<AnalyzeOut
         debug,
     )?;
     let plan = build_analyze_plan(&targets);
+    let metadata = build_artifact_metadata(&config_path, &workspace_root, &targets, output_mode)?;
     let artifact_slot = Arc::new(Mutex::new(None));
     let aborted = execute_analyze_plan(
         output_mode,
@@ -755,8 +790,10 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<AnalyzeOut
     let mut artifact = take_collected_artifact(artifact_slot)?;
     let previous_artifact = load_previous_artifact(&workspace_root);
     annotate_deltas_vs_previous(&mut artifact, previous_artifact.as_ref());
-    persist_artifact(&workspace_root, &artifact)?;
-    emit_analyze_outputs(output_mode, &policy, &artifact)?;
+    artifact.metadata = metadata;
+    let serialized = serialize_artifact(&artifact)?;
+    persist_artifact(&workspace_root, &serialized)?;
+    emit_analyze_outputs(output_mode, &policy, &artifact, &serialized)?;
 
     Ok(AnalyzeOutcome::Completed {
         has_failures: artifact.rows.iter().any(|row| !row.pass),
@@ -851,10 +888,52 @@ fn take_collected_artifact(
     artifact.ok_or_else(|| String::from("analyze produced no artifact"))
 }
 
+fn build_artifact_metadata(
+    config_path: &Path,
+    workspace_root: &Path,
+    targets: &[AnalyzeTarget],
+    output_mode: OutputArg,
+) -> Result<RunArtifactMetadata, String> {
+    let generated_at = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|error| format!("failed to format analysis timestamp: {error}"))?;
+    let languages = targets
+        .iter()
+        .map(|target| target.language)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let scope = targets
+        .first()
+        .map(|target| target.run_context.scope.clone());
+    Ok(RunArtifactMetadata {
+        generated_at,
+        ayni_version: String::from(env!("CARGO_PKG_VERSION")),
+        invocation: InvocationContext {
+            command: String::from("analyze"),
+            languages,
+            scope,
+        },
+        output: OutputContext {
+            format: output_mode.as_str().to_string(),
+            destination: String::from("stdout"),
+        },
+        config_path: config_path.to_string_lossy().into_owned(),
+        repository_root: workspace_root.to_string_lossy().into_owned(),
+    })
+}
+
+fn serialize_artifact(artifact: &RunArtifact) -> Result<String, String> {
+    serde_json::to_string_pretty(artifact)
+        .map(|serialized| format!("{serialized}\n"))
+        .map_err(|error| format!("failed to serialize artifact: {error}"))
+}
+
 fn emit_analyze_outputs(
     output_mode: OutputArg,
     policy: &AyniPolicy,
     artifact: &RunArtifact,
+    serialized: &str,
 ) -> Result<(), String> {
     match output_mode {
         OutputArg::Stdout => {
@@ -866,9 +945,7 @@ fn emit_analyze_outputs(
             println!("{summary}");
         }
         OutputArg::Json => {
-            let serialized = serde_json::to_string_pretty(artifact)
-                .map_err(|error| format!("failed to serialize artifact: {error}"))?;
-            println!("{serialized}");
+            print!("{serialized}");
         }
     }
     Ok(())

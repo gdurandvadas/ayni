@@ -1,15 +1,16 @@
 use super::{
-    AgentsCommands, Cli, Commands, LanguageArg, annotate_deltas_vs_previous,
-    selected_install_languages,
+    AgentsCommands, Cli, Commands, LanguageArg, OutputArg, annotate_deltas_vs_previous,
+    resolve_output_mode, selected_install_languages, serialize_artifact,
 };
 use crate::agents::{MANAGED_BEGIN, MANAGED_END, managed_block, sync_impl, upsert_managed_block};
 use crate::install::{
-    catalog_entry_enabled_for_policy, default_policy_toml, install_impl,
+    catalog_entry_enabled_for_policy, default_policy_toml, install_impl, persist_artifact,
     validate_install_foundation,
 };
 use ayni_core::{
-    AyniPolicy, Budget, CatalogEntry, ExecutionResolution, Installer, Language, Offenders,
-    RunArtifact, RunContext, Scope, SignalKind, SignalResult, TestResult, VersionCheck,
+    AYNI_SIGNAL_SCHEMA_VERSION, AyniPolicy, Budget, CatalogEntry, ExecutionResolution, Installer,
+    InvocationContext, Language, Offenders, OutputContext, RunArtifact, RunArtifactMetadata,
+    RunContext, Scope, SignalKind, SignalResult, TestResult, VersionCheck,
 };
 use clap::Parser;
 use serde_json::json;
@@ -175,6 +176,87 @@ fn agents_sync_parser_accepts_repo_root() {
     };
 
     assert_eq!(repo_root, "fixture");
+}
+
+#[test]
+fn analyze_json_selector_is_equivalent_to_output_json() {
+    let short = Cli::try_parse_from(["ayni", "analyze", "--json"]).expect("arguments parse");
+    let long =
+        Cli::try_parse_from(["ayni", "analyze", "--output", "json"]).expect("arguments parse");
+    let Commands::Analyze {
+        output: short_output,
+        json: short_json,
+        ..
+    } = short.command
+    else {
+        panic!("analyze command");
+    };
+    let Commands::Analyze {
+        output: long_output,
+        json: long_json,
+        ..
+    } = long.command
+    else {
+        panic!("analyze command");
+    };
+
+    assert_eq!(
+        resolve_output_mode(short_output, short_json).expect("short selector"),
+        resolve_output_mode(long_output, long_json).expect("long selector")
+    );
+}
+
+#[test]
+fn analyze_json_allows_same_output_mode_and_rejects_conflicts() {
+    assert_eq!(
+        resolve_output_mode(Some(OutputArg::Json), true).expect("same mode is allowed"),
+        OutputArg::Json
+    );
+    assert_eq!(
+        resolve_output_mode(None, false).expect("default output"),
+        OutputArg::Stdout
+    );
+    assert_eq!(
+        resolve_output_mode(Some(OutputArg::Md), true).expect_err("conflicting output"),
+        "--json cannot be combined with --output md; use --output json or --json"
+    );
+}
+
+#[test]
+fn serialized_json_is_schema_v2_and_matches_persisted_artifact() {
+    let dir = TempDir::new().expect("tempdir");
+    fs::create_dir_all(dir.path().join(".ayni/last")).expect("artifact directory");
+    let artifact = RunArtifact::new(
+        RunArtifactMetadata {
+            generated_at: String::from("2026-07-12T00:00:00Z"),
+            ayni_version: String::from("0.4.2"),
+            invocation: InvocationContext {
+                command: String::from("analyze"),
+                languages: vec![Language::Rust],
+                scope: None,
+            },
+            output: OutputContext {
+                format: String::from("json"),
+                destination: String::from("stdout"),
+            },
+            config_path: String::from("./.ayni.toml"),
+            repository_root: String::from("."),
+        },
+        vec![test_row(true, 1, 0)],
+    );
+    let serialized = serialize_artifact(&artifact).expect("serialize artifact");
+    persist_artifact(dir.path(), &serialized).expect("persist artifact");
+
+    let value: serde_json::Value = serde_json::from_str(&serialized).expect("valid json");
+    assert_eq!(value["schema_version"], AYNI_SIGNAL_SCHEMA_VERSION);
+    assert_eq!(value["generated_at"], "2026-07-12T00:00:00Z");
+    assert_eq!(value["output"]["format"], "json");
+    assert!(value.get("aggregate").is_some());
+    assert!(value.get("applied_thresholds").is_some());
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".ayni/last/signals.json")).expect("artifact"),
+        serialized
+    );
 }
 
 #[test]
