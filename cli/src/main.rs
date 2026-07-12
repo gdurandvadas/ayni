@@ -1,6 +1,6 @@
 use ayni_adapters_go::GoAdapter;
 use ayni_adapters_kotlin::KotlinAdapter;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -68,7 +68,7 @@ enum Commands {
         #[arg(long, default_value = ".")]
         repo_root: String,
         #[arg(long, value_enum)]
-        language: Option<LanguageArg>,
+        language: Vec<LanguageArg>,
         /// Install missing or outdated tools from adapter catalogs (cargo, rustup, go, npm, …).
         #[arg(long)]
         apply: bool,
@@ -133,7 +133,7 @@ fn main() -> ExitCode {
             repo_root,
             language,
             apply,
-        } => install(&repo_root, language.map(|value| value.as_language()), apply),
+        } => install(&repo_root, selected_install_languages(language), apply),
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -155,8 +155,15 @@ fn build_registry() -> AdapterRegistry {
     registry
 }
 
-fn install(repo_root: &str, language_filter: Option<Language>, apply: bool) -> ExitCode {
-    match install_impl(repo_root, language_filter, apply) {
+fn selected_install_languages(values: Vec<LanguageArg>) -> BTreeSet<Language> {
+    values
+        .into_iter()
+        .map(|value| value.as_language())
+        .collect()
+}
+
+fn install(repo_root: &str, languages: BTreeSet<Language>, apply: bool) -> ExitCode {
+    match install_impl(repo_root, &languages, apply) {
         Ok(()) => ExitCode::SUCCESS,
         Err(failures) => {
             for failure in failures {

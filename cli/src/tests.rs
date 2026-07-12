@@ -1,4 +1,7 @@
-use super::{AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, LanguageArg, annotate_deltas_vs_previous};
+use super::{
+    AGENTS_MANAGED_BEGIN, AGENTS_MANAGED_END, Cli, Commands, LanguageArg,
+    annotate_deltas_vs_previous, selected_install_languages,
+};
 use crate::install::{
     catalog_entry_enabled_for_policy, default_policy_toml, install_impl, upsert_managed_block,
     validate_install_foundation,
@@ -7,7 +10,9 @@ use ayni_core::{
     AyniPolicy, Budget, CatalogEntry, ExecutionResolution, Installer, Language, Offenders,
     RunArtifact, RunContext, Scope, SignalKind, SignalResult, TestResult, VersionCheck,
 };
+use clap::Parser;
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -89,6 +94,53 @@ fn language_arg_accepts_python() {
 }
 
 #[test]
+fn install_parser_accepts_repeated_languages_and_deduplicates_them() {
+    let cli = Cli::try_parse_from([
+        "ayni",
+        "install",
+        "--language",
+        "python",
+        "--language",
+        "rust",
+        "--language",
+        "python",
+    ])
+    .expect("arguments parse");
+    let Commands::Install { language, .. } = cli.command else {
+        panic!("install command");
+    };
+
+    assert_eq!(
+        selected_install_languages(language),
+        BTreeSet::from([Language::Rust, Language::Python])
+    );
+}
+
+#[test]
+fn install_parser_preserves_single_language_selection() {
+    let cli =
+        Cli::try_parse_from(["ayni", "install", "--language", "kotlin"]).expect("arguments parse");
+    let Commands::Install { language, .. } = cli.command else {
+        panic!("install command");
+    };
+
+    assert_eq!(
+        selected_install_languages(language),
+        BTreeSet::from([Language::Kotlin])
+    );
+}
+
+#[test]
+fn install_parser_defaults_to_no_language_selection() {
+    let cli = Cli::try_parse_from(["ayni", "install"]).expect("arguments parse");
+    let Commands::Install { language, .. } = cli.command else {
+        panic!("install command");
+    };
+
+    assert!(selected_install_languages(language).is_empty());
+}
+
+#[test]
 fn default_policy_templates_are_valid_for_each_language() {
     for language in [
         Language::Rust,
@@ -98,7 +150,7 @@ fn default_policy_templates_are_valid_for_each_language() {
         Language::Kotlin,
     ] {
         let policy: ayni_core::AyniPolicy =
-            toml::from_str(&default_policy_toml(Some(language))).expect("policy");
+            toml::from_str(&default_policy_toml(&BTreeSet::from([language]))).expect("policy");
 
         assert_eq!(policy.enabled_languages().expect("languages"), [language]);
         assert_eq!(policy.roots_for(language), ["."]);
@@ -108,13 +160,64 @@ fn default_policy_templates_are_valid_for_each_language() {
 
 #[test]
 fn default_policy_template_falls_back_to_rust() {
-    let policy: ayni_core::AyniPolicy = toml::from_str(&default_policy_toml(None)).expect("policy");
+    let policy: ayni_core::AyniPolicy =
+        toml::from_str(&default_policy_toml(&BTreeSet::new())).expect("policy");
 
     assert_eq!(
         policy.enabled_languages().expect("languages"),
         [Language::Rust]
     );
     assert_eq!(policy.roots_for(Language::Rust), ["."]);
+}
+
+#[test]
+fn default_policy_template_includes_every_selected_language() {
+    let selected = BTreeSet::from([
+        Language::Rust,
+        Language::Go,
+        Language::Node,
+        Language::Python,
+        Language::Kotlin,
+    ]);
+    let policy: AyniPolicy = toml::from_str(&default_policy_toml(&selected)).expect("policy");
+
+    assert_eq!(
+        policy.enabled_languages().expect("languages"),
+        selected.into_iter().collect::<Vec<_>>()
+    );
+    for language in [
+        Language::Rust,
+        Language::Go,
+        Language::Node,
+        Language::Python,
+        Language::Kotlin,
+    ] {
+        assert_eq!(policy.roots_for(language), ["."]);
+        assert!(!policy.size_rules_for(language).is_empty());
+    }
+}
+
+#[test]
+fn install_bootstraps_policy_for_every_selected_language() {
+    let dir = TempDir::new().expect("tempdir");
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("cargo manifest");
+    fs::write(dir.path().join("package.json"), "{\"name\": \"fixture\"}\n")
+        .expect("package manifest");
+    let selected = BTreeSet::from([Language::Rust, Language::Node]);
+
+    install_impl(&dir.path().to_string_lossy(), &selected, false).expect("install");
+    let policy = AyniPolicy::load(dir.path()).expect("policy");
+
+    assert_eq!(
+        policy.enabled_languages().expect("languages"),
+        selected.into_iter().collect::<Vec<_>>()
+    );
+    assert_eq!(policy.roots_for(Language::Rust), ["."]);
+    assert_eq!(policy.roots_for(Language::Node), ["."]);
 }
 
 #[test]
@@ -233,7 +336,8 @@ roots = ["."]
     )
     .expect("policy");
 
-    let failures = validate_install_foundation(dir.path(), &policy, Some(Language::Rust));
+    let failures =
+        validate_install_foundation(dir.path(), &policy, &BTreeSet::from([Language::Rust]));
 
     assert!(failures.is_empty());
     assert!(dir.path().join(".ayni/work/rust/workspace").is_dir());
@@ -307,7 +411,12 @@ exclude = ["services/agent-runtime"]
     )
     .expect("runtime pyproject");
 
-    install_impl(&dir.path().to_string_lossy(), Some(Language::Python), false).expect("install");
+    install_impl(
+        &dir.path().to_string_lossy(),
+        &BTreeSet::from([Language::Python]),
+        false,
+    )
+    .expect("install");
     let policy = ayni_core::AyniPolicy::load(dir.path()).expect("policy");
 
     assert_eq!(
@@ -354,7 +463,12 @@ members = ["packages/*"]
     )
     .expect("config pyproject");
 
-    install_impl(&dir.path().to_string_lossy(), Some(Language::Python), false).expect("install");
+    install_impl(
+        &dir.path().to_string_lossy(),
+        &BTreeSet::from([Language::Python]),
+        false,
+    )
+    .expect("install");
     let policy = ayni_core::AyniPolicy::load(dir.path()).expect("policy");
 
     assert_eq!(policy.roots_for(Language::Python), ["."]);
