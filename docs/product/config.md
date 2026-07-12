@@ -287,6 +287,28 @@ tool_timeout_seconds = 1800
 
 These sections do **not** share the same `exclude` mechanism as size today; behavior is defined per collector (for example which paths external tools scan). Size exclusions are the supported, first-class way to drop build artifacts and vendored trees from **line-count** analysis.
 
+### Threshold semantics
+
+Every threshold has `warn` and `fail` levels. For **maximum** metrics (size and
+complexity), a value at or above `warn` is a warning and a value at or above
+`fail` fails the signal, so `warn` must not exceed `fail`:
+
+```toml
+[rust.size]
+"src/**/*.rs" = { warn = 400, fail = 700 }
+```
+
+For **minimum** metrics (coverage), a value below `warn` is a warning and a
+value below `fail` fails the signal, so `warn` must be at least `fail`:
+
+```toml
+[rust.coverage]
+line_percent = { warn = 80, fail = 70 }
+```
+
+The effective typed budgets applied to each analyzed row are preserved in the
+schema-v2 artifact's `applied_thresholds` field; see [`signals.md`](signals.md).
+
 ---
 
 ## Dependency rules

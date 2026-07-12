@@ -253,6 +253,7 @@ mod tests {
     fn build_markdown_renders_grouped_table() {
         let artifact = RunArtifact {
             schema_version: String::from("0.1.0"),
+            metadata: Default::default(),
             rows: vec![SignalRow {
                 kind: SignalKind::Coverage,
                 language: Language::Rust,

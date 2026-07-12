@@ -20,11 +20,35 @@ Every signal row includes:
 
 ## Machine-readable artifact
 
-Every `ayni analyze` run writes the full row set to `.ayni/last/signals.json`
-as a `RunArtifact` (`schema_version` plus `rows`). The same payload can be
-printed to stdout with `ayni analyze --output json`. Consumers should check
-`schema_version` before relying on field shapes; Ayni itself ignores previous
-artifacts whose schema version differs when computing `delta_vs_previous`.
+Every `ayni analyze` run writes a schema-v2 `RunArtifact` to
+`.ayni/last/signals.json`. The same payload can be printed to stdout with
+`ayni analyze --output json`. Consumers must check `schema_version` before
+relying on field shapes; Ayni ignores previous artifacts whose schema version
+differs when computing `delta_vs_previous`.
+
+Schema v2 has these stable top-level fields:
+
+- `schema_version`: currently `0.2.0`.
+- `generated_at`, `ayni_version`: generation timestamp and producing Ayni version.
+- `invocation`, `output`: supplied invocation and output context. `invocation`
+  contains `command`, requested `languages`, and optional `scope`; `output`
+  contains `format` and `destination`.
+- `config_path`, `repository_root`: paths used for this run. Artifacts may
+  therefore contain local path information and should be shared accordingly.
+- `aggregate`: derived `status` (`pass|fail`) plus total, passing, failing,
+  warning-offender, and failing-offender counts.
+- `applied_thresholds`: the typed row budgets with their kind, language, and scope.
+- `rows`: canonical typed signal rows.
+- `offender_summaries`: derived per-row offender counts, grouped by kind,
+  language, and scope.
+- `failure_summaries`: omitted when no command failed; otherwise, one derived
+  entry per command failure containing category, classification, command, cwd,
+  optional exit code, and message.
+
+`aggregate`, `applied_thresholds`, `offender_summaries`, and
+`failure_summaries` are deterministic views derived from `rows`; rows remain
+the only canonical analysis truth. Consumers must not treat those views as
+independently editable state.
 
 Rows for command-backed signals may also include `failure` inside the typed
 result. Failure objects use the shared categories defined in

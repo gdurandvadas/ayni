@@ -744,6 +744,7 @@ mod tests {
 
         let artifact = RunArtifact {
             schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
+            metadata: Default::default(),
             rows: vec![SignalRow {
                 kind: SignalKind::Deps,
                 language: Language::Rust,
