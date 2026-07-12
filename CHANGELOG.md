@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.5.0...ayni-v0.5.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **docs:** preserve Kotlin command placeholder ([762bd4d](https://github.com/gdurandvadas/ayni/commit/762bd4d7ae6473e298a963f662f35ba85018665d))
+
 ## [0.5.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.4.2...ayni-v0.5.0) (2026-07-12)
 
 
