@@ -1,90 +1,41 @@
 # Go Adapter
 
-The Go adapter implements the same `LanguageAdapter` and `SignalCollector` contracts as the Rust and Node adapters.
+## Installation
 
-It detects Go module roots, resolves required tooling from a typed catalog, and emits canonical `SignalRow` values for each enabled `SignalKind`.
-Runtime behavior follows the product-level [runtime and setup rules](../product/runtime.md).
+Go roots are directories containing `go.mod`; discovery excludes VCS and
+`vendor` directories. A repository `go.work` marks a workspace controller, and
+the repository root is analyzed only when it contains `go.mod`.
 
-## Module layout
+The Go toolchain is a user-owned prerequisite. Ayni uses it for built-in Go
+operations and can install `gocyclo` with `go install` when complexity is
+enabled and installation is applied.
 
-```text
-adapters/go/src/
-├── lib.rs
-├── adapter.rs
-├── catalog.rs
-└── collectors/
-    ├── mod.rs
-    ├── util.rs
-    ├── test.rs
-    ├── coverage.rs
-    ├── size.rs
-    ├── complexity.rs
-    ├── deps.rs
-    └── mutation.rs
-```
+## Signal Coverage
 
-## Signal coverage
+| Signal | Required tool or method | Version contract |
+| --- | --- | --- |
+| `test` | `go test` | no version enforced |
+| `coverage` | `go test` and `go tool cover` | no version enforced |
+| `size` | built-in Go source scan | no version enforced |
+| `complexity` | `gocyclo` | no version enforced |
+| `deps` | `go list` dependency graph | no version enforced |
+| `mutation` | `go test` mutation proxy, or a configured Go mutation command | no version enforced |
 
-| Signal kind  | Collector module         | Source tool / method                              |
-| ------------ | ------------------------ | ------------------------------------------------- |
-| `test`       | `collectors/test.rs`     | `go test ./... -json`                             |
-| `coverage`   | `collectors/coverage.rs` | `go test -coverprofile` + `go tool cover -func`   |
-| `size`       | `collectors/size.rs`     | file walk + `[go.size]` glob budgets              |
-| `complexity` | `collectors/complexity.rs` | `gocyclo`                                        |
-| `deps`       | `collectors/deps.rs`     | `go list -json ./...` + forbidden edge rules      |
-| `mutation`   | `collectors/mutation.rs` | proxy mutation flow (tooling override aware)      |
+## Contract
 
-Every collector outputs:
+Enabled checks come from `[checks]`. Configure Go roots in `[go].roots`
+(default `["."]`), size budgets in `[go.size]`, the cyclomatic threshold in
+`[go.complexity]`, coverage in `[go.coverage]`, and forbidden edges in
+`[go.deps.forbidden]`. Command overrides are optional in `[go.tooling.test]`,
+`[go.tooling.coverage]`, and `[go.tooling.mutation]`; each override requires
+`command` and may set `args`.
 
-- a canonical `SignalResult` variant
-- a matching typed offender list
-- policy-aware `pass` evaluation
+Size requires a budget entry and complexity requires `fn_cyclomatic`; either
+missing value produces a clear collector error. Coverage thresholds and
+dependency rules are optional: without `line_percent`, coverage has no policy
+threshold, and without `go.deps.forbidden`, no edges are forbidden.
 
-## Detection and roots
-
-- A root is considered Go when `go.mod` is present.
-- `go.work` ancestors are recorded as workspace execution context.
-- `ayni analyze` runs Go collection only for configured and detected `[go].roots`.
-- The default file profile for size checks is Go files (`*.go`) unless narrowed by policy.
-
-## Tool catalog
-
-Go tools are declared in `catalog.rs` using `CatalogEntry` + `Installer`:
-
-| Installer | Example tools | Used for |
-| --------- | ------------- | -------- |
-| `Bundled` | `go` | built-in execution across Go signals |
-| `GoInstall` | `gocyclo` | complexity collection |
-
-Each entry declares `for_signals`, so `ayni install` can derive required tools from enabled checks.
-
-## Setup contract
-
-**Runtime and build assumption:** a Go module (`go.mod`), optionally under a
-`go.work` workspace, with the Go toolchain on `PATH`. Ayni detects/expects the
-toolchain; it does not install Go itself. `--apply` uses `go install` only for
-catalog-managed tools whose checks are enabled.
-
-| Tool | Signals | Required or optional | Ownership |
-| --- | --- | --- | --- |
-| `go` | test, coverage, size, deps, mutation | required | Ayni detects/expects it; Go toolchain installation is user-owned |
-| `gocyclo` | complexity | required when complexity is enabled | Ayni installs with `go install` under `--apply`, otherwise detects/reports |
-
-## Policy expectations
-
-Go collectors read these `.ayni.toml` sections:
-
-- `[checks]`
-- `[go]` (`roots = [...]`)
-- `[go.size]` (glob budgets as `glob = { warn, fail, exclude? }`)
-- `[go.complexity]` (`fn_cyclomatic`)
-- `[go.coverage]` (`line_percent`)
-- `[go.deps.forbidden]` (forbidden dependency edges)
-- optional `[go.tooling.test]`, `[go.tooling.coverage]`, `[go.tooling.mutation]` command overrides
-
-If required policy fields are missing, collectors return explicit errors.
-
-## Full TOML example
+## Configuration Example
 
 ```toml
 [languages]
@@ -93,17 +44,9 @@ enabled = ["go"]
 [go]
 roots = ["services/api", "services/worker"]
 
-[go.tooling.test]
-command = "go"
-args = ["test", "./...", "-json"]
-
 [go.tooling.coverage]
 command = "go"
 args = ["test", "./...", "-coverprofile=.ayni/go.cover.out"]
-
-[go.tooling.mutation]
-command = "go"
-args = ["test", "./..."]
 
 [go.size]
 "**/*.go" = { warn = 300, fail = 600, exclude = ["vendor/**", ".git/**", ".ayni/**"] }
@@ -116,45 +59,4 @@ line_percent = { warn = 70, fail = 50 }
 
 [go.deps.forbidden]
 "internal/domain/**" = ["internal/http/**"]
-"internal/core/**" = ["internal/infra/**"]
 ```
-
-## `ayni install --language go`
-
-`--language go` scopes installation to Go catalog entries only. Repeat
-`--language` for multiple adapters (for example `--language go --language node`);
-duplicates are ignored.
-
-```bash
-ayni install --language go --repo-root <path>
-```
-
-The install flow:
-
-1. Load policy and detect configured Go roots.
-2. Evaluate each Go catalog entry against enabled checks.
-3. Probe tool status (present/outdated/missing).
-4. Optionally install missing tools when `--apply` is passed.
-
-The flow is deterministic and idempotent.
-
-`install` never updates `AGENTS.md`; use `ayni agents sync --repo-root <path>`
-to update only Ayni's marked guidance section.
-
-## `ayni analyze --language go`
-
-`--language go` limits analysis planning to Go roots and Go collectors.
-
-```bash
-ayni analyze --config ./.ayni.toml --language go --output stdout
-```
-
-Use `--output md` for markdown summary output:
-
-```bash
-ayni analyze --config ./.ayni.toml --language go --output md
-```
-
-## Output guarantees
-
-The adapter emits only core-defined signal kinds and typed payloads. It must never emit ad-hoc row shapes, so downstream reporting stays stable across all languages.

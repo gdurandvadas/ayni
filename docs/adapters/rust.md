@@ -1,90 +1,43 @@
 # Rust Adapter
 
-The Rust adapter is the reference implementation of the Ayni language adapter contracts.
+## Installation
 
-It detects Cargo workspaces, resolves Rust tooling requirements from a typed catalog, and emits typed `SignalRow` values for each enabled `SignalKind`.
-Runtime behavior follows the product-level [runtime and setup rules](../product/runtime.md).
+Rust roots are directories containing `Cargo.toml`; discovery skips `target`,
+`.git`, and `node_modules`. A manifest with `[workspace]` is a workspace
+controller, while the repository root is analyzed only when its manifest also
+has `[package]`. Cargo commands for a member run from its workspace root.
 
-## Module layout
+`cargo` and a Rust toolchain are user-owned prerequisites. Ayni can install
+catalog-managed tools when their checks are enabled and installation is applied:
+`llvm-tools-preview` through Rustup, and the remaining tools through Cargo.
 
-```text
-adapters/rust/src/
-├── lib.rs
-├── adapter.rs
-├── catalog.rs
-└── collectors/
-    ├── mod.rs
-    ├── test.rs
-    ├── coverage.rs
-    ├── size.rs
-    ├── complexity.rs
-    ├── deps.rs
-    └── mutation.rs
-```
+## Signal Coverage
 
-## Signal coverage
+| Signal | Required tool or method | Version contract |
+| --- | --- | --- |
+| `test` | `cargo test` | no version enforced |
+| `coverage` | `llvm-tools-preview`; `cargo-llvm-cov` | `cargo-llvm-cov` pinned to 0.8.5; `llvm-tools-preview`: no version enforced |
+| `size` | built-in Rust source scan | no version enforced |
+| `complexity` | `rust-code-analysis-cli` | no version enforced |
+| `deps` | Cargo workspace/dependency graph scan | no version enforced |
+| `mutation` | `cargo-mutants` (opt-in) | no version enforced |
 
-| Signal kind  | Collector module         | Source tool / method                              |
-| ------------ | ------------------------ | ------------------------------------------------- |
-| `test`       | `collectors/test.rs`     | `cargo test`                                      |
-| `coverage`   | `collectors/coverage.rs` | `cargo llvm-cov`                                  |
-| `size`       | `collectors/size.rs`     | walkdir + `[rust.size]` budgets                   |
-| `complexity` | `collectors/complexity.rs` | `rust-code-analysis-cli`                         |
-| `deps`       | `collectors/deps.rs`     | Cargo workspace/dependency graph scan             |
-| `mutation`   | `collectors/mutation.rs` | `cargo mutants`                                   |
+## Contract
 
-Every collector outputs:
+Enabled checks come from `[checks]`. Configure Rust roots in `[rust].roots`
+(default `["."]`), size budgets in `[rust.size]`, complexity thresholds in
+`[rust.complexity]`, coverage thresholds in `[rust.coverage]`, and forbidden
+dependency edges in `[rust.deps.forbidden]`. Command overrides are optional in
+`[rust.tooling.test]`, `[rust.tooling.coverage]`, and
+`[rust.tooling.mutation]`; each override requires `command` and may set `args`.
 
-- a canonical `SignalResult` variant
-- a matching typed offender list
-- policy-aware `pass` evaluation
+Size requires at least one budget entry and complexity requires
+`fn_cyclomatic`; either missing value produces a clear collector error.
+Coverage thresholds and dependency rules are optional: without `line_percent`,
+coverage has no policy threshold, and without `rust.deps.forbidden`, no edges
+are forbidden.
 
-## Tool catalog
-
-Rust execution resolves `cargo` from the package root or a Cargo workspace
-ancestor. Member crates keep their signal scope while Cargo commands execute
-from the workspace root.
-
-Rust tools are declared in `catalog.rs` using `CatalogEntry` + `Installer`:
-
-| Installer | Example tools | Used for |
-| --------- | ------------- | -------- |
-| `Bundled` | `cargo` | built-in workspace/test execution |
-| `Rustup` | `llvm-tools-preview` | LLVM tooling required by coverage |
-| `Cargo` | `cargo-llvm-cov`, `rust-code-analysis-cli`, `cargo-mutants` | coverage, complexity, mutation |
-
-Each entry declares `for_signals`, so `ayni install` can infer install needs from enabled signal kinds.
-
-## Setup contract
-
-**Runtime and build assumption:** a Cargo project or workspace with `cargo` on
-`PATH`; Ayni executes member commands from the workspace root. Cargo/Rustup are
-host prerequisites: Ayni detects them but does not install a Rust toolchain.
-With `--apply`, Ayni installs catalog-managed tools only when their associated
-check is enabled.
-
-| Tool | Signals | Required or optional | Ownership |
-| --- | --- | --- | --- |
-| `cargo` | test (and Cargo execution) | required | Ayni detects/expects it; Rustup/Cargo installation is user-owned |
-| `llvm-tools-preview`, `cargo-llvm-cov` | coverage | required when coverage is enabled | Ayni installs via Rustup/Cargo with `--apply`, otherwise detects/reports |
-| `rust-code-analysis-cli` | complexity | required when complexity is enabled | Ayni installs via Cargo with `--apply`, otherwise detects/reports |
-| `cargo-mutants` | mutation | optional (`mutation` is opt-in) | Ayni installs via Cargo with `--apply` when enabled, otherwise detects/reports |
-
-## Policy expectations
-
-Rust collectors read these policy sections:
-
-- `[checks]`
-- `[rust.size]` (Rust line-count budgets as `glob = { warn, fail, exclude? }`)
-- `[rust.complexity]`
-- `[rust.coverage]`
-- `[rust.deps]` (including `[rust.deps.forbidden]` for glob-based rules)
-- optional `[rust.tooling.test]`, `[rust.tooling.coverage]`, `[rust.tooling.mutation]` command overrides
-- Optional empty `[rust]` for forward-compatible extras
-
-If required policy fields are missing, collectors return explicit errors.
-
-## Full TOML example
+## Configuration Example
 
 ```toml
 [languages]
@@ -96,14 +49,6 @@ roots = ["core", "adapters/rust", "cli"]
 [rust.tooling.test]
 command = "cargo"
 args = ["test"]
-
-[rust.tooling.coverage]
-command = "cargo"
-args = ["llvm-cov", "--workspace", "--json", "--summary-only"]
-
-[rust.tooling.mutation]
-command = "cargo"
-args = ["mutants", "--list"]
 
 [rust.size]
 "*.rs" = { warn = 1000, fail = 1600, exclude = ["target/**", ".git/**", ".ayni/**"] }
@@ -117,85 +62,4 @@ line_percent = { warn = 40, fail = 35 }
 
 [rust.deps.forbidden]
 "core" = ["adapters/*", "cli"]
-"adapters/*" = ["cli"]
 ```
-
-## Output guarantees
-
-The adapter must never emit ad-hoc free-form row shapes. It only emits core-defined signal kinds and typed payloads, so output remains consistent with future Go and Node adapters.
-
-## Catalog as a data structure
-
-The tool catalog above is not just documentation — it is a first-class data structure inside the adapter crate. Each catalog entry declares:
-
-| Field | Meaning |
-| ----- | ------- |
-| `name` | identifier (e.g. `cargo-llvm-cov`) |
-| `install_cmd` | command used to install it (e.g. `cargo install cargo-llvm-cov`) |
-| `check_cmd` | command that exits zero if the tool is already present |
-| `for_signals` | which signals require this tool (e.g. `["coverage"]`) |
-| `opt_in` | whether the tool is only installed when the corresponding check is enabled in `.ayni.toml` |
-
-`ayni install --language rust` iterates this catalog at install time. This is the single source of truth for "what does the Rust adapter need to collect signals" — if a tool is added to the adapter, it must be added to the catalog, and `ayni install` picks it up automatically.
-
-Every tool documented in the catalog section above must be present in this data structure. If documentation and the catalog drift, the catalog wins — the documentation is updated to match.
-
----
-
-## `ayni install --language rust`
-
-`--language rust` scopes installation to Rust only. Omitting `--language` installs for every enabled language. Repeat the flag for polyglot setup; values are deduplicated.
-
-```bash
-ayni install --language rust --repo-root <path>
-ayni install --language rust --language node --repo-root <path>
-```
-
-**What it does:**
-
-1. Creates `.ayni.toml` at the repo root if missing — policy config with default thresholds for size, complexity, deps, and coverage toggle
-2. Ensures `.ayni/` is in `.gitignore` — keeps generated artifacts out of source control
-3. For each entry in the Rust catalog:
-   - Skip if the entry's corresponding check is disabled in `.ayni.toml`
-   - Run `check_cmd`. If it exits zero, the tool is already present — skip.
-   - Otherwise, run `install_cmd` to install the missing tool.
-4. Reports a summary: which tools were installed, which were already present, which were skipped, and any install failures.
-
-`install` does not change `AGENTS.md`. Run `ayni agents sync --repo-root <path>`
-to intentionally create or refresh Ayni's marked guidance block.
-
-The flow is deterministic and idempotent. Running `ayni install --language rust` twice in a row performs zero installs the second time.
-
----
-
-## Branch-level diff strategy
-
-All signals run on the full workspace. There is no diff-scoped analysis for size, complexity, deps, or coverage.
-
-**Why full analysis is required:**
-
-- Coverage is cumulative. If a test file changes but the source file doesn't, a diff-only scan reports zero coverage change — which is wrong.
-- Dependency analysis requires the full graph. Partial graphs produce false negatives on forbidden edges.
-- Cross-file effects: a change in file A can affect coverage or complexity of file B through macros, traits, or shared test modules.
-
-**Exception — mutation testing:**
-
-`cargo-mutants --in-diff` scopes mutant generation to files changed in the current branch. This is appropriate and intentional: full mutation testing on a large workspace takes hours; diff-scoped mutation on a PR takes minutes. This is the one signal where diff-scope is correct by design.
-
-To compute the diff for `--in-diff`:
-
-```bash
-git diff origin/main...HEAD > .ayni/branch.diff
-cargo mutants --in-diff .ayni/branch.diff
-```
-
-**New code annotation:**
-
-The CLI computes `git diff <base>...HEAD --name-only` at run time and annotates offenders from all adapters with `new_code: true` when the offender file is in changed paths. This allows the GitHub check run to distinguish:
-
-- _"This complexity violation exists in code you changed this PR"_ (new code)
-- _"This complexity violation is pre-existing in untouched code"_ (existing code)
-
-This mirrors SonarCloud's "New Code" vs "Overall Code" separation — the same full analysis, with a different presentation layer on top.
-
-Set `AYNI_MERGE_BASE` to override the default diff base (`origin/main`, then `main`, then `HEAD~1`).

@@ -188,8 +188,9 @@ Ayni emits a closed signal vocabulary shared across language adapters.
 | `deps` | Forbidden architectural dependency edges |
 | `mutation` | Test effectiveness against simulated behavioral change |
 
-For the field-level signal contract, see
-[`docs/product/signals.md`](docs/product/signals.md).
+For the canonical vocabulary and version selection, see
+[`docs/product/signals.md`](docs/product/signals.md); the current JSON envelope
+is [schema v2](docs/product/signals/v2.md).
 
 ## Configuration
 
@@ -242,7 +243,7 @@ For layer boundaries and change rules, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 - [CLI reference](docs/cli.md)
 - [Configuration reference](docs/product/config.md)
-- [Signal contract](docs/product/signals.md)
+- [Signal contract index](docs/product/signals.md) ([current v2](docs/product/signals/v2.md), [historical v1](docs/product/signals/v1.md))
 - [Runtime and setup rules](docs/product/runtime.md)
 - [Architecture](ARCHITECTURE.md)
 - Language adapters:

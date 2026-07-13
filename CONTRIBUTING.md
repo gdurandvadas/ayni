@@ -52,9 +52,12 @@ Regenerate the CLI reference after changing commands or flags:
 cargo doc-cli > docs/cli.md
 ```
 
-Release docs are built from the released code when release-please publishes a GitHub Release, and the same workflow can also be triggered manually with `workflow_dispatch`. The docs workflow regenerates `docs/cli.md`, builds VitePress, and publishes only the static site output to the `documentation` branch for GitHub Pages.
+The documentation workflow deploys directly to GitHub Pages from an uploaded build artifact. It runs for pushes to `main`, published GitHub Releases (built from the release tag), and manual `workflow_dispatch` runs (built from the selected revision). The workflow regenerates `docs/cli.md`, builds VitePress, then deploys `docs/.vitepress/dist`; source documentation remains under `docs/`.
 
-The `documentation` branch is generated deployment output only; the source of truth for docs remains the normal source branch under `docs/`.
+The GitHub Pages custom-domain configuration preserves the intended `ayni.gedv.me` domain.
+
+For language adapter implementation guidance, see
+[`docs/contributing/adapters.md`](docs/contributing/adapters.md).
 
 ## Architecture
 
