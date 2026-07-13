@@ -10,12 +10,15 @@ decisions that are not visible in the code.
 - `ARCHITECTURE.md` — layer boundaries, dependency rules, and change decision guide
 - `README.md` — product framing, AI feedback loop, and high-level architecture
 - `docs/product/config.md` — `.ayni.toml` reference
-- `docs/product/signals.md` — canonical signal vocabulary and field-level contract
-- `docs/adapters/rust.md` — Rust adapter module layout and collector mapping
-- `docs/adapters/node.md` — Node adapter toolchain, lockfile manager resolution, and collector mapping
-- `docs/adapters/go.md` — Go adapter collectors, tool catalog, and policy mapping
-- `docs/adapters/python.md` — Python adapter package managers, collectors, and policy mapping
-- `docs/adapters/template.md` — how to build a new language adapter
+- `docs/product/signals.md` — canonical signal vocabulary, schema selection, and compatibility posture
+- `docs/product/signals/v2.md` — current `0.2.0` serialized signal-artifact contract
+- `docs/product/signals/v1.md` — historical `0.1.0` serialized signal-artifact reference only
+- `docs/adapters/rust.md` — Rust adapter installation, signal coverage, and policy contract
+- `docs/adapters/node.md` — Node adapter package-manager resolution, signal coverage, and policy contract
+- `docs/adapters/go.md` — Go adapter installation, signal coverage, and policy contract
+- `docs/adapters/python.md` — Python adapter package-manager resolution, signal coverage, and policy contract
+- `docs/adapters/kotlin.md` — Kotlin Gradle adapter installation, signal coverage, and policy contract
+- `docs/contributing/adapters.md` — how to build a new language adapter
 - `docs/cli.md` — CLI reference; regenerate after CLI changes
 
 After adding or modifying any CLI command or flag, regenerate with:

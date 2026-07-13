@@ -17,11 +17,18 @@ export default defineConfig({
       { text: 'CLI', link: '/cli' },
       {
         text: 'Product Reference',
-        items: [
-          { text: 'Configuration', link: '/product/config' },
-          { text: 'Signals', link: '/product/signals' },
-          { text: 'Runtime', link: '/product/runtime' },
-        ],
+          items: [
+            { text: 'Configuration', link: '/product/config' },
+            {
+              text: 'Signals',
+              link: '/product/signals',
+              items: [
+                { text: 'Schema v2', link: '/product/signals/v2' },
+                { text: 'Schema v1 (historical)', link: '/product/signals/v1' },
+              ],
+            },
+            { text: 'Runtime', link: '/product/runtime' },
+          ],
       },
       {
         text: 'Adapters',
@@ -30,10 +37,10 @@ export default defineConfig({
           { text: 'Node', link: '/adapters/node' },
           { text: 'Go', link: '/adapters/go' },
           { text: 'Python', link: '/adapters/python' },
-          { text: 'Template', link: '/adapters/template' },
           { text: 'Kotlin', link: '/adapters/kotlin' },
         ],
       },
+      { text: 'Contributing', link: '/contributing/adapters' },
     ],
     sidebar: {
       '/': [
@@ -48,7 +55,14 @@ export default defineConfig({
           text: 'Product Reference',
           items: [
             { text: 'Configuration', link: '/product/config' },
-            { text: 'Signals', link: '/product/signals' },
+            {
+              text: 'Signals',
+              link: '/product/signals',
+              items: [
+                { text: 'Schema v2', link: '/product/signals/v2' },
+                { text: 'Schema v1 (historical)', link: '/product/signals/v1' },
+              ],
+            },
             { text: 'Runtime', link: '/product/runtime' },
           ],
         },
@@ -59,9 +73,12 @@ export default defineConfig({
             { text: 'Node', link: '/adapters/node' },
             { text: 'Go', link: '/adapters/go' },
             { text: 'Python', link: '/adapters/python' },
-            { text: 'Template', link: '/adapters/template' },
             { text: 'Kotlin', link: '/adapters/kotlin' },
           ],
+        },
+        {
+          text: 'Contributing',
+          items: [{ text: 'Language adapters', link: '/contributing/adapters' }],
         },
       ],
     },

@@ -71,6 +71,6 @@ Before proposing edits:
 ## See Also
 
 - [README](README.md)
-- [Signal contract](docs/product/signals.md)
-- [Adapter template](docs/adapters/template.md)
+- [Signal contract index](docs/product/signals.md) ([current v2](docs/product/signals/v2.md))
+- [Adapter contribution guide](docs/contributing/adapters.md)
 - [Configuration reference](docs/product/config.md)

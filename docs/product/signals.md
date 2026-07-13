@@ -1,215 +1,55 @@
 # Signal Contract
 
-This document defines the canonical Ayni signal vocabulary. It is the product-level contract used by adapters, the CLI, and AI consumers.
+This is the stable entry point for Ayni's canonical signal vocabulary. It does
+not define a single JSON run-artifact envelope: select the versioned contract
+named by an artifact's `schema_version` before reading envelope or row fields.
 
-Repository policy lives in `.ayni.toml`; for checks, languages, thresholds, and **excluding paths** (for example skipping `target/**` in the size signal), see **[Configuration reference](config.md)**.
-For command failure categories and runtime diagnostics, see **[Runtime and setup rules](runtime.md)**.
+- [Schema v2 (`0.2.0`)](signals/v2.md) is the current emitted contract.
+- [Schema v1 (`0.1.0`)](signals/v1.md) is a historical reference only.
 
-## Common row shape
+Repository policy lives in `.ayni.toml`; for checks, languages, thresholds, and
+excluding paths (for example, skipping `target/**` in the size signal), see the
+[Configuration reference](config.md). For command failure categories and runtime
+diagnostics, see [Runtime and setup rules](runtime.md).
 
-Every signal row includes:
+## Canonical vocabulary
 
-- `kind`: one of `test`, `coverage`, `size`, `complexity`, `deps`, `mutation`
-- `language`: one of `rust`, `go`, `node`, `python`, `kotlin` (expandable)
-- `scope`: measurement target (`workspace`, `path`, optional `package`, optional `file`)
-- `pass`: whether the row is within policy budget
-- `result`: typed payload for the signal kind
-- `budget`: typed threshold payload for the signal kind
-- `offenders`: typed list of violations
-- `delta_vs_previous`: optional change vs previous local run
+All versions document rows for this closed vocabulary. New adapters must emit
+only these `kind` values.
 
-## Machine-readable artifact
+| `kind` | Purpose |
+| --- | --- |
+| `test` | Test execution outcome |
+| `coverage` | Coverage quality |
+| `size` | File or module size budgets |
+| `complexity` | Function complexity budgets |
+| `deps` | Architectural dependency constraints |
+| `mutation` | Test-suite fault-detection strength |
 
-Every `ayni analyze` run writes a schema-v2 `RunArtifact` to
-`.ayni/last/signals.json`. The same payload can be printed to stdout with
-either `ayni analyze --json` or `ayni analyze --output json`. The selectors are
-equivalent; `--json` cannot be combined with `--output stdout` or `--output md`.
-Consumers must check `schema_version` before
-relying on field shapes; Ayni ignores previous artifacts whose schema version
-differs when computing `delta_vs_previous`.
+The currently serialized language values are `rust`, `go`, `node`, `python`,
+and `kotlin`. A row scope identifies a measurement target with a workspace root
+and optional path, package, and file. Exact serialized row fields, optionality,
+and payload shapes are version-specific; use the selected version reference.
 
-Schema v2 has these stable top-level fields:
+## Version selection and compatibility
 
-- `schema_version`: currently `0.2.0`.
-- `generated_at`, `ayni_version`: generation timestamp and producing Ayni version.
-- `invocation`, `output`: supplied invocation and output context. `invocation`
-  contains `command`, requested `languages`, and optional `scope`; `output`
-  contains `format` and `destination`.
-- `config_path`, `repository_root`: paths used for this run. Artifacts may
-  therefore contain local path information and should be shared accordingly.
-- `aggregate`: derived `status` (`pass|fail`) plus total, passing, failing,
-  warning-offender, and failing-offender counts.
-- `applied_thresholds`: the typed row budgets with their kind, language, and scope.
-- `rows`: canonical typed signal rows.
-- `offender_summaries`: derived per-row offender counts, grouped by kind,
-  language, and scope.
-- `failure_summaries`: omitted when no command failed; otherwise, one derived
-  entry per command failure containing category, classification, command, cwd,
-  optional exit code, and message.
+`ayni analyze` writes `.ayni/last/signals.json`; `ayni analyze --json` and
+`ayni analyze --output json` print the same artifact. Current output uses
+schema `0.2.0`. Consumers must inspect `schema_version` and use the matching
+version page rather than assuming fields from another envelope.
 
-`aggregate`, `applied_thresholds`, `offender_summaries`, and
-`failure_summaries` are deterministic views derived from `rows`; rows remain
-the only canonical analysis truth. Consumers must not treat those views as
-independently editable state.
+Schema v2 is a breaking replacement for v1 consumers. Current delta loading
+only uses a previously stored artifact when its `schema_version` equals the
+current schema string. There is no compatibility payload or automatic v1-to-v2
+conversion.
 
-Rows for command-backed signals may also include `failure` inside the typed
-result. Failure objects use the shared categories defined in
-[`runtime.md`](runtime.md).
+V1 is retained only as documentation of the pinned historical source. Ayni
+makes no current v1 parsing, conversion, migration, or compatibility promise.
 
-### JSON v2 migration and report views
+## Vocabulary evolution
 
-Schema v2 is a breaking replacement for v1 JSON consumers: migrate parsers to
-the v2 top-level run envelope and typed `rows` rather than assuming a v1 shape.
-There is no compatibility payload or automatic v1-to-v2 conversion. The
-persisted artifact and both JSON selectors use the same v2 payload.
-
-Markdown is a human view of those rows: **Offenders** lists typed warn/fail
-findings, while **Failures** is omitted unless command failures exist and then
-summarizes their category, classification, command, cwd, exit code when
-present, and message. These diagnostics, as well as `config_path`,
-`repository_root`, and offender paths in JSON, may reveal repository paths or
-tool output.
-
-## Signal kinds
-
-### `test`
-
-Purpose: report test execution outcome.
-
-Required `result` fields:
-
-- `total_tests` (`u64`)
-- `passed` (`u64`)
-- `failed` (`u64`)
-- `duration_ms` (`Option<u64>`)
-- `runner` (`string`)
-
-Required `offender` fields:
-
-- `message` (`string`)
-- `file` (`Option<string>`)
-- `line` (`Option<u64>`)
-- `test_name` (`Option<string>`)
-
-Pass semantics: `failed == 0`.
-
-### `coverage`
-
-Purpose: report coverage quality.
-
-Required `result` fields:
-
-- `percent` (`Option<f64>`) — headline coverage percentage (0–100), comparable across adapters; set when the tool yields a primary metric (often matches line coverage)
-- `line_percent` (`Option<f64>`)
-- `branch_percent` (`Option<f64>`)
-- `status` (`string`)
-- `engine` (`string`)
-
-Consumers that need a single number SHOULD prefer `percent`, then `line_percent`, then `branch_percent`.
-
-Required `budget` fields:
-
-- `line_percent_warn` (`Option<f64>`)
-- `line_percent_fail` (`Option<f64>`)
-
-Required `offender` fields:
-
-- `file` (`string`)
-- `line` (`Option<u64>`)
-- `value` (`f64`)
-- `level` (`warn|fail`)
-
-Pass semantics: no `fail` level offenders and no runtime error status.
-
-### `size`
-
-Purpose: enforce file/module size budgets.
-
-Required `result` fields:
-
-- `max_lines` (`u64`)
-- `total_files` (`u64`)
-- `warn_count` (`u64`)
-- `fail_count` (`u64`)
-
-Required `offender` fields:
-
-- `file` (`string`)
-- `value` (`u64`)
-- `warn` (`u64`)
-- `fail` (`u64`)
-- `level` (`warn|fail`)
-
-Pass semantics: `fail_count == 0`.
-
-### `complexity`
-
-Purpose: cap function complexity.
-
-Required `result` fields:
-
-- `engine` (`string`)
-- `method` (`string`)
-- `measured_functions` (`u64`)
-- `max_fn_cyclomatic` (`f64`)
-- `max_fn_cognitive` (`Option<f64>`)
-- `warn_count` (`u64`)
-- `fail_count` (`u64`)
-
-Required `offender` fields:
-
-- `file` (`string`)
-- `line` (`u64`)
-- `function` (`string`)
-- `cyclomatic` (`f64`)
-- `cognitive` (`Option<f64>`)
-- `level` (`warn|fail`)
-
-Pass semantics: `fail_count == 0`.
-
-### `deps`
-
-Purpose: enforce architectural dependency constraints.
-
-Required `result` fields:
-
-- `crate_count` (`u64`)
-- `edge_count` (`u64`)
-- `violation_count` (`u64`)
-
-Required `offender` fields:
-
-- `from` (`string`)
-- `to` (`string`)
-- `rule` (`string`)
-- `level` (`warn|fail`)
-
-Pass semantics: `violation_count == 0`.
-
-### `mutation`
-
-Purpose: measure test suite fault-detection strength.
-
-Required `result` fields:
-
-- `engine` (`string`)
-- `killed` (`u64`)
-- `survived` (`u64`)
-- `timeout` (`u64`)
-- `score` (`Option<f64>`)
-
-Required `offender` fields:
-
-- `file` (`Option<string>`)
-- `line` (`Option<u64>`)
-- `mutation_kind` (`string`)
-- `message` (`string`)
-- `level` (`warn|fail`)
-
-Pass semantics: no fail-level survivors above configured budget.
-
-## Compatibility rules
-
-- New adapters must only emit existing `kind` values.
-- New fields may be added to kind-specific payloads, but existing fields and semantics must remain stable.
-- Unknown/adapter-specific detail belongs in explicitly named extension sub-objects, never free-form top-level keys.
+Existing signal names and documented semantics are the canonical vocabulary.
+When an envelope changes, publish its field contract under a new version page
+instead of changing this index to describe that envelope. Unknown or
+adapter-specific detail belongs in explicitly named extension sub-objects, not
+free-form top-level keys.

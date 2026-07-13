@@ -8,7 +8,8 @@ Policy lives at the repository root. It controls enabled signals, active
 languages and roots, per-language thresholds, dependency rules, report settings,
 and tool command overrides.
 
-For the signal vocabulary and JSON artifact fields, see [`signals.md`](signals.md).
+For the signal vocabulary and schema selection, see [`signals.md`](signals.md);
+for current JSON artifact fields, see [schema v2](signals/v2.md).
 For runner resolution, setup validation, failure categories, and debug
 telemetry, see [`runtime.md`](runtime.md).
 
@@ -317,7 +318,7 @@ Warnings are retained in reports and aggregate warning counts, while only
 fail-level offenders make a row and the aggregate run status fail.
 
 The effective typed budgets applied to each analyzed row are preserved in the
-schema-v2 artifact's `applied_thresholds` field; see [`signals.md`](signals.md).
+schema-v2 artifact's `applied_thresholds` field; see [schema v2](signals/v2.md).
 
 ## Output and report safety
 
@@ -330,7 +331,7 @@ tool output; do not publish them without reviewing that diagnostic data.
 For machine consumers, `ayni analyze --json` and `ayni analyze --output json`
 select the same schema-v2 artifact. `--json` conflicts with an explicit
 non-JSON `--output` value (`stdout` or `md`); choose one output mode. See
-[`signals.md`](signals.md) for the schema and migration contract.
+[schema v2](signals/v2.md) for the current schema and migration posture.
 
 ---
 

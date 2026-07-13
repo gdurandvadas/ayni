@@ -10,14 +10,16 @@ locally, and turn results into signals that humans and agents can act on.
 
 - [CLI reference](/cli)
 - [Configuration reference](/product/config)
-- [Signal contract](/product/signals)
+- [Signal contract index](/product/signals)
+- [Current signal schema v2](/product/signals/v2)
+- [Historical signal schema v1](/product/signals/v1)
 - [Runtime and setup rules](/product/runtime)
 - [Rust adapter](/adapters/rust)
 - [Go adapter](/adapters/go)
 - [Node adapter](/adapters/node)
 - [Python adapter](/adapters/python)
 - [Kotlin adapter](/adapters/kotlin)
-- [Adapter template](/adapters/template)
+- [Contributing language adapters](/contributing/adapters)
 
 ## Project docs
 

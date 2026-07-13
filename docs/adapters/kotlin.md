@@ -1,73 +1,43 @@
 # Kotlin Adapter
 
-The Kotlin adapter implements the same `LanguageAdapter` and `SignalCollector`
-contracts as the existing adapters.
+## Installation
 
-It supports Gradle roots only. Root discovery is intentionally conservative:
-the adapter detects the repository root when Gradle markers are present, while
-analysis uses configured `[kotlin].roots` entries.
+Kotlin supports Gradle projects only. The repository root is detected when it
+contains `build.gradle.kts`, `build.gradle`, `settings.gradle.kts`, or
+`settings.gradle`; configure analysis roots in `[kotlin].roots`. The Gradle
+runner precedence is `./gradlew`, `gradlew.bat`, then `gradle` on `PATH`.
 
-## Module layout
+The Gradle runner and JDK are user-owned prerequisites. Applied installation
+can add missing plugins only to supported direct `plugins { }` blocks in
+`build.gradle.kts` or `build.gradle`; unsupported build shapes report setup
+errors. Existing JaCoCo coverage is retained; otherwise installation adds Kover.
 
-```text
-adapters/kotlin/src/
-├── adapter.rs
-├── catalog.rs
-├── discovery.rs
-├── install.rs
-└── collectors/
-```
+## Signal Coverage
 
-## Signal coverage
-
-| Signal kind | Collector module | Tooling |
+| Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | `collectors/test.rs` | Gradle `test` + JUnit XML under `build/test-results/test` |
-| `coverage` | `collectors/coverage.rs` | Auto-discovered Gradle `koverXmlReport` or `jacocoTestReport` + Kover/JaCoCo XML |
-| `size` | `collectors/size.rs` | file walk + `[kotlin.size]` glob budgets |
-| `complexity` | `collectors/complexity.rs` | Gradle `detekt` + Checkstyle XML |
-| `deps` | `collectors/deps.rs` | Gradle `dependencies` project edges |
-| `mutation` | `collectors/mutation.rs` | Gradle `pitest` + PIT XML |
+| `test` | Gradle `test` task and JUnit XML | no version enforced |
+| `coverage` | Gradle `koverXmlReport` or `jacocoTestReport` | Kover 0.9.8 when Ayni adds it; JaCoCo: no version enforced |
+| `size` | built-in Kotlin source scan | no version enforced |
+| `complexity` | Gradle `detekt` task | Detekt 1.23.8 when Ayni adds it |
+| `deps` | Gradle `dependencies` project edges | no version enforced |
+| `mutation` | Gradle `pitest` task (opt-in) | PIT plugin 1.19.0 when Ayni adds it |
 
-## Execution
+## Contract
 
-Kotlin resolves the Gradle runner from the configured root:
+Enabled checks come from `[checks]`. Configure roots in `[kotlin].roots`
+(default `["."]`), size budgets in `[kotlin.size]`, complexity in
+`[kotlin.complexity]`, coverage in `[kotlin.coverage]`, and forbidden edges in
+`[kotlin.deps.forbidden]`. Command overrides are optional in
+`[kotlin.tooling.test]`, `[kotlin.tooling.coverage]`, and
+`[kotlin.tooling.mutation]`; each override requires `command` and may set `args`.
 
-1. `./gradlew`
-2. `gradlew.bat`
-3. `gradle`
+Size requires a budget entry and complexity requires `fn_cyclomatic`; either
+missing value produces a clear collector error. Coverage thresholds and
+dependency rules are optional: without `line_percent`, coverage has no policy
+threshold, and without `kotlin.deps.forbidden`, no edges are forbidden.
 
-`install_cwd` and `exec_cwd` are the configured Kotlin root.
-
-## Setup contract
-
-**Runtime and build-system assumption:** a Gradle Kotlin project with a wrapper
-(`./gradlew` or `gradlew.bat`) or a `gradle` executable on `PATH`. Ayni
-detects/expects that runner; it does not install Gradle, a JDK, or Kotlin.
-With `install --apply`, Ayni updates supported direct Gradle `plugins { }`
-blocks to provide missing catalog tasks; unsupported build shapes are reported
-rather than rewritten.
-
-| Tool/task | Signals | Required or optional | Ownership |
-| --- | --- | --- | --- |
-| Gradle runner and JDK | all Kotlin signals | required | Ayni detects/expects them; installation is user-owned |
-| `test` task / JUnit XML | test | required when test is enabled | Ayni expects the task and report; Gradle project owns it |
-| `koverXmlReport` or `jacocoTestReport` | coverage | required when coverage is enabled | Ayni detects existing JaCoCo or adds Kover with `--apply` on supported builds |
-| `detekt` | complexity | required when complexity is enabled | Ayni adds the Detekt plugin with `--apply` on supported builds, otherwise detects/reports |
-| `pitest` | mutation | optional (`mutation` is opt-in) | Ayni adds the PIT plugin with `--apply` on supported builds, otherwise detects/reports |
-
-## Policy
-
-Kotlin collectors read:
-
-- `[kotlin]` (`roots = [...]`)
-- `[kotlin.size]`
-- `[kotlin.complexity]` (`fn_cyclomatic`)
-- `[kotlin.coverage]` (`line_percent`)
-- `[kotlin.deps.forbidden]`
-- optional `[kotlin.tooling.test]`, `[kotlin.tooling.coverage]`, `[kotlin.tooling.mutation]`
-
-Example:
+## Configuration Example
 
 ```toml
 [languages]
@@ -89,24 +59,3 @@ line_percent = { warn = 70, fail = 50 }
 [kotlin.deps.forbidden]
 "apps/api" = ["libs/ui"]
 ```
-
-## Install
-
-`ayni install --apply --language kotlin` updates direct Gradle `plugins { }`
-blocks in `build.gradle.kts` or `build.gradle` when supported.
-
-Coverage setup is preserved when Ayni detects an existing JaCoCo-based build.
-When no JaCoCo markers are detected, install defaults to adding Kover.
-
-It adds:
-
-- `org.jetbrains.kotlinx.kover` `0.9.8`
-- `io.gitlab.arturbosch.detekt` `1.23.8`
-- `info.solidsoft.pitest` `1.19.0`
-
-Unsupported build shapes fail with a setup error instead of being rewritten.
-
-Repeat `--language` to bootstrap several adapters, for example
-`ayni install --language kotlin --language rust --apply`; duplicate values are
-ignored. `install` does not modify `AGENTS.md`; use
-`ayni agents sync --repo-root <path>` for the separate managed-guidance operation.
