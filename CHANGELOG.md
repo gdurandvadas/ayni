@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.5.1...ayni-v0.6.0) (2026-07-20)
+
+
+### Features
+
+* **cli:** [0003] Verify test command ([#32](https://github.com/gdurandvadas/ayni/issues/32)) ([61975f1](https://github.com/gdurandvadas/ayni/commit/61975f10b3ecf3b713e965882c259788b0c21d35))
+
 ## [0.5.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.5.0...ayni-v0.5.1) (2026-07-12)
 
 
