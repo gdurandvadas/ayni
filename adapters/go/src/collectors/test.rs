@@ -33,7 +33,12 @@ pub fn collect_selected(
     _on_line: &mut dyn FnMut(&str),
 ) -> Result<SignalRow, String> {
     let (program, mut args) = test_command(context);
-    if let Some(target) = context.scope.file.as_ref().or(context.scope.package.as_ref()) {
+    if let Some(target) = context
+        .scope
+        .file
+        .as_ref()
+        .or(context.scope.package.as_ref())
+    {
         if let Some(default_target) = args.iter_mut().find(|arg| *arg == "./...") {
             *default_target = target.clone();
         } else {

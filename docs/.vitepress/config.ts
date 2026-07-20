@@ -9,6 +9,9 @@ export default defineConfig({
   srcExclude: ['initiatives/**'],
   cleanUrls: true,
   themeConfig: {
+    socialLinks: [
+      { icon: 'github', link: 'https://github.com/gdurandvadas/ayni' },
+    ],
     search: {
       provider: 'local',
     },
