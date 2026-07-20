@@ -349,3 +349,9 @@ Forbidden edges use the same map style as size: keys and values are glob pattern
 ## CLI scope flags
 
 Narrowing a run does not replace `.ayni.toml`; it limits **what** is analyzed in that invocation. See the CLI reference: [`../cli.md`](../cli.md) (`--file`, `--package`, `--language`).
+
+For the fast TDD loop, `ayni verify test` runs only the test signal. Selectors
+are adapter-owned for Rust, Go, Node, Python, and Kotlin, and schema-v2 evidence
+is persisted at `.ayni/verify/last/signals.json`. Focused verification does not
+calculate deltas and does not overwrite the full completion artifact under
+`.ayni/last/`.

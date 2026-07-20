@@ -4,7 +4,7 @@ use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_adapters_common::xml::{attr_f64, attr_string, attr_u64};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult,
+    TestFailure, TestResult, TestSelection,
 };
 use regex::Regex;
 use serde_json::json;
@@ -14,6 +14,35 @@ use walkdir::WalkDir;
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let (program, args) = gradle_command(context, SignalKind::Test, "test");
+    collect_with_command(context, program, args)
+}
+
+pub fn collect_selected(
+    context: &RunContext,
+    selection: &TestSelection,
+    _on_line: &mut dyn FnMut(&str),
+) -> Result<SignalRow, String> {
+    if context.scope.file.is_some() {
+        return Err(String::from(
+            "Kotlin source-file selection is unsupported; use --package and optional --name",
+        ));
+    }
+    let (program, mut args) = gradle_command(context, SignalKind::Test, "test");
+    let selector = match (&context.scope.package, &selection.name) {
+        (Some(package), Some(name)) => format!("{package}.{name}"),
+        (Some(package), None) => package.clone(),
+        (None, Some(name)) => name.clone(),
+        (None, None) => return Err(String::from("a package or test name is required")),
+    };
+    args.extend([String::from("--tests"), selector]);
+    collect_with_command(context, program, args)
+}
+
+fn collect_with_command(
+    context: &RunContext,
+    program: String,
+    args: Vec<String>,
+) -> Result<SignalRow, String> {
     let runner = format_command(&program, &args);
     let output = run_command_for_context(context, &program, &args)?;
     let report = parse_reports(&context.workdir.join("build/test-results/test"))?;

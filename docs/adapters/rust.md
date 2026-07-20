@@ -22,6 +22,10 @@ catalog-managed tools when their checks are enabled and installation is applied:
 | `deps` | Cargo workspace/dependency graph scan | no version enforced |
 | `mutation` | `cargo-mutants` (opt-in) | no version enforced |
 
+`ayni verify test --language rust` supports `--package` and optional `--name`.
+Rust source files do not map reliably to Cargo test targets, so `--file` is
+rejected with guidance to select the package and test-name filter instead.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure Rust roots in `[rust].roots`

@@ -3,7 +3,7 @@ use ayni_adapters_common::exec::format_command;
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult,
+    TestFailure, TestResult, TestSelection,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -24,6 +24,38 @@ struct GoTestEvent {
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let (program, args) = test_command(context);
+    collect_with_command(context, program, args)
+}
+
+pub fn collect_selected(
+    context: &RunContext,
+    selection: &TestSelection,
+    _on_line: &mut dyn FnMut(&str),
+) -> Result<SignalRow, String> {
+    let (program, mut args) = test_command(context);
+    if let Some(target) = context
+        .scope
+        .file
+        .as_ref()
+        .or(context.scope.package.as_ref())
+    {
+        if let Some(default_target) = args.iter_mut().find(|arg| *arg == "./...") {
+            *default_target = target.clone();
+        } else {
+            args.push(target.clone());
+        }
+    }
+    if let Some(name) = &selection.name {
+        args.extend([String::from("-run"), format!("^{name}$")]);
+    }
+    collect_with_command(context, program, args)
+}
+
+fn collect_with_command(
+    context: &RunContext,
+    program: String,
+    args: Vec<String>,
+) -> Result<SignalRow, String> {
     let runner = format_command(&program, &args);
     let output = run_tool_for_context(context, &program, &args)?;
     let success = output.status.success();

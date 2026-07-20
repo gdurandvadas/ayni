@@ -23,6 +23,13 @@ errors. Existing JaCoCo coverage is retained; otherwise installation adds Kover.
 | `deps` | Gradle `dependencies` project edges | no version enforced |
 | `mutation` | Gradle `pitest` task (opt-in) | PIT plugin 1.19.0 when Ayni adds it |
 
+Focused verification
+
+`ayni verify test --language kotlin` supports a Gradle test class/package via
+`--package` and an optional method selector via `--name`; these become a Gradle
+`--tests` pattern. Kotlin source-file selection with `--file` is rejected
+because Gradle test filters operate on test class names.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure roots in `[kotlin].roots`

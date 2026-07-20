@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use ayni_core::{FailureSummary, Level, Offenders, RunArtifact, SignalResult, SignalRow};
+use ayni_core::{
+    CommandFailure, FailureSummary, Level, Offenders, RunArtifact, SignalResult, SignalRow,
+};
 
 const PASS_IMAGE_URL: &str =
     "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg";
@@ -204,6 +206,17 @@ fn summarize_row(row: &SignalRow) -> String {
 
 fn offender_lines(row: &SignalRow, offenders_limit: usize) -> Vec<String> {
     let mut lines = Vec::new();
+    let command_failure = command_failure_for_row(row);
+    if let Some(failure) = command_failure {
+        lines.push(format!(
+            "**FAIL** command failure category={} classification={} command=`{}` cwd=`{}`: {}",
+            failure.category,
+            failure.classification,
+            failure.command,
+            failure.cwd,
+            failure.message.replace('\n', " ")
+        ));
+    }
     match &row.offenders {
         Offenders::Test(items) => {
             for item in items.iter().take(offenders_limit) {
@@ -277,6 +290,17 @@ fn offender_lines(row: &SignalRow, offenders_limit: usize) -> Vec<String> {
         }
     }
     lines
+}
+
+fn command_failure_for_row(row: &SignalRow) -> Option<&CommandFailure> {
+    match &row.result {
+        SignalResult::Test(result) => result.failure.as_ref(),
+        SignalResult::Coverage(result) => result.failure.as_ref(),
+        SignalResult::Size(result) => result.failure.as_ref(),
+        SignalResult::Complexity(result) => result.failure.as_ref(),
+        SignalResult::Deps(result) => result.failure.as_ref(),
+        SignalResult::Mutation(result) => result.failure.as_ref(),
+    }
 }
 
 fn level_label(level: Level) -> &'static str {
@@ -438,6 +462,11 @@ mod tests {
         let test_failure = text.find("### test (rust)").expect("test failure");
         let coverage_failure = text.find("### coverage (rust)").expect("coverage failure");
         assert!(test_failure < coverage_failure);
+        assert!(
+            text.contains(
+                "coverage\n- **FAIL** command failure category=tool classification=timeout"
+            )
+        );
         let coverage_section = &text[coverage_failure..];
         assert!(!coverage_section.contains("**Exit code:**"));
     }

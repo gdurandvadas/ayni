@@ -5,12 +5,23 @@ mod mutation;
 mod size;
 pub mod test;
 
-use ayni_core::{AdapterError, Language, RunContext, SignalCollector, SignalKind, SignalRow};
+use ayni_core::{
+    AdapterError, Language, RunContext, SignalCollector, SignalKind, SignalRow, TestSelection,
+};
 
 #[derive(Debug, Default)]
 pub struct RustCollector;
 
 impl SignalCollector for RustCollector {
+    fn collect_selected_test(
+        &self,
+        context: &RunContext,
+        selection: &TestSelection,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<SignalRow, AdapterError> {
+        test::collect_selected_with_lines(context, selection, on_line)
+            .map_err(|message| AdapterError::new(Language::Rust, message))
+    }
     fn collect_streaming(
         &self,
         kind: SignalKind,

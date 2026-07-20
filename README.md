@@ -71,6 +71,20 @@ ayni agents sync
 ayni analyze
 ```
 
+Use focused verification for the inner TDD loop, then keep `analyze` as the
+repository completion gate:
+
+```sh
+ayni verify test --language rust --package my-crate --name test_filter
+ayni verify test --language node --file apps/web/src/example.test.ts
+ayni verify test --language go --package ./internal/api --name TestCreate
+ayni verify test --language python --file tests/test_api.py --name test_create
+ayni verify test --language kotlin --package com.example.ApiTest --name createsUser
+```
+
+Focused evidence is written to `.ayni/verify/last/signals.json` and never
+replaces `.ayni/last/signals.json`.
+
 Use `install --apply` when you want Ayni to install missing or outdated adapter
 tools from local language ecosystems:
 

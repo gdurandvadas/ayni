@@ -11,7 +11,7 @@ pub mod size;
 
 pub use adapter::{
     DetectResult, DiscoveredRoot, LanguageAdapter, LanguageProfile, ProjectDiscovery,
-    ProjectLayout, SignalCollector,
+    ProjectLayout, SignalCollector, TestSelection,
 };
 pub use catalog::{
     CatalogEntry, InstallContext, Installer, NodePackageManager, PythonPackageManager,
