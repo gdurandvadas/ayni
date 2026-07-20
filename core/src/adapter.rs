@@ -101,6 +101,31 @@ pub trait SignalCollector: Send + Sync {
         let _ = on_line;
         self.collect(kind, context)
     }
+
+    /// Execute the test signal with an adapter-owned focused selector.
+    fn collect_selected_test(
+        &self,
+        context: &RunContext,
+        selection: &TestSelection,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<SignalRow, AdapterError> {
+        if selection.name.is_some()
+            || context.scope.package.is_some()
+            || context.scope.file.is_some()
+        {
+            return Err(AdapterError::new(
+                selection.language,
+                "focused test selectors are not supported by this adapter",
+            ));
+        }
+        self.collect_streaming(SignalKind::Test, context, on_line)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestSelection {
+    pub language: Language,
+    pub name: Option<String>,
 }
 
 pub trait LanguageAdapter: Send + Sync {

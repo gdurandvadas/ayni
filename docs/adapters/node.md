@@ -24,6 +24,10 @@ dependencies using that resolved manager.
 | `deps` | package and workspace manifest graph | no version enforced |
 | `mutation` | `@stryker-mutator/core` (opt-in) | no version enforced |
 
+`ayni verify test --language node` supports workspace `--package`,
+repository-relative `--file`, and optional Vitest `--name` selectors. Package
+selection remains owned by the resolved npm, pnpm, Yarn, or Bun adapter path.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure roots in `[node].roots`

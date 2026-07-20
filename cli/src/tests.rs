@@ -1,7 +1,53 @@
 use super::{
-    AgentsCommands, Cli, Commands, LanguageArg, OutputArg, annotate_deltas_vs_previous,
-    resolve_output_mode, selected_install_languages, serialize_artifact,
+    AgentsCommands, Cli, Commands, LanguageArg, OutputArg, SIGNALS_ARTIFACT,
+    VERIFY_SIGNALS_ARTIFACT, VerifyCommands, annotate_deltas_vs_previous, resolve_output_mode,
+    selected_install_languages, serialize_artifact,
 };
+
+#[test]
+fn verify_test_cli_parses_focused_node_selectors() {
+    let cli = Cli::try_parse_from([
+        "ayni",
+        "verify",
+        "test",
+        "--language",
+        "node",
+        "--package",
+        "@guita/web",
+        "--file",
+        "frontend/apps/web/src/lib/money.test.ts",
+        "--name",
+        "formats money",
+        "--json",
+    ])
+    .expect("arguments parse");
+    let Commands::Verify {
+        command:
+            VerifyCommands::Test {
+                package,
+                file,
+                name,
+                json,
+                ..
+            },
+    } = cli.command
+    else {
+        panic!("verify test command");
+    };
+    assert_eq!(package.as_deref(), Some("@guita/web"));
+    assert_eq!(
+        file.as_deref(),
+        Some("frontend/apps/web/src/lib/money.test.ts")
+    );
+    assert_eq!(name.as_deref(), Some("formats money"));
+    assert!(json);
+}
+
+#[test]
+fn verify_artifact_does_not_replace_analyze_artifact() {
+    assert_ne!(VERIFY_SIGNALS_ARTIFACT, SIGNALS_ARTIFACT);
+    assert_eq!(VERIFY_SIGNALS_ARTIFACT, ".ayni/verify/last/signals.json");
+}
 use crate::agents::{MANAGED_BEGIN, MANAGED_END, managed_block, sync_impl, upsert_managed_block};
 use crate::install::{
     catalog_entry_enabled_for_policy, default_policy_toml, install_impl, persist_artifact,

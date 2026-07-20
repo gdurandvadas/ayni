@@ -22,7 +22,7 @@ use ayni_core::{
     CommandFailure, ComplexityResult, ConcurrencyPolicy, CoverageResult, DepsResult,
     InvocationContext, Language, MutationResult, Offenders, OutputContext, RunArtifact,
     RunArtifactMetadata, RunContext, Scope, SignalKind, SignalResult, SignalRow, SizeResult,
-    TestResult,
+    TestResult, TestSelection,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use delta::annotate_deltas_vs_previous;
@@ -30,6 +30,8 @@ use install::{enabled_signal_kinds, install_impl, persist_artifact};
 
 const ARTIFACTS_DIR: &str = ".ayni/last";
 const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
+const VERIFY_ARTIFACTS_DIR: &str = ".ayni/verify/last";
+const VERIFY_SIGNALS_ARTIFACT: &str = ".ayni/verify/last/signals.json";
 const RUST_POLICY_TEMPLATE: &str = include_str!("../templates/policy/rust.toml");
 const GO_POLICY_TEMPLATE: &str = include_str!("../templates/policy/go.toml");
 const NODE_POLICY_TEMPLATE: &str = include_str!("../templates/policy/node.toml");
@@ -67,6 +69,11 @@ enum Commands {
         #[arg(long)]
         debug: bool,
     },
+    /// Run focused, non-promotion verification.
+    Verify {
+        #[command(subcommand)]
+        command: VerifyCommands,
+    },
     /// Scaffold repository policy and show required tools; use `--apply` to install them.
     Install {
         #[arg(long, default_value = ".")]
@@ -87,6 +94,29 @@ enum Commands {
     Version,
     #[command(hide = true)]
     GenerateDocs,
+}
+
+#[derive(Subcommand, Debug)]
+enum VerifyCommands {
+    /// Run only the test signal with adapter-owned selectors.
+    Test {
+        #[arg(long, default_value = "./.ayni.toml")]
+        config: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        package: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, value_enum)]
+        language: Option<LanguageArg>,
+        #[arg(long, value_enum)]
+        output: Option<OutputArg>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        debug: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -183,6 +213,33 @@ fn main() -> ExitCode {
             language,
             apply,
         } => install(&repo_root, selected_install_languages(language), apply),
+        Commands::Verify {
+            command:
+                VerifyCommands::Test {
+                    config,
+                    file,
+                    package,
+                    name,
+                    language,
+                    output,
+                    json,
+                    debug,
+                },
+        } => match resolve_output_mode(output, json) {
+            Ok(output_mode) => verify_test(
+                &config,
+                package,
+                file,
+                name,
+                language.map(|value| value.as_language()),
+                output_mode,
+                debug,
+            ),
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        },
         Commands::Agents {
             command: AgentsCommands::Sync { repo_root },
         } => agents_sync(&repo_root),
@@ -195,6 +252,103 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
     }
+}
+
+fn verify_test(
+    config_path: &str,
+    package: Option<String>,
+    file: Option<String>,
+    name: Option<String>,
+    language: Option<Language>,
+    output_mode: OutputArg,
+    debug: bool,
+) -> ExitCode {
+    match verify_test_impl(
+        config_path,
+        package,
+        file,
+        name,
+        language,
+        output_mode,
+        debug,
+    ) {
+        Ok(false) => ExitCode::SUCCESS,
+        Ok(true) => ExitCode::FAILURE,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn verify_test_impl(
+    config_path: &str,
+    package: Option<String>,
+    file: Option<String>,
+    name: Option<String>,
+    language: Option<Language>,
+    output_mode: OutputArg,
+    debug: bool,
+) -> Result<bool, String> {
+    let config_path = PathBuf::from(config_path);
+    let workspace_root = workspace_root_from_config_path(&config_path);
+    let policy = AyniPolicy::load_from_path(&config_path)?;
+    fs::create_dir_all(workspace_root.join(VERIFY_ARTIFACTS_DIR))
+        .map_err(|error| error.to_string())?;
+    let targets = build_analyze_targets(&workspace_root, &policy, package, file, language, debug)?;
+    if targets.is_empty() {
+        return Err(String::from("no matching verification target found"));
+    }
+    let languages = targets
+        .iter()
+        .map(|target| target.language)
+        .collect::<BTreeSet<_>>();
+    if languages.len() != 1 {
+        return Err(String::from(
+            "--language is required when focused test scope matches multiple languages",
+        ));
+    }
+    let selected_language = *languages.first().expect("one language");
+    let registry = build_registry();
+    let mut rows = Vec::new();
+    let selection = TestSelection {
+        language: selected_language,
+        name,
+    };
+    for target in &targets {
+        let adapter = registry
+            .adapters()
+            .iter()
+            .find(|adapter| adapter.language() == target.language)
+            .ok_or_else(|| format!("{} adapter unavailable", target.language))?;
+        let row = adapter
+            .collector()
+            .collect_selected_test(&target.run_context, &selection, &mut |line| {
+                if debug {
+                    eprintln!("[{selected_language}] {line}");
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        rows.push(row);
+    }
+    let mut artifact = RunArtifact::new(
+        build_artifact_metadata_for_command(
+            &config_path,
+            &workspace_root,
+            &targets,
+            output_mode,
+            "verify_test",
+        )?,
+        rows,
+    );
+    for row in &mut artifact.rows {
+        row.delta_vs_previous = None;
+    }
+    let serialized = serialize_artifact(&artifact)?;
+    fs::write(workspace_root.join(VERIFY_SIGNALS_ARTIFACT), &serialized)
+        .map_err(|error| format!("failed to write {VERIFY_SIGNALS_ARTIFACT}: {error}"))?;
+    emit_analyze_outputs(output_mode, &policy, &artifact, &serialized)?;
+    Ok(artifact.rows.iter().any(|row| !row.pass))
 }
 
 fn agents_sync(repo_root: &str) -> ExitCode {
@@ -897,6 +1051,22 @@ fn build_artifact_metadata(
     targets: &[AnalyzeTarget],
     output_mode: OutputArg,
 ) -> Result<RunArtifactMetadata, String> {
+    build_artifact_metadata_for_command(
+        config_path,
+        workspace_root,
+        targets,
+        output_mode,
+        "analyze",
+    )
+}
+
+fn build_artifact_metadata_for_command(
+    config_path: &Path,
+    workspace_root: &Path,
+    targets: &[AnalyzeTarget],
+    output_mode: OutputArg,
+    command: &str,
+) -> Result<RunArtifactMetadata, String> {
     let generated_at = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|error| format!("failed to format analysis timestamp: {error}"))?;
@@ -913,7 +1083,7 @@ fn build_artifact_metadata(
         generated_at,
         ayni_version: String::from(env!("CARGO_PKG_VERSION")),
         invocation: InvocationContext {
-            command: String::from("analyze"),
+            command: command.to_string(),
             languages,
             scope,
         },

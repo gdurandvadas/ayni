@@ -1,7 +1,7 @@
 use ayni_adapters_common::exec::{format_command, run_command_for_context_streaming};
 use ayni_core::{
     Budget, CommandFailure, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult,
+    TestFailure, TestResult, TestSelection,
 };
 use serde_json::json;
 
@@ -26,6 +26,52 @@ where
         &stderr_text,
         &runner,
     ))
+}
+
+pub fn collect_selected_with_lines<F>(
+    context: &RunContext,
+    selection: &TestSelection,
+    on_line: F,
+) -> Result<SignalRow, String>
+where
+    F: FnMut(&str),
+{
+    if context.scope.file.is_some() {
+        return Err(String::from(
+            "Rust source-file selection is unsupported; use --package and optional --name",
+        ));
+    }
+    let (program, args) = selected_test_command(context, selection)?;
+    let runner = format_command(&program, &args);
+    let output = run_command_for_context_streaming(context, &program, &args, on_line)?;
+    Ok(build_test_row(
+        context,
+        output.status.success(),
+        output.status.code(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+        &runner,
+    ))
+}
+
+fn selected_test_command(
+    context: &RunContext,
+    selection: &TestSelection,
+) -> Result<(String, Vec<String>), String> {
+    if context.scope.file.is_some() {
+        return Err(String::from(
+            "Rust source-file selection is unsupported; use --package and optional --name",
+        ));
+    }
+    let (program, mut args) = test_command(context);
+    if let Some(package) = &context.scope.package {
+        args.push(String::from("--package"));
+        args.push(package.clone());
+    }
+    if let Some(name) = &selection.name {
+        args.push(name.clone());
+    }
+    Ok((program, args))
 }
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
@@ -211,6 +257,50 @@ enabled = ["rust"]
         let (program, args) = test_command(&context);
         assert_eq!(program, "cargo");
         assert_eq!(args, vec!["test"]);
+    }
+
+    #[test]
+    fn focused_command_maps_package_and_name_to_cargo() {
+        let mut context = context_with_policy(
+            r#"
+[checks]
+test = true
+[languages]
+enabled = ["rust"]
+"#,
+        );
+        context.scope.package = Some(String::from("ayni-core"));
+        let (_, args) = selected_test_command(
+            &context,
+            &TestSelection {
+                language: ayni_core::Language::Rust,
+                name: Some(String::from("parses")),
+            },
+        )
+        .expect("selected command");
+        assert_eq!(args, ["test", "--package", "ayni-core", "parses"]);
+    }
+
+    #[test]
+    fn focused_command_rejects_rust_source_file() {
+        let mut context = context_with_policy(
+            r#"
+[checks]
+test = true
+[languages]
+enabled = ["rust"]
+"#,
+        );
+        context.scope.file = Some(String::from("core/src/lib.rs"));
+        let error = selected_test_command(
+            &context,
+            &TestSelection {
+                language: ayni_core::Language::Rust,
+                name: None,
+            },
+        )
+        .expect_err("file rejected");
+        assert!(error.contains("source-file selection is unsupported"));
     }
 
     #[test]

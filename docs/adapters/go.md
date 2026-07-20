@@ -21,6 +21,12 @@ enabled and installation is applied.
 | `deps` | `go list` dependency graph | no version enforced |
 | `mutation` | `go test` mutation proxy, or a configured Go mutation command | no version enforced |
 
+Focused verification
+
+`ayni verify test --language go` supports a repository-relative `--file` or Go
+package passed through to `go test`, plus an optional `--name` selector. The
+name selector is passed as an exact `-run` regular expression.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure Go roots in `[go].roots`

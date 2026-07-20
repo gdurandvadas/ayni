@@ -25,6 +25,12 @@ uses the resolved manager for local development packages and `uv tool` for
 | `deps` | Python import scan | no version enforced |
 | `mutation` | `mutmut` (opt-in) | no version enforced |
 
+Focused verification
+
+`ayni verify test --language python` supports a repository-relative `--file`
+or package path, plus an optional `--name` selector. Selectors are translated
+to pytest node IDs and use the configured Python test command when one exists.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure roots in `[python].roots`

@@ -4,7 +4,7 @@ use super::util::{
 };
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult,
+    TestFailure, TestResult, TestSelection,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -53,6 +53,37 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let default_args = ["--json-report", report_arg.as_str()];
     let (program, args) =
         command_for_override_or_default(context, SignalKind::Test, "pytest", &default_args);
+    collect_with_command(context, program, args, report_path)
+}
+
+pub fn collect_selected(
+    context: &RunContext,
+    selection: &TestSelection,
+    _on_line: &mut dyn FnMut(&str),
+) -> Result<SignalRow, String> {
+    let report_path = prepare_report_path(context, "pytest-report.json")?;
+    let report_arg = format!("--json-report-file={}", report_path.display());
+    let default_args = ["--json-report", report_arg.as_str()];
+    let (program, mut args) =
+        command_for_override_or_default(context, SignalKind::Test, "pytest", &default_args);
+    if let Some(file) = &context.scope.file {
+        args.push(file.clone());
+    } else if let Some(package) = &context.scope.package {
+        args.push(package.clone());
+    }
+    if let Some(name) = &selection.name {
+        let selector = format!("::{name}");
+        args.push(selector);
+    }
+    collect_with_command(context, program, args, report_path)
+}
+
+fn collect_with_command(
+    context: &RunContext,
+    program: String,
+    args: Vec<String>,
+    report_path: std::path::PathBuf,
+) -> Result<SignalRow, String> {
     let runner = format_command(&program, &args);
     let output = run_command_for_context(context, &program, &args)?;
     let success = output.status.success();

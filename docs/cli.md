@@ -6,6 +6,8 @@ This document contains the help content for the `ayni` command-line program.
 
 * [`ayni`↴](#ayni)
 * [`ayni analyze`↴](#ayni-analyze)
+* [`ayni verify`↴](#ayni-verify)
+* [`ayni verify test`↴](#ayni-verify-test)
 * [`ayni install`↴](#ayni-install)
 * [`ayni agents`↴](#ayni-agents)
 * [`ayni agents sync`↴](#ayni-agents-sync)
@@ -20,6 +22,7 @@ Open-source code quality signals for AI agents
 ###### **Subcommands:**
 
 * `analyze` — Analyze the local repository and print a quality report
+* `verify` — Run focused, non-promotion verification
 * `install` — Scaffold repository policy and show required tools; use `--apply` to install them
 * `agents` — Manage Ayni's agent instructions
 * `version` — Print the Ayni CLI version
@@ -55,6 +58,51 @@ Analyze the local repository and print a quality report
 
 * `--json` — Print the machine-readable signal artifact to stdout (equivalent to `--output json`)
 * `--debug` — Print raw command diagnostics and disable the live dashboard
+
+
+
+## `ayni verify`
+
+Run focused, non-promotion verification
+
+**Usage:** `ayni verify <COMMAND>`
+
+###### **Subcommands:**
+
+* `test` — Run only the test signal with adapter-owned selectors
+
+
+
+## `ayni verify test`
+
+Run only the test signal with adapter-owned selectors
+
+**Usage:** `ayni verify test [OPTIONS]`
+
+###### **Options:**
+
+* `--config <CONFIG>`
+
+  Default value: `./.ayni.toml`
+* `--file <FILE>`
+* `--package <PACKAGE>`
+* `--name <NAME>`
+* `--language <LANGUAGE>`
+
+  Possible values: `rust`, `go`, `node`, `python`, `kotlin`
+
+* `--output <OUTPUT>`
+
+  Possible values:
+  - `stdout`:
+    Coloured console report (default)
+  - `md`:
+    Markdown report printed to stdout
+  - `json`:
+    Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout
+
+* `--json`
+* `--debug`
 
 
 
