@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.6.0...ayni-v0.7.0) (2026-07-25)
+
+
+### Features
+
+* **agents:** improve managed CLI guidance ([#35](https://github.com/gdurandvadas/ayni/issues/35)) ([ac7b152](https://github.com/gdurandvadas/ayni/commit/ac7b152dea234bf1423203f13c85a36a7058cf96))
+
 ## [0.6.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.5.1...ayni-v0.6.0) (2026-07-20)
 
 
