@@ -1,7 +1,7 @@
 use super::{
-    annotate_deltas_vs_previous, resolve_output_mode, selected_install_languages,
-    serialize_artifact, AgentsCommands, Cli, Commands, LanguageArg, OutputArg, VerifyCommands,
-    SIGNALS_ARTIFACT, VERIFY_SIGNALS_ARTIFACT,
+    AgentsCommands, Cli, Commands, LanguageArg, OutputArg, SIGNALS_ARTIFACT,
+    VERIFY_SIGNALS_ARTIFACT, VerifyCommands, annotate_deltas_vs_previous, resolve_output_mode,
+    selected_install_languages, serialize_artifact,
 };
 
 #[test]
@@ -48,15 +48,15 @@ fn verify_artifact_does_not_replace_analyze_artifact() {
     assert_ne!(VERIFY_SIGNALS_ARTIFACT, SIGNALS_ARTIFACT);
     assert_eq!(VERIFY_SIGNALS_ARTIFACT, ".ayni/verify/last/signals.json");
 }
-use crate::agents::{managed_block, sync_impl, upsert_managed_block, MANAGED_BEGIN, MANAGED_END};
+use crate::agents::{MANAGED_BEGIN, MANAGED_END, managed_block, sync_impl, upsert_managed_block};
 use crate::install::{
     catalog_entry_enabled_for_policy, default_policy_toml, install_impl, persist_artifact,
     validate_install_foundation,
 };
 use ayni_core::{
-    AyniPolicy, Budget, CatalogEntry, ExecutionResolution, Installer, InvocationContext, Language,
-    Offenders, OutputContext, RunArtifact, RunArtifactMetadata, RunContext, Scope, SignalKind,
-    SignalResult, TestResult, VersionCheck, AYNI_SIGNAL_SCHEMA_VERSION,
+    AYNI_SIGNAL_SCHEMA_VERSION, AyniPolicy, Budget, CatalogEntry, ExecutionResolution, Installer,
+    InvocationContext, Language, Offenders, OutputContext, RunArtifact, RunArtifactMetadata,
+    RunContext, Scope, SignalKind, SignalResult, TestResult, VersionCheck,
 };
 use clap::Parser;
 use serde_json::json;
