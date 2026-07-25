@@ -1,7 +1,7 @@
 use super::{
-    AgentsCommands, Cli, Commands, LanguageArg, OutputArg, SIGNALS_ARTIFACT,
-    VERIFY_SIGNALS_ARTIFACT, VerifyCommands, annotate_deltas_vs_previous, resolve_output_mode,
-    selected_install_languages, serialize_artifact,
+    annotate_deltas_vs_previous, resolve_output_mode, selected_install_languages,
+    serialize_artifact, AgentsCommands, Cli, Commands, LanguageArg, OutputArg, VerifyCommands,
+    SIGNALS_ARTIFACT, VERIFY_SIGNALS_ARTIFACT,
 };
 
 #[test]
@@ -48,15 +48,15 @@ fn verify_artifact_does_not_replace_analyze_artifact() {
     assert_ne!(VERIFY_SIGNALS_ARTIFACT, SIGNALS_ARTIFACT);
     assert_eq!(VERIFY_SIGNALS_ARTIFACT, ".ayni/verify/last/signals.json");
 }
-use crate::agents::{MANAGED_BEGIN, MANAGED_END, managed_block, sync_impl, upsert_managed_block};
+use crate::agents::{managed_block, sync_impl, upsert_managed_block, MANAGED_BEGIN, MANAGED_END};
 use crate::install::{
     catalog_entry_enabled_for_policy, default_policy_toml, install_impl, persist_artifact,
     validate_install_foundation,
 };
 use ayni_core::{
-    AYNI_SIGNAL_SCHEMA_VERSION, AyniPolicy, Budget, CatalogEntry, ExecutionResolution, Installer,
-    InvocationContext, Language, Offenders, OutputContext, RunArtifact, RunArtifactMetadata,
-    RunContext, Scope, SignalKind, SignalResult, TestResult, VersionCheck,
+    AyniPolicy, Budget, CatalogEntry, ExecutionResolution, Installer, InvocationContext, Language,
+    Offenders, OutputContext, RunArtifact, RunArtifactMetadata, RunContext, Scope, SignalKind,
+    SignalResult, TestResult, VersionCheck, AYNI_SIGNAL_SCHEMA_VERSION,
 };
 use clap::Parser;
 use serde_json::json;
@@ -78,6 +78,25 @@ fn agents_sync_creates_managed_file_when_absent() {
 }
 
 #[test]
+fn managed_agent_guidance_describes_discovery_policy_and_quality_workflow() {
+    let managed = managed_block();
+
+    for guidance in [
+        "`ayni help`",
+        "`ayni help <command> [subcommand]`",
+        "`ayni <command> --help`",
+        "`.ayni.toml` as the authoritative repository quality policy",
+        "`ayni contract display`",
+        "`ayni verify test --language <rust|go|node|python|kotlin> [selectors]`",
+        "full repository analysis as the completion gate",
+        "`.ayni/last/signals.json`",
+    ] {
+        assert!(managed.contains(guidance), "missing guidance: {guidance}");
+    }
+    assert!(!managed.contains("ayni <command> help"));
+}
+
+#[test]
 fn agents_sync_replaces_only_managed_section_and_preserves_user_content() {
     let dir = TempDir::new().expect("tempdir");
     let path = dir.path().join("AGENTS.md");
@@ -90,8 +109,8 @@ fn agents_sync_replaces_only_managed_section_and_preserves_user_content() {
     sync_impl(&dir.path().to_string_lossy()).expect("sync");
 
     let updated = fs::read_to_string(path).expect("agents");
-    assert!(updated.contains("head"));
-    assert!(updated.contains("tail"));
+    assert!(updated.starts_with("head\n\n"));
+    assert!(updated.ends_with("tail\n"));
     assert!(updated.contains("## Code quality guidance for AI agents"));
     assert!(!updated.contains("\nold\n"));
 }

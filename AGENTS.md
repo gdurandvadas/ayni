@@ -102,15 +102,30 @@ When modifying this repository:
 - Avoid adding network dependencies unless explicitly required.
 - Update tests when behavior changes.
 
-Run:
+Discover Ayni commands using standard CLI help:
+
+- Run `ayni help` to list top-level commands.
+- Run `ayni help <command> [subcommand]` to explore nested commands.
+- Run `ayni <command> --help` for command-specific options.
+
+Treat `.ayni.toml` as the authoritative repository quality policy. Run
+`ayni contract display` for a concise view of its effective configured signal
+contract instead of reading the full policy file.
+
+During iteration, run a focused test when the language scope is known:
+
+```sh
+ayni verify test --language <rust|go|node|python|kotlin> [selectors]
+```
+
+Use the full repository analysis as the completion gate:
 
 ```sh
 ayni analyze
 ```
 
-A non-zero exit code means at least one signal failed. For typed,
-machine-readable schema-v2 results (per-signal offenders, budgets, and deltas),
-run `ayni analyze --json` (or `--output json`) or read `.ayni/last/signals.json`
-after any analyze run, then repair the listed offenders and re-run
-until every row passes.
+A non-zero exit code means at least one signal failed. Read
+`.ayni/last/signals.json` for detailed, typed schema-v2 results, including
+per-signal offenders, budgets, and deltas. Repair the listed offenders and
+re-run `ayni analyze` until every row passes.
 <!-- AYNI:END -->
