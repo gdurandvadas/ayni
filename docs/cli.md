@@ -11,6 +11,8 @@ This document contains the help content for the `ayni` command-line program.
 * [`ayni install`↴](#ayni-install)
 * [`ayni agents`↴](#ayni-agents)
 * [`ayni agents sync`↴](#ayni-agents-sync)
+* [`ayni contract`↴](#ayni-contract)
+* [`ayni contract display`↴](#ayni-contract-display)
 * [`ayni version`↴](#ayni-version)
 
 ## `ayni`
@@ -25,6 +27,7 @@ Open-source code quality signals for AI agents
 * `verify` — Run focused, non-promotion verification
 * `install` — Scaffold repository policy and show required tools; use `--apply` to install them
 * `agents` — Manage Ayni's agent instructions
+* `contract` — Inspect the effective configured quality contract
 * `version` — Print the Ayni CLI version
 
 
@@ -148,6 +151,32 @@ Create or update Ayni's managed section in AGENTS.md
 * `--repo-root <REPO_ROOT>`
 
   Default value: `.`
+
+
+
+## `ayni contract`
+
+Inspect the effective configured quality contract
+
+**Usage:** `ayni contract <COMMAND>`
+
+###### **Subcommands:**
+
+* `display` — Display the validated policy without running analysis or discovery
+
+
+
+## `ayni contract display`
+
+Display the validated policy without running analysis or discovery
+
+**Usage:** `ayni contract display [OPTIONS]`
+
+###### **Options:**
+
+* `--config <CONFIG>` — Path to the policy file to display
+
+  Default value: `./.ayni.toml`
 
 
 
