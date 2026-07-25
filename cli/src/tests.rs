@@ -78,7 +78,7 @@ fn agents_sync_creates_managed_file_when_absent() {
 }
 
 #[test]
-fn managed_agent_guidance_describes_discovery_policy_and_quality_workflow() {
+fn agents_managed_guidance_describes_discovery_policy_and_quality_workflow() {
     let managed = managed_block();
 
     for guidance in [
@@ -87,7 +87,7 @@ fn managed_agent_guidance_describes_discovery_policy_and_quality_workflow() {
         "`ayni <command> --help`",
         "`.ayni.toml` as the authoritative repository quality policy",
         "`ayni contract display`",
-        "`ayni verify test --language <rust|go|node|python|kotlin> [selectors]`",
+        "ayni verify test --language <rust|go|node|python|kotlin> [selectors]",
         "full repository analysis as the completion gate",
         "`.ayni/last/signals.json`",
     ] {
