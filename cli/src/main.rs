@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 mod agents;
+mod contract;
 mod delta;
 mod discovery;
 mod install;
@@ -90,6 +91,11 @@ enum Commands {
         #[command(subcommand)]
         command: AgentsCommands,
     },
+    /// Inspect the effective configured quality contract.
+    Contract {
+        #[command(subcommand)]
+        command: ContractCommands,
+    },
     /// Print the Ayni CLI version.
     Version,
     #[command(hide = true)]
@@ -125,6 +131,16 @@ enum AgentsCommands {
     Sync {
         #[arg(long, default_value = ".")]
         repo_root: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ContractCommands {
+    /// Display the validated policy without running analysis or discovery.
+    Display {
+        /// Path to the policy file to display.
+        #[arg(long, default_value = "./.ayni.toml")]
+        config: String,
     },
 }
 
@@ -243,6 +259,9 @@ fn main() -> ExitCode {
         Commands::Agents {
             command: AgentsCommands::Sync { repo_root },
         } => agents_sync(&repo_root),
+        Commands::Contract {
+            command: ContractCommands::Display { config },
+        } => contract_display(&config),
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -250,6 +269,19 @@ fn main() -> ExitCode {
         Commands::GenerateDocs => {
             println!("{}", clap_markdown::help_markdown::<Cli>());
             ExitCode::SUCCESS
+        }
+    }
+}
+
+fn contract_display(config_path: &str) -> ExitCode {
+    match contract::display(Path::new(config_path)) {
+        Ok(output) => {
+            print!("{output}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
         }
     }
 }
