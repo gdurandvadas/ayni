@@ -85,6 +85,18 @@ ayni verify test --language kotlin --package com.example.ApiTest --name createsU
 Focused evidence is written to `.ayni/verify/last/signals.json` and never
 replaces `.ayni/last/signals.json`.
 
+Inspect the validated configured signal contract without running discovery,
+adapters, or analysis:
+
+```sh
+ayni contract display
+ayni contract display --config path/to/.ayni.toml
+```
+
+This human-readable view shows enabled-language roots, all six signal states,
+configured thresholds and rules, and explicit tool overrides. It writes no
+artifact; use `ayni analyze` for measured results.
+
 Use `install --apply` when you want Ayni to install missing or outdated adapter
 tools from local language ecosystems:
 

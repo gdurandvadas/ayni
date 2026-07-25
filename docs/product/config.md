@@ -8,6 +8,14 @@ Policy lives at the repository root. It controls enabled signals, active
 languages and roots, per-language thresholds, dependency rules, report settings,
 and tool command overrides.
 
+Use `ayni contract display` to print a concise, deterministic projection of the
+validated configured policy. Pass `--config <path>` to select a policy other
+than `./.ayni.toml`. The command shows every signal's enabled state for each
+enabled language, normalized roots, configured thresholds, size rules,
+dependency restrictions, and explicit tool overrides. It does not discover
+projects, inspect or invoke tools, run adapters, analyze code, or write
+artifacts. Use `ayni analyze` for measured results and completion evidence.
+
 For the signal vocabulary and schema selection, see [`signals.md`](signals.md);
 for current JSON artifact fields, see [schema v2](signals/v2.md).
 For runner resolution, setup validation, failure categories, and debug
