@@ -5,7 +5,7 @@ use ayni_adapters_common::exec::{
 use ayni_adapters_common::failure::setup_failure;
 use ayni_core::{
     Budget, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, TestFailure,
-    TestResult, TestSelection,
+    TestResult, VerificationSelection,
 };
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -67,7 +67,11 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         });
     }
 
-    let pass = status_ok && failed == 0 && !report_missing;
+    if status_ok && !report_missing && total_tests == 0 {
+        offenders.push(zero_tests_failure());
+    }
+
+    let pass = test_row_passes(status_ok, total_tests, failed, report_missing);
     let failure = if !status_ok {
         Some(command_failure_from_output(
             context,
@@ -110,13 +114,12 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
-        delta_vs_previous: None,
     })
 }
 
 pub fn collect_selected(
     context: &RunContext,
-    selection: &TestSelection,
+    selection: &VerificationSelection,
     on_line: &mut dyn FnMut(&str),
 ) -> Result<SignalRow, String> {
     let (program, mut args) = selected_test_command(context)?;
@@ -199,6 +202,9 @@ fn build_row_from_output(
             .unwrap_or(failed);
         offenders = extract_failures(&report);
     }
+    if status_ok && !report_missing && total_tests == 0 {
+        offenders.push(zero_tests_failure());
+    }
     let failure = if !status_ok {
         Some(command_failure_from_output(
             context,
@@ -220,7 +226,7 @@ fn build_row_from_output(
         kind: SignalKind::Test,
         language: ayni_core::Language::Node,
         scope: context.scope.clone(),
-        pass: status_ok && failed == 0 && !report_missing,
+        pass: test_row_passes(status_ok, total_tests, failed, report_missing),
         result: SignalResult::Test(TestResult {
             total_tests,
             passed,
@@ -231,8 +237,22 @@ fn build_row_from_output(
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
-        delta_vs_previous: None,
     })
+}
+
+fn zero_tests_failure() -> TestFailure {
+    TestFailure {
+        file: None,
+        line: None,
+        message: String::from(
+            "test runner completed successfully but discovered zero tests; add tests or correct the test selection",
+        ),
+        test_name: None,
+    }
+}
+
+fn test_row_passes(status_ok: bool, total_tests: u64, failed: u64, report_missing: bool) -> bool {
+    status_ok && total_tests > 0 && failed == 0 && !report_missing
 }
 
 fn test_override_command(context: &RunContext) -> Option<(String, Vec<String>, String)> {
@@ -308,9 +328,20 @@ fn extract_failures(report: &JsonValue) -> Vec<TestFailure> {
 
 #[cfg(test)]
 mod tests {
-    use super::{selected_file_argument, selected_test_command, test_override_command};
+    #[cfg(unix)]
+    use super::build_row_from_output;
+    use super::{
+        selected_file_argument, selected_test_command, test_override_command, test_row_passes,
+        zero_tests_failure,
+    };
     use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    #[cfg(unix)]
+    use ayni_core::{Offenders, SignalResult};
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
     use std::path::PathBuf;
+    #[cfg(unix)]
+    use std::process::{ExitStatus, Output};
 
     fn context_with_policy(document: &str) -> RunContext {
         let policy: AyniPolicy = toml::from_str(document).expect("policy");
@@ -320,7 +351,6 @@ mod tests {
             workdir: PathBuf::from("."),
             policy,
             scope: Scope::default(),
-            diff: None,
             execution: ExecutionResolution::direct("npm", PathBuf::from("."), "test", 100),
             debug: false,
         }
@@ -410,5 +440,40 @@ enabled = ["node"]
             selected_file_argument(&context, "frontend/apps/web/src/money.test.ts"),
             "apps/web/src/money.test.ts"
         );
+    }
+
+    #[test]
+    fn zero_test_finding_is_actionable() {
+        assert!(!test_row_passes(true, 0, 0, false));
+        assert!(
+            zero_tests_failure()
+                .message
+                .contains("discovered zero tests")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_vitest_zero_test_report_fails_without_a_command_failure() {
+        let context =
+            context_with_policy("[checks]\ntest = true\n[languages]\nenabled = [\"node\"]");
+        let output = Output {
+            status: ExitStatus::from_raw(0),
+            stdout: br#"{"numTotalTests":0,"numPassedTests":0,"numFailedTests":0}"#.to_vec(),
+            stderr: Vec::new(),
+        };
+        let row =
+            build_row_from_output(&context, output, String::from("vitest run")).expect("test row");
+
+        assert!(!row.pass);
+        let SignalResult::Test(result) = &row.result else {
+            panic!("test result");
+        };
+        assert_eq!(result.total_tests, 0);
+        assert!(result.failure.is_none());
+        let Offenders::Test(offenders) = &row.offenders else {
+            panic!("test offenders");
+        };
+        assert!(offenders[0].message.contains("discovered zero tests"));
     }
 }

@@ -1,9 +1,11 @@
 use crate::catalog::GO_CATALOG;
 use crate::collectors::GoCollector;
 use crate::discovery;
+use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
-    CatalogEntry, DetectResult, ExecutionResolution, Language, LanguageAdapter, LanguageProfile,
-    ProjectDiscovery, SignalCollector,
+    CatalogEntry, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
+    LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts, ProjectDiscovery,
+    Scope, SignalCollector, SignalKind, VerificationSelectorSupport, VerificationTarget,
 };
 use std::path::Path;
 
@@ -85,6 +87,36 @@ impl LanguageAdapter for GoAdapter {
     fn collector(&self) -> &dyn SignalCollector {
         &self.collector
     }
+
+    fn policy_effectiveness_facts(&self) -> PolicyEffectivenessFacts {
+        PolicyEffectivenessFacts::new(Language::Go, vec![ComplexityThresholdKind::FnCyclomatic])
+    }
+
+    fn verification_selector_support(&self, kind: SignalKind) -> VerificationSelectorSupport {
+        match kind {
+            SignalKind::Test => VerificationSelectorSupport::new(false, true, true),
+            SignalKind::Deps => VerificationSelectorSupport::new(true, true, false),
+            SignalKind::Size | SignalKind::Complexity => {
+                VerificationSelectorSupport::new(true, false, false)
+            }
+            SignalKind::Coverage | SignalKind::Mutation => VerificationSelectorSupport::NONE,
+        }
+    }
+
+    fn verification_target(
+        &self,
+        kind: SignalKind,
+        scope: &Scope,
+        offender: OffenderIdentity<'_>,
+    ) -> VerificationTarget {
+        target_for_finding(
+            kind,
+            self.verification_selector_support(kind),
+            scope,
+            offender,
+            DependencySource::Package,
+        )
+    }
 }
 
 fn find_go_work_ancestor(repo_root: &Path, root: &Path) -> Option<std::path::PathBuf> {
@@ -104,7 +136,10 @@ fn find_go_work_ancestor(repo_root: &Path, root: &Path) -> Option<std::path::Pat
 #[cfg(test)]
 mod tests {
     use super::GoAdapter;
-    use ayni_core::LanguageAdapter;
+    use ayni_core::{
+        LanguageAdapter, OffenderIdentity, Scope, SignalKind, TestFailure,
+        VerificationSelectorSupport,
+    };
     use std::fs;
     use tempfile::TempDir;
 
@@ -129,5 +164,52 @@ mod tests {
         assert_eq!(resolution.kind, "workspace_ancestor");
         assert_eq!(resolution.resolved_from, dir.path());
         assert_eq!(resolution.exec_cwd, module);
+    }
+
+    #[test]
+    fn declares_honest_selector_support() {
+        let adapter = GoAdapter::new();
+        assert_eq!(
+            adapter.verification_selector_support(SignalKind::Test),
+            VerificationSelectorSupport::new(false, true, true)
+        );
+        assert_eq!(
+            adapter.verification_selector_support(SignalKind::Deps),
+            VerificationSelectorSupport::new(true, true, false)
+        );
+        for kind in [SignalKind::Size, SignalKind::Complexity] {
+            assert_eq!(
+                adapter.verification_selector_support(kind),
+                VerificationSelectorSupport::new(true, false, false)
+            );
+        }
+        for kind in [SignalKind::Coverage, SignalKind::Mutation] {
+            assert_eq!(
+                adapter.verification_selector_support(kind),
+                VerificationSelectorSupport::NONE
+            );
+        }
+    }
+
+    #[test]
+    fn finding_test_name_maps_without_inventing_file_support() {
+        let adapter = GoAdapter::new();
+        let offender = TestFailure {
+            file: Some(String::from("api_test.go")),
+            line: Some(10),
+            message: String::from("failed"),
+            test_name: Some(String::from("TestCreate")),
+        };
+        let target = adapter.verification_target(
+            SignalKind::Test,
+            &Scope::default(),
+            OffenderIdentity::Test(&offender),
+        );
+        adapter
+            .verification_selector_support(SignalKind::Test)
+            .validate_target(SignalKind::Test, &target)
+            .expect("mapped target must match declared support");
+        assert_eq!(target.name.as_deref(), Some("TestCreate"));
+        assert!(target.file.is_none());
     }
 }

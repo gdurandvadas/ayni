@@ -4,7 +4,8 @@ This is the stable entry point for Ayni's canonical signal vocabulary. It does
 not define a single JSON run-artifact envelope: select the versioned contract
 named by an artifact's `schema_version` before reading envelope or row fields.
 
-- [Schema v2 (`0.2.0`)](signals/v2.md) is the current emitted contract.
+- [Schema v3 (`0.3.0`)](signals/v3.md) is the current emitted contract.
+- [Schema v2 (`0.2.0`)](signals/v2.md) is a historical reference only.
 - [Schema v1 (`0.1.0`)](signals/v1.md) is a historical reference only.
 
 Repository policy lives in `.ayni.toml`; for checks, languages, thresholds, and
@@ -35,16 +36,19 @@ and payload shapes are version-specific; use the selected version reference.
 
 `ayni analyze` writes `.ayni/last/signals.json`; `ayni analyze --json` and
 `ayni analyze --output json` print the same artifact. Current output uses
-schema `0.2.0`. Consumers must inspect `schema_version` and use the matching
+schema `0.3.0`. Consumers must inspect `schema_version` and use the matching
 version page rather than assuming fields from another envelope.
 
-Schema v2 is a breaking replacement for v1 consumers. Current delta loading
-only uses a previously stored artifact when its `schema_version` equals the
-current schema string. There is no compatibility payload or automatic v1-to-v2
-conversion.
+Schema v3 is a breaking replacement for v2 consumers. Explicit artifact
+comparison accepts only two valid, complete artifacts whose `schema_version`
+is the current schema string. Use `ayni artifact compare --baseline <artifact>
+--candidate <artifact> [--output stdout|json]`; it reads exactly those files
+and has no implicit prior-artifact, repository, Git, fetch, storage, or write
+behavior. There is no compatibility payload or automatic conversion from an
+earlier schema.
 
-V1 is retained only as documentation of the pinned historical source. Ayni
-makes no current v1 parsing, conversion, migration, or compatibility promise.
+V1 and v2 are retained only as historical documentation. Ayni makes no current
+parsing, conversion, migration, or compatibility promise for either schema.
 
 ## Vocabulary evolution
 

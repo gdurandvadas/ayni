@@ -75,7 +75,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         }),
         budget: Budget::Deps(json!({ "forbidden": rules })),
         offenders: Offenders::Deps(offenders),
-        delta_vs_previous: None,
     })
 }
 
@@ -98,7 +97,6 @@ fn error_row(context: &RunContext, failure: ayni_core::CommandFailure) -> Signal
         }),
         budget: Budget::Deps(json!({})),
         offenders: Offenders::Deps(Vec::new()),
-        delta_vs_previous: None,
     }
 }
 

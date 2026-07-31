@@ -28,7 +28,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             }),
             budget: Budget::Mutation(json!({"enabled": false})),
             offenders: Offenders::Mutation(Vec::new()),
-            delta_vs_previous: None,
         });
     }
 
@@ -77,7 +76,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         }),
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(Vec::new()),
-        delta_vs_previous: None,
     })
 }
 
@@ -112,7 +110,6 @@ mod tests {
             workdir: PathBuf::from("."),
             policy,
             scope: Scope::default(),
-            diff: None,
             execution: ExecutionResolution::direct("npm", PathBuf::from("."), "test", 100),
             debug: false,
         }

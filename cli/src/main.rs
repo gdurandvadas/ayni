@@ -8,11 +8,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 mod agents;
+mod artifact_compare;
 mod contract;
-mod delta;
 mod discovery;
 mod install;
+mod install_check;
 mod ui;
+mod verify;
 
 use agents::sync_impl;
 use ayni_adapters_node::NodeAdapter;
@@ -20,14 +22,14 @@ use ayni_adapters_python::PythonAdapter;
 use ayni_adapters_rust::RustAdapter;
 use ayni_core::{
     AYNI_POLICY_FILE, AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, AyniPolicy, Budget,
-    CommandFailure, ComplexityResult, ConcurrencyPolicy, CoverageResult, DepsResult,
+    CommandFailure, CompletionIssue, CompletionScope, CompletionStage, CompletionState,
+    ComplexityResult, ConcurrencyPolicy, CoverageResult, DepsResult, FindingError,
     InvocationContext, Language, MutationResult, Offenders, OutputContext, RunArtifact,
-    RunArtifactMetadata, RunContext, Scope, SignalKind, SignalResult, SignalRow, SizeResult,
-    TestResult, TestSelection,
+    RunArtifactMetadata, RunCompletion, RunContext, Scope, SignalKind, SignalResult, SignalRow,
+    SizeResult, TestResult, VerificationTarget,
 };
-use clap::{Parser, Subcommand, ValueEnum};
-use delta::annotate_deltas_vs_previous;
-use install::{enabled_signal_kinds, install_impl, persist_artifact};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use install::{enabled_signal_kinds, install_impl};
 
 const ARTIFACTS_DIR: &str = ".ayni/last";
 const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
@@ -53,12 +55,6 @@ enum Commands {
     Analyze {
         #[arg(long, default_value = "./.ayni.toml")]
         config: String,
-        #[arg(long)]
-        file: Option<String>,
-        #[arg(long)]
-        package: Option<String>,
-        #[arg(long, value_enum)]
-        language: Option<LanguageArg>,
         /// Report format: `stdout` (default, coloured console), `md` (markdown report),
         /// or `json` (machine-readable signal artifact on stdout).
         #[arg(long, value_enum)]
@@ -75,7 +71,7 @@ enum Commands {
         #[command(subcommand)]
         command: VerifyCommands,
     },
-    /// Scaffold repository policy and show required tools; use `--apply` to install them.
+    /// Scaffold repository policy and show required tools; use `--apply` to install or `--check` to inspect readiness.
     Install {
         #[arg(long, default_value = ".")]
         repo_root: String,
@@ -83,8 +79,14 @@ enum Commands {
         #[arg(long, value_enum)]
         language: Vec<LanguageArg>,
         /// Install missing or outdated tools from adapter catalogs (cargo, rustup, go, npm, …).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "check")]
         apply: bool,
+        /// Check the existing policy and tooling without modifying the repository.
+        #[arg(long, conflicts_with = "apply")]
+        check: bool,
+        /// Readiness output format; JSON is available only with `--check`.
+        #[arg(long, value_enum, requires = "check")]
+        output: Option<InstallOutputArg>,
     },
     /// Manage Ayni's agent instructions.
     Agents {
@@ -96,6 +98,11 @@ enum Commands {
         #[command(subcommand)]
         command: ContractCommands,
     },
+    /// Compare two explicit complete signal artifacts without repository discovery.
+    Artifact {
+        #[command(subcommand)]
+        command: ArtifactCommands,
+    },
     /// Print the Ayni CLI version.
     Version,
     #[command(hide = true)]
@@ -106,23 +113,54 @@ enum Commands {
 enum VerifyCommands {
     /// Run only the test signal with adapter-owned selectors.
     Test {
-        #[arg(long, default_value = "./.ayni.toml")]
-        config: String,
-        #[arg(long)]
-        file: Option<String>,
-        #[arg(long)]
-        package: Option<String>,
+        #[command(flatten)]
+        options: VerifyFilePackageOptions,
         #[arg(long)]
         name: Option<String>,
-        #[arg(long, value_enum)]
-        language: Option<LanguageArg>,
-        #[arg(long, value_enum)]
-        output: Option<OutputArg>,
-        #[arg(long)]
-        json: bool,
-        #[arg(long)]
-        debug: bool,
     },
+    /// Run only the coverage signal with adapter-owned selectors.
+    Coverage(VerifyCommonOptions),
+    /// Run only the size signal with adapter-owned selectors.
+    Size(VerifyFileOptions),
+    /// Run only the complexity signal with adapter-owned selectors.
+    Complexity(VerifyFilePackageOptions),
+    /// Run only the dependency signal with adapter-owned selectors.
+    Deps(VerifyFilePackageOptions),
+    /// Run only the mutation signal with adapter-owned selectors.
+    Mutation(VerifyCommonOptions),
+}
+
+#[derive(Args, Debug)]
+struct VerifyCommonOptions {
+    #[arg(long, default_value = "./.ayni.toml")]
+    config: String,
+    #[arg(long, value_enum)]
+    language: Option<LanguageArg>,
+    #[arg(long, value_enum)]
+    output: Option<OutputArg>,
+    #[arg(long)]
+    json: bool,
+    /// Print raw command diagnostics.
+    #[arg(long)]
+    debug: bool,
+}
+
+#[derive(Args, Debug)]
+struct VerifyFileOptions {
+    #[command(flatten)]
+    common: VerifyCommonOptions,
+    #[arg(long)]
+    file: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct VerifyFilePackageOptions {
+    #[command(flatten)]
+    common: VerifyCommonOptions,
+    #[arg(long)]
+    file: Option<String>,
+    #[arg(long)]
+    package: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -141,6 +179,25 @@ enum ContractCommands {
         /// Path to the policy file to display.
         #[arg(long, default_value = "./.ayni.toml")]
         config: String,
+        /// Render the deterministic contract projection as JSON.
+        #[arg(long)]
+        output: Option<ContractOutputArg>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ArtifactCommands {
+    /// Compare exactly two explicit schema-v3 artifact files.
+    Compare {
+        /// Earlier artifact file.
+        #[arg(long)]
+        baseline: PathBuf,
+        /// Later artifact file.
+        #[arg(long)]
+        candidate: PathBuf,
+        /// Comparison output format.
+        #[arg(long, value_enum, default_value_t = ArtifactCompareOutputArg::Stdout)]
+        output: ArtifactCompareOutputArg,
     },
 }
 
@@ -160,6 +217,24 @@ enum OutputArg {
     /// Markdown report printed to stdout.
     Md,
     /// Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout.
+    Json,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ContractOutputArg {
+    Json,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+enum InstallOutputArg {
+    Json,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ArtifactCompareOutputArg {
+    /// Human-readable comparison report.
+    Stdout,
+    /// One machine-readable comparison document.
     Json,
 }
 
@@ -202,23 +277,11 @@ fn main() -> ExitCode {
     match Cli::parse().command {
         Commands::Analyze {
             config,
-            file,
-            package,
-            language,
             output,
             json,
             debug,
         } => match resolve_output_mode(output, json) {
-            Ok(output_mode) => analyze(
-                &config,
-                AnalyzeOptions {
-                    package,
-                    file,
-                    language_filter: language.map(|value| value.as_language()),
-                    output_mode,
-                    debug,
-                },
-            ),
+            Ok(output_mode) => analyze(&config, AnalyzeOptions { output_mode, debug }),
             Err(error) => {
                 eprintln!("{error}");
                 ExitCode::FAILURE
@@ -228,40 +291,34 @@ fn main() -> ExitCode {
             repo_root,
             language,
             apply,
-        } => install(&repo_root, selected_install_languages(language), apply),
-        Commands::Verify {
-            command:
-                VerifyCommands::Test {
-                    config,
-                    file,
-                    package,
-                    name,
-                    language,
-                    output,
-                    json,
-                    debug,
-                },
-        } => match resolve_output_mode(output, json) {
-            Ok(output_mode) => verify_test(
-                &config,
-                package,
-                file,
-                name,
-                language.map(|value| value.as_language()),
-                output_mode,
-                debug,
-            ),
-            Err(error) => {
-                eprintln!("{error}");
-                ExitCode::FAILURE
-            }
-        },
+            check,
+            output,
+        } => install(
+            &repo_root,
+            selected_install_languages(language),
+            apply,
+            check,
+            output,
+        ),
+        Commands::Verify { command } => run_verify_command(command),
         Commands::Agents {
             command: AgentsCommands::Sync { repo_root },
         } => agents_sync(&repo_root),
         Commands::Contract {
-            command: ContractCommands::Display { config },
-        } => contract_display(&config),
+            command: ContractCommands::Display { config, output },
+        } => contract_display(&config, output.is_some()),
+        Commands::Artifact {
+            command:
+                ArtifactCommands::Compare {
+                    baseline,
+                    candidate,
+                    output,
+                },
+        } => artifact_compare::run(
+            &baseline,
+            &candidate,
+            matches!(output, ArtifactCompareOutputArg::Json),
+        ),
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -273,8 +330,13 @@ fn main() -> ExitCode {
     }
 }
 
-fn contract_display(config_path: &str) -> ExitCode {
-    match contract::display(Path::new(config_path)) {
+fn contract_display(config_path: &str, json: bool) -> ExitCode {
+    let adapter_facts = build_registry()
+        .adapters()
+        .iter()
+        .map(|adapter| adapter.policy_effectiveness_facts())
+        .collect::<Vec<_>>();
+    match contract::display(Path::new(config_path), &adapter_facts, json) {
         Ok(output) => {
             print!("{output}");
             ExitCode::SUCCESS
@@ -286,24 +348,53 @@ fn contract_display(config_path: &str) -> ExitCode {
     }
 }
 
-fn verify_test(
-    config_path: &str,
-    package: Option<String>,
-    file: Option<String>,
-    name: Option<String>,
-    language: Option<Language>,
-    output_mode: OutputArg,
-    debug: bool,
-) -> ExitCode {
-    match verify_test_impl(
-        config_path,
-        package,
+fn run_verify_command(command: VerifyCommands) -> ExitCode {
+    let (kind, options, file, package, name) = match command {
+        VerifyCommands::Test { options, name } => (
+            SignalKind::Test,
+            options.common,
+            options.file,
+            options.package,
+            name,
+        ),
+        VerifyCommands::Coverage(options) => (SignalKind::Coverage, options, None, None, None),
+        VerifyCommands::Size(options) => {
+            (SignalKind::Size, options.common, options.file, None, None)
+        }
+        VerifyCommands::Complexity(options) => (
+            SignalKind::Complexity,
+            options.common,
+            options.file,
+            options.package,
+            None,
+        ),
+        VerifyCommands::Deps(options) => (
+            SignalKind::Deps,
+            options.common,
+            options.file,
+            options.package,
+            None,
+        ),
+        VerifyCommands::Mutation(options) => (SignalKind::Mutation, options, None, None, None),
+    };
+    let output_mode = match resolve_output_mode(options.output, options.json) {
+        Ok(mode) => mode,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let request = verify::Request {
+        kind,
+        config_path: PathBuf::from(options.config),
         file,
+        package,
         name,
-        language,
+        language: options.language.map(|value| value.as_language()),
         output_mode,
-        debug,
-    ) {
+        debug: options.debug,
+    };
+    match verify::run(request) {
         Ok(false) => ExitCode::SUCCESS,
         Ok(true) => ExitCode::FAILURE,
         Err(error) => {
@@ -311,76 +402,6 @@ fn verify_test(
             ExitCode::FAILURE
         }
     }
-}
-
-fn verify_test_impl(
-    config_path: &str,
-    package: Option<String>,
-    file: Option<String>,
-    name: Option<String>,
-    language: Option<Language>,
-    output_mode: OutputArg,
-    debug: bool,
-) -> Result<bool, String> {
-    let config_path = PathBuf::from(config_path);
-    let workspace_root = workspace_root_from_config_path(&config_path);
-    let policy = AyniPolicy::load_from_path(&config_path)?;
-    fs::create_dir_all(workspace_root.join(VERIFY_ARTIFACTS_DIR))
-        .map_err(|error| error.to_string())?;
-    let targets = build_analyze_targets(&workspace_root, &policy, package, file, language, debug)?;
-    if targets.is_empty() {
-        return Err(String::from("no matching verification target found"));
-    }
-    let languages = targets
-        .iter()
-        .map(|target| target.language)
-        .collect::<BTreeSet<_>>();
-    if languages.len() != 1 {
-        return Err(String::from(
-            "--language is required when focused test scope matches multiple languages",
-        ));
-    }
-    let selected_language = *languages.first().expect("one language");
-    let registry = build_registry();
-    let mut rows = Vec::new();
-    let selection = TestSelection {
-        language: selected_language,
-        name,
-    };
-    for target in &targets {
-        let adapter = registry
-            .adapters()
-            .iter()
-            .find(|adapter| adapter.language() == target.language)
-            .ok_or_else(|| format!("{} adapter unavailable", target.language))?;
-        let row = adapter
-            .collector()
-            .collect_selected_test(&target.run_context, &selection, &mut |line| {
-                if debug {
-                    eprintln!("[{selected_language}] {line}");
-                }
-            })
-            .map_err(|error| error.to_string())?;
-        rows.push(row);
-    }
-    let mut artifact = RunArtifact::new(
-        build_artifact_metadata_for_command(
-            &config_path,
-            &workspace_root,
-            &targets,
-            output_mode,
-            "verify_test",
-        )?,
-        rows,
-    );
-    for row in &mut artifact.rows {
-        row.delta_vs_previous = None;
-    }
-    let serialized = serialize_artifact(&artifact)?;
-    fs::write(workspace_root.join(VERIFY_SIGNALS_ARTIFACT), &serialized)
-        .map_err(|error| format!("failed to write {VERIFY_SIGNALS_ARTIFACT}: {error}"))?;
-    emit_analyze_outputs(output_mode, &policy, &artifact, &serialized)?;
-    Ok(artifact.rows.iter().any(|row| !row.pass))
 }
 
 fn agents_sync(repo_root: &str) -> ExitCode {
@@ -410,7 +431,28 @@ fn selected_install_languages(values: Vec<LanguageArg>) -> BTreeSet<Language> {
         .collect()
 }
 
-fn install(repo_root: &str, languages: BTreeSet<Language>, apply: bool) -> ExitCode {
+fn install(
+    repo_root: &str,
+    languages: BTreeSet<Language>,
+    apply: bool,
+    check: bool,
+    output: Option<InstallOutputArg>,
+) -> ExitCode {
+    if check {
+        return match install_check::run(
+            Path::new(repo_root),
+            &languages,
+            output == Some(InstallOutputArg::Json),
+            &build_registry(),
+        ) {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => ExitCode::FAILURE,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     match install_impl(repo_root, &languages, apply) {
         Ok(()) => ExitCode::SUCCESS,
         Err(failures) => {
@@ -444,14 +486,61 @@ struct AnalyzeTarget {
     run_context: RunContext,
 }
 
+#[derive(Clone, Debug)]
+struct AnalyzePlanning {
+    targets: Vec<AnalyzeTarget>,
+    expected_targets: u64,
+    detected_targets: u64,
+    issues: Vec<CompletionIssue>,
+}
+
+impl AnalyzePlanning {
+    fn completion(
+        &self,
+        scope: CompletionScope,
+        completed_targets: u64,
+        mut additional_issues: Vec<CompletionIssue>,
+    ) -> RunCompletion {
+        let mut issues = self.issues.clone();
+        issues.append(&mut additional_issues);
+        let skipped_targets = self.expected_targets - completed_targets;
+        RunCompletion {
+            scope,
+            state: if skipped_targets == 0 {
+                CompletionState::Complete
+            } else {
+                CompletionState::Incomplete
+            },
+            expected_targets: self.expected_targets,
+            detected_targets: self.detected_targets,
+            completed_targets,
+            skipped_targets,
+            issues,
+        }
+    }
+
+    fn runnable_failure_issues(
+        &self,
+        stage: CompletionStage,
+        message: &str,
+    ) -> Vec<CompletionIssue> {
+        self.targets
+            .iter()
+            .map(|target| CompletionIssue {
+                language: target.language,
+                configured_root: target.root.clone(),
+                stage,
+                message: message.to_string(),
+            })
+            .collect()
+    }
+}
+
 type TargetCollectResult = Result<Vec<SignalRow>, String>;
 type TargetResultSlots = Arc<Mutex<Vec<Option<TargetCollectResult>>>>;
 
 #[derive(Clone, Debug)]
 struct AnalyzeOptions {
-    package: Option<String>,
-    file: Option<String>,
-    language_filter: Option<Language>,
     output_mode: OutputArg,
     debug: bool,
 }
@@ -482,16 +571,20 @@ fn build_analyze_plan(targets: &[AnalyzeTarget]) -> ui::runner::Plan {
 
 fn run_collect_with_ui(
     ctx: &ui::runner::ExecContext,
-    targets: &[AnalyzeTarget],
+    planning: &AnalyzePlanning,
+    scope: CompletionScope,
 ) -> Result<RunArtifact, String> {
-    let concurrency = targets
+    let concurrency = planning
+        .targets
         .first()
         .map(|target| target.run_context.policy.concurrency.clone())
         .unwrap_or_default();
-    let rows = collect_targets_with_ui(ctx, targets, &concurrency)?;
+    let rows = collect_targets_with_ui(ctx, &planning.targets, &concurrency)?;
     Ok(RunArtifact {
         schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
         metadata: Default::default(),
+        completion: planning.completion(scope, planning.targets.len() as u64, Vec::new()),
+        findings: Vec::new(),
         rows,
     })
 }
@@ -717,7 +810,6 @@ fn failed_signal_row(
         result,
         budget,
         offenders,
-        delta_vs_previous: None,
     }
 }
 
@@ -946,47 +1038,124 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<AnalyzeOut
     let policy = AyniPolicy::load_from_path(&config_path)?;
     ensure_analyze_directories(&workspace_root)?;
 
-    let AnalyzeOptions {
-        package,
-        file,
-        language_filter,
-        output_mode,
-        debug,
-    } = options;
+    let AnalyzeOptions { output_mode, debug } = options;
 
-    let targets = build_analyze_targets(
-        &workspace_root,
-        &policy,
-        package,
-        file,
-        language_filter,
-        debug,
-    )?;
-    let plan = build_analyze_plan(&targets);
-    let metadata = build_artifact_metadata(&config_path, &workspace_root, &targets, output_mode)?;
+    let planning = build_analyze_targets(&workspace_root, &policy, None, None, None, debug)?;
+    let plan = build_analyze_plan(&planning.targets);
+    let metadata = build_artifact_metadata(&config_path, &workspace_root, &planning, output_mode)?;
     let artifact_slot = Arc::new(Mutex::new(None));
-    let aborted = execute_analyze_plan(
+    let aborted = execute_analyze_plan_or_persist_failure(
+        &workspace_root,
+        &planning,
+        &metadata,
         output_mode,
         debug,
         plan,
-        targets,
         Arc::clone(&artifact_slot),
     )?;
-    if aborted {
+    if persist_aborted_analysis(&workspace_root, &planning, &metadata, aborted)? {
         return Ok(AnalyzeOutcome::Aborted);
     }
 
-    let mut artifact = take_collected_artifact(artifact_slot)?;
-    let previous_artifact = load_previous_artifact(&workspace_root);
-    annotate_deltas_vs_previous(&mut artifact, previous_artifact.as_ref());
+    let mut artifact = take_collected_artifact_or_persist_failure(
+        &workspace_root,
+        &planning,
+        &metadata,
+        artifact_slot,
+    )?;
+    materialize_finding_commands(&mut artifact, &build_registry())?;
     artifact.metadata = metadata;
     let serialized = serialize_artifact(&artifact)?;
-    persist_artifact(&workspace_root, &serialized)?;
+    persist_artifact_at(&workspace_root, SIGNALS_ARTIFACT, &serialized)?;
     emit_analyze_outputs(output_mode, &policy, &artifact, &serialized)?;
 
     Ok(AnalyzeOutcome::Completed {
-        has_failures: artifact.rows.iter().any(|row| !row.pass),
+        has_failures: artifact.completion.state == CompletionState::Incomplete
+            || artifact.rows.iter().any(|row| !row.pass),
     })
+}
+
+fn execute_analyze_plan_or_persist_failure(
+    workspace_root: &Path,
+    planning: &AnalyzePlanning,
+    metadata: &RunArtifactMetadata,
+    output_mode: OutputArg,
+    debug: bool,
+    plan: ui::runner::Plan,
+    artifact_slot: Arc<Mutex<Option<RunArtifact>>>,
+) -> Result<bool, String> {
+    match execute_analyze_plan(output_mode, debug, plan, planning.clone(), artifact_slot) {
+        Ok(aborted) => Ok(aborted),
+        Err(error) => {
+            persist_incomplete_execution_artifact(
+                workspace_root,
+                metadata.clone(),
+                planning,
+                CompletionStage::Scheduling,
+                &error,
+            )?;
+            Err(error)
+        }
+    }
+}
+
+fn persist_aborted_analysis(
+    workspace_root: &Path,
+    planning: &AnalyzePlanning,
+    metadata: &RunArtifactMetadata,
+    aborted: bool,
+) -> Result<bool, String> {
+    if aborted {
+        persist_incomplete_execution_artifact(
+            workspace_root,
+            metadata.clone(),
+            planning,
+            CompletionStage::Collection,
+            "analysis was interrupted before every target completed",
+        )?;
+    }
+    Ok(aborted)
+}
+
+fn take_collected_artifact_or_persist_failure(
+    workspace_root: &Path,
+    planning: &AnalyzePlanning,
+    metadata: &RunArtifactMetadata,
+    artifact_slot: Arc<Mutex<Option<RunArtifact>>>,
+) -> Result<RunArtifact, String> {
+    match take_collected_artifact(artifact_slot) {
+        Ok(artifact) => Ok(artifact),
+        Err(error) => {
+            persist_incomplete_execution_artifact(
+                workspace_root,
+                metadata.clone(),
+                planning,
+                CompletionStage::Collection,
+                &error,
+            )?;
+            Err(error)
+        }
+    }
+}
+
+fn persist_incomplete_execution_artifact(
+    workspace_root: &Path,
+    metadata: RunArtifactMetadata,
+    planning: &AnalyzePlanning,
+    stage: CompletionStage,
+    message: &str,
+) -> Result<(), String> {
+    let artifact = RunArtifact::new(
+        metadata,
+        planning.completion(
+            CompletionScope::Repository,
+            0,
+            planning.runnable_failure_issues(stage, message),
+        ),
+        Vec::new(),
+    );
+    let serialized = serialize_artifact(&artifact)?;
+    persist_artifact_at(workspace_root, SIGNALS_ARTIFACT, &serialized)
 }
 
 fn ensure_analyze_directories(workspace_root: &Path) -> Result<(), String> {
@@ -998,10 +1167,10 @@ fn execute_analyze_plan(
     output_mode: OutputArg,
     debug: bool,
     plan: ui::runner::Plan,
-    targets: Vec<AnalyzeTarget>,
+    planning: AnalyzePlanning,
     artifact_slot: Arc<Mutex<Option<RunArtifact>>>,
 ) -> Result<bool, String> {
-    let execution = build_analyze_execution(targets, artifact_slot);
+    let execution = build_analyze_execution(planning, artifact_slot);
     if debug {
         return ui::runner::run_plain(plan, execution, debug_progress_event)
             .map(|outcome| outcome.aborted);
@@ -1042,11 +1211,11 @@ fn debug_progress_event(event: ui::runner::ProgressEvent) {
 }
 
 fn build_analyze_execution(
-    targets: Vec<AnalyzeTarget>,
+    planning: AnalyzePlanning,
     artifact_slot: Arc<Mutex<Option<RunArtifact>>>,
 ) -> impl FnOnce(ui::runner::ExecContext) -> Result<(), String> {
     move |exec_ctx: ui::runner::ExecContext| {
-        let artifact = run_collect_with_ui(&exec_ctx, &targets)?;
+        let artifact = run_collect_with_ui(&exec_ctx, &planning, CompletionScope::Repository)?;
         let mut slot = artifact_slot
             .lock()
             .map_err(|_| String::from("artifact mutex poisoned"))?;
@@ -1080,13 +1249,13 @@ fn take_collected_artifact(
 fn build_artifact_metadata(
     config_path: &Path,
     workspace_root: &Path,
-    targets: &[AnalyzeTarget],
+    planning: &AnalyzePlanning,
     output_mode: OutputArg,
 ) -> Result<RunArtifactMetadata, String> {
     build_artifact_metadata_for_command(
         config_path,
         workspace_root,
-        targets,
+        planning,
         output_mode,
         "analyze",
     )
@@ -1095,20 +1264,23 @@ fn build_artifact_metadata(
 fn build_artifact_metadata_for_command(
     config_path: &Path,
     workspace_root: &Path,
-    targets: &[AnalyzeTarget],
+    planning: &AnalyzePlanning,
     output_mode: OutputArg,
     command: &str,
 ) -> Result<RunArtifactMetadata, String> {
     let generated_at = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|error| format!("failed to format analysis timestamp: {error}"))?;
-    let languages = targets
+    let languages = planning
+        .targets
         .iter()
         .map(|target| target.language)
+        .chain(planning.issues.iter().map(|issue| issue.language))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let scope = targets
+    let scope = planning
+        .targets
         .first()
         .map(|target| target.run_context.scope.clone());
     Ok(RunArtifactMetadata {
@@ -1134,6 +1306,119 @@ fn serialize_artifact(artifact: &RunArtifact) -> Result<String, String> {
         .map_err(|error| format!("failed to serialize artifact: {error}"))
 }
 
+/// Materialize adapter-owned targets only after capability validation and before
+/// any terminal, Markdown, JSON, or persisted artifact presentation.
+fn materialize_finding_commands(
+    artifact: &mut RunArtifact,
+    registry: &AdapterRegistry,
+) -> Result<(), String> {
+    let mut findings = Vec::with_capacity(artifact.rows.len());
+    for row in &artifact.rows {
+        let adapter = registry
+            .adapters()
+            .iter()
+            .find(|adapter| adapter.language() == row.language)
+            .ok_or_else(|| format!("{} adapter unavailable", row.language))?;
+        let mut row_findings = adapter
+            .findings_for(row, &row.scope.workspace_root)
+            .map_err(|error| format!("failed to map {:?} findings: {error}", row.kind))?;
+        row_findings
+            .render_commands(|target| {
+                adapter
+                    .verification_selector_support(row.kind)
+                    .validate_target(row.kind, target)?;
+                Ok(render_verification_command(row.kind, row.language, target))
+            })
+            .map_err(|error: FindingError| error.to_string())?;
+        findings.push(row_findings);
+    }
+    artifact.findings = findings;
+    Ok(())
+}
+
+fn render_verification_command(
+    kind: SignalKind,
+    language: Language,
+    target: &VerificationTarget,
+) -> String {
+    let mut command = format!(
+        "ayni verify {} --language {}",
+        signal_kind_slug(kind),
+        language.as_str()
+    );
+    if let Some(file) = &target.file {
+        command.push_str(&format!(" --file {}", shell_quote(file)));
+    }
+    if let Some(package) = &target.package {
+        command.push_str(&format!(" --package {}", shell_quote(package)));
+    }
+    if let Some(name) = &target.name {
+        command.push_str(&format!(" --name {}", shell_quote(name)));
+    }
+    command
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(test)]
+mod verification_command_tests {
+    use super::{render_verification_command, shell_quote};
+    use ayni_core::{Language, SignalKind, VerificationTarget};
+
+    #[test]
+    fn verification_command_is_exact_and_shell_safe() {
+        assert_eq!(
+            render_verification_command(
+                SignalKind::Test,
+                Language::Node,
+                &VerificationTarget {
+                    file: Some(String::from("tests/a weird;name.test.js")),
+                    package: None,
+                    name: Some(String::from("it's focused $(nope)")),
+                },
+            ),
+            "ayni verify test --language node --file 'tests/a weird;name.test.js' --name 'it'\"'\"'s focused $(nope)'"
+        );
+    }
+
+    #[test]
+    fn shell_quote_always_quotes_empty_and_hostile_values() {
+        assert_eq!(shell_quote(""), "''");
+        assert_eq!(shell_quote("a' b"), "'a'\"'\"' b'");
+    }
+}
+
+fn persist_artifact_at(
+    repo_root: &Path,
+    relative_path: &str,
+    serialized: &str,
+) -> Result<(), String> {
+    let destination = repo_root.join(relative_path);
+    let parent = destination
+        .parent()
+        .ok_or_else(|| format!("artifact path {relative_path} has no parent"))?;
+    fs::create_dir_all(parent).map_err(|error| {
+        format!("failed to create artifact directory for {relative_path}: {error}")
+    })?;
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("artifact path {relative_path} has no file name"))?;
+    let temporary = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
+    fs::write(&temporary, serialized).map_err(|error| {
+        format!("failed to write temporary artifact for {relative_path}: {error}")
+    })?;
+    if let Err(error) = fs::rename(&temporary, &destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "failed to atomically replace {relative_path}: {error}"
+        ));
+    }
+    Ok(())
+}
+
 fn emit_analyze_outputs(
     output_mode: OutputArg,
     policy: &AyniPolicy,
@@ -1142,7 +1427,7 @@ fn emit_analyze_outputs(
 ) -> Result<(), String> {
     match output_mode {
         OutputArg::Stdout => {
-            ui::report::print_from_rows(&artifact.rows, policy.report.offenders_limit);
+            ui::report::print_from_artifact(artifact, policy.report.offenders_limit);
         }
         OutputArg::Md => {
             ui::progress_log::log_command_failures(artifact);
@@ -1174,35 +1459,31 @@ fn build_analyze_targets(
     file: Option<String>,
     language_filter: Option<Language>,
     debug: bool,
-) -> Result<Vec<AnalyzeTarget>, String> {
+) -> Result<AnalyzePlanning, String> {
     let file = file.map(|value| canonicalize_relative_posix(&value));
     let enabled_languages = policy.enabled_languages()?;
+    if let Some(language) = language_filter
+        && !enabled_languages.contains(&language)
+    {
+        return Err(format!(
+            "requested language {language} is not enabled in the configured policy"
+        ));
+    }
     let registry = build_registry();
+    let configured =
+        discovery::plan_configured_targets(repo_root, policy, language_filter, &registry)?;
+    let expected_targets = configured.len() as u64;
+    let detected_targets = configured.iter().filter(|target| target.detected).count() as u64;
+    let issues = configured
+        .iter()
+        .filter_map(|target| target.issue.clone())
+        .collect();
     let mut targets = Vec::new();
-    for language in enabled_languages {
-        if let Some(filter) = language_filter
-            && filter != language
-        {
-            continue;
-        }
-        for root in policy.roots_for(language) {
-            let workdir = repo_root.join(root);
-            let has_adapter_for_root = registry
-                .detect(&workdir)
-                .into_iter()
-                .any(|adapter| adapter.language() == language);
-            if !has_adapter_for_root {
-                continue;
-            }
-            let Some(adapter) = registry.detect(&workdir).into_iter().find(|candidate| {
-                candidate.language() == language
-                    && candidate.resolve_execution(repo_root, &workdir).is_some()
-            }) else {
-                continue;
-            };
-            let Some(execution) = adapter.resolve_execution(repo_root, &workdir) else {
-                continue;
-            };
+    for configured_target in configured {
+        let language = configured_target.language;
+        let root = configured_target.configured_root;
+        if let Some(execution) = configured_target.execution {
+            let workdir = repo_root.join(&root);
             let scope = Scope {
                 workspace_root: repo_root.to_string_lossy().into_owned(),
                 path: if root == "." {
@@ -1219,18 +1500,22 @@ fn build_analyze_targets(
                 workdir: workdir.clone(),
                 policy: policy.clone(),
                 scope,
-                diff: None,
                 execution,
                 debug,
             };
             targets.push(AnalyzeTarget {
                 language,
-                root: root.clone(),
+                root,
                 run_context,
             });
         }
     }
-    Ok(targets)
+    Ok(AnalyzePlanning {
+        targets,
+        expected_targets,
+        detected_targets,
+        issues,
+    })
 }
 
 fn canonicalize_relative_posix(value: &str) -> String {
@@ -1242,18 +1527,6 @@ fn canonicalize_relative_posix(value: &str) -> String {
         String::from(".")
     } else {
         normalized
-    }
-}
-
-/// Reads the previous run artifact for delta computation. Artifacts from a
-/// different schema version are ignored so deltas never mix incompatible shapes.
-fn load_previous_artifact(repo_root: &Path) -> Option<RunArtifact> {
-    let content = fs::read_to_string(repo_root.join(SIGNALS_ARTIFACT)).ok()?;
-    let artifact = serde_json::from_str::<RunArtifact>(&content).ok()?;
-    if artifact.schema_version == AYNI_SIGNAL_SCHEMA_VERSION {
-        Some(artifact)
-    } else {
-        None
     }
 }
 

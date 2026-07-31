@@ -25,7 +25,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let threshold = cognitive.fail.to_string();
     let output_path = report_path.to_string_lossy().to_string();
     let args = vec![
-        String::from("."),
+        complexity_target(context),
         String::from("--output-format"),
         String::from("json"),
         String::from("--output"),
@@ -131,7 +131,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             "fn_cognitive": {"warn": cognitive.warn, "fail": cognitive.fail}
         })),
         offenders: Offenders::Complexity(offenders),
-        delta_vs_previous: None,
     })
 }
 
@@ -162,7 +161,6 @@ fn error_row(
         }),
         budget: Budget::Complexity(json!({})),
         offenders: Offenders::Complexity(Vec::new()),
-        delta_vs_previous: None,
     }
 }
 
@@ -244,10 +242,23 @@ fn resolve_file(context: &RunContext, file: &str) -> PathBuf {
     }
 }
 
+fn complexity_target(context: &RunContext) -> String {
+    context.scope.file.as_ref().map_or_else(
+        || String::from("."),
+        |file| {
+            ayni_adapters_common::paths::resolve_repo_path(&context.repo_root, file)
+                .to_string_lossy()
+                .into_owned()
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FunctionEntry, collect_function_entries};
+    use super::{FunctionEntry, collect_function_entries, complexity_target};
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use serde_json::json;
+    use std::path::PathBuf;
 
     #[test]
     fn extracts_nested_complexipy_functions() {
@@ -266,5 +277,23 @@ mod tests {
         assert_eq!(out[0].function, "handle");
         assert_eq!(out[0].line, Some(4));
         assert_eq!(out[0].complexity, 12.0);
+    }
+
+    #[test]
+    fn file_scope_is_the_complexipy_target() {
+        let context = RunContext {
+            repo_root: PathBuf::from("/repo"),
+            target_root: PathBuf::from("/repo"),
+            workdir: PathBuf::from("/repo"),
+            policy: AyniPolicy::default(),
+            scope: Scope {
+                file: Some(String::from("src/handler.py")),
+                ..Scope::default()
+            },
+            execution: ExecutionResolution::direct("uv", PathBuf::from("/repo"), "lock", 100),
+            debug: false,
+        };
+
+        assert_eq!(complexity_target(&context), "/repo/src/handler.py");
     }
 }

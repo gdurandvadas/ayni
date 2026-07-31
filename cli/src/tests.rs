@@ -1,6 +1,6 @@
 use super::{
-    AgentsCommands, Cli, Commands, LanguageArg, OutputArg, SIGNALS_ARTIFACT,
-    VERIFY_SIGNALS_ARTIFACT, VerifyCommands, annotate_deltas_vs_previous, resolve_output_mode,
+    AgentsCommands, Cli, Commands, InstallOutputArg, LanguageArg, OutputArg, SIGNALS_ARTIFACT,
+    VERIFY_SIGNALS_ARTIFACT, VerifyCommands, persist_artifact_at, resolve_output_mode,
     selected_install_languages, serialize_artifact,
 };
 
@@ -22,25 +22,39 @@ fn verify_test_cli_parses_focused_node_selectors() {
     ])
     .expect("arguments parse");
     let Commands::Verify {
-        command:
-            VerifyCommands::Test {
-                package,
-                file,
-                name,
-                json,
-                ..
-            },
+        command: VerifyCommands::Test { options, name },
     } = cli.command
     else {
         panic!("verify test command");
     };
-    assert_eq!(package.as_deref(), Some("@guita/web"));
+    assert_eq!(options.package.as_deref(), Some("@guita/web"));
     assert_eq!(
-        file.as_deref(),
+        options.file.as_deref(),
         Some("frontend/apps/web/src/lib/money.test.ts")
     );
     assert_eq!(name.as_deref(), Some("formats money"));
-    assert!(json);
+    assert!(options.common.json);
+}
+
+#[test]
+fn verify_exposes_every_canonical_signal_and_name_is_test_only() {
+    for signal in ["test", "coverage", "size", "complexity", "deps", "mutation"] {
+        Cli::try_parse_from(["ayni", "verify", signal, "--language", "rust"])
+            .unwrap_or_else(|error| panic!("verify {signal} should parse: {error}"));
+    }
+
+    let error = Cli::try_parse_from(["ayni", "verify", "size", "--name", "unit"])
+        .expect_err("--name must remain test-only");
+    assert!(error.to_string().contains("unexpected argument"));
+    for (signal, selector) in [
+        ("coverage", "--file"),
+        ("size", "--package"),
+        ("mutation", "--file"),
+    ] {
+        let error = Cli::try_parse_from(["ayni", "verify", signal, selector, "target"])
+            .expect_err("signal-invalid selector must be rejected by the CLI");
+        assert!(error.to_string().contains("unexpected argument"));
+    }
 }
 
 #[test]
@@ -48,9 +62,58 @@ fn verify_artifact_does_not_replace_analyze_artifact() {
     assert_ne!(VERIFY_SIGNALS_ARTIFACT, SIGNALS_ARTIFACT);
     assert_eq!(VERIFY_SIGNALS_ARTIFACT, ".ayni/verify/last/signals.json");
 }
+
+#[test]
+fn completion_planner_represents_an_undetected_configured_root() {
+    let dir = TempDir::new().expect("tempdir");
+    let policy: AyniPolicy = toml::from_str(
+        r#"
+[checks]
+test = true
+coverage = false
+size = false
+complexity = false
+deps = false
+mutation = false
+
+[languages]
+enabled = ["rust"]
+
+[rust]
+roots = ["missing"]
+"#,
+    )
+    .expect("policy");
+
+    let planning =
+        super::build_analyze_targets(dir.path(), &policy, None, None, Some(Language::Rust), false)
+            .expect("planning");
+
+    assert_eq!(planning.expected_targets, 1);
+    assert_eq!(planning.detected_targets, 0);
+    assert!(planning.targets.is_empty());
+    assert_eq!(planning.issues.len(), 1);
+    assert_eq!(planning.issues[0].configured_root, "missing");
+    assert_eq!(
+        planning.issues[0].stage,
+        ayni_core::CompletionStage::Detection
+    );
+}
+
+#[test]
+fn completion_artifact_writer_atomically_replaces_existing_evidence() {
+    let dir = TempDir::new().expect("tempdir");
+    let path = dir.path().join(SIGNALS_ARTIFACT);
+    fs::create_dir_all(path.parent().expect("parent")).expect("artifact directory");
+    fs::write(&path, "stale\n").expect("stale artifact");
+
+    persist_artifact_at(dir.path(), SIGNALS_ARTIFACT, "current\n").expect("persist");
+
+    assert_eq!(fs::read_to_string(path).expect("artifact"), "current\n");
+}
 use crate::agents::{MANAGED_BEGIN, MANAGED_END, managed_block, sync_impl, upsert_managed_block};
 use crate::install::{
-    catalog_entry_enabled_for_policy, default_policy_toml, install_impl, persist_artifact,
+    catalog_entry_enabled_for_policy, default_policy_toml, install_impl,
     validate_install_foundation,
 };
 use ayni_core::{
@@ -87,13 +150,23 @@ fn agents_managed_guidance_describes_discovery_policy_and_quality_workflow() {
         "`ayni <command> --help`",
         "`.ayni.toml` as the authoritative repository quality policy",
         "`ayni contract display`",
-        "ayni verify test --language <rust|go|node|python|kotlin> [selectors]",
+        "ayni verify <signal> [selectors]",
         "full repository analysis as the completion gate",
         "`.ayni/last/signals.json`",
+        "narrowest supported `ayni verify <signal>`",
+        "exact verification command supplied by a finding",
+        "incomplete artifacts as failure",
+        "never loosen `.ayni.toml` merely",
+        "detailed, typed signal results",
+        "completion state and target accounting",
+        "exact verification command",
     ] {
         assert!(managed.contains(guidance), "missing guidance: {guidance}");
     }
     assert!(!managed.contains("ayni <command> help"));
+    assert!(!managed.contains("schema-v2"));
+    assert!(!managed.contains("deltas"));
+    assert!(!managed.contains("and repair the listed offenders and\nand repair"));
 }
 
 #[test]
@@ -133,47 +206,6 @@ fn upsert_managed_block_appends_when_missing() {
     assert!(updated.contains("Keep this text."));
     assert!(updated.contains(MANAGED_BEGIN));
     assert!(updated.contains(MANAGED_END));
-}
-
-#[test]
-fn annotate_deltas_vs_previous_marks_metric_and_pass_changes() {
-    let previous = RunArtifact {
-        schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
-        metadata: Default::default(),
-        rows: vec![test_row(false, 18, 2)],
-    };
-    let mut current = RunArtifact {
-        schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
-        metadata: Default::default(),
-        rows: vec![test_row(true, 20, 0)],
-    };
-
-    annotate_deltas_vs_previous(&mut current, Some(&previous));
-    let delta = current.rows[0]
-        .delta_vs_previous
-        .as_ref()
-        .expect("delta is set");
-    assert_eq!(delta.changes["status"], json!("changed"));
-    assert_eq!(delta.changes["pass"]["from"], json!(false));
-    assert_eq!(delta.changes["pass"]["to"], json!(true));
-    assert_eq!(delta.changes["metrics"]["failed"]["delta"], json!(-2.0));
-    assert_eq!(delta.changes["metrics"]["passed"]["delta"], json!(2.0));
-}
-
-#[test]
-fn annotate_deltas_vs_previous_marks_missing_history() {
-    let mut current = RunArtifact {
-        schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
-        metadata: Default::default(),
-        rows: vec![test_row(true, 20, 0)],
-    };
-
-    annotate_deltas_vs_previous(&mut current, None);
-    let delta = current.rows[0]
-        .delta_vs_previous
-        .as_ref()
-        .expect("delta is set");
-    assert_eq!(delta.changes["status"], json!("no_previous_run"));
 }
 
 #[test]
@@ -230,6 +262,26 @@ fn install_parser_defaults_to_no_language_selection() {
 }
 
 #[test]
+fn install_check_parses_json_and_conflicts_with_apply() {
+    let cli = Cli::try_parse_from(["ayni", "install", "--check", "--output", "json"])
+        .expect("check arguments parse");
+    let Commands::Install { check, output, .. } = cli.command else {
+        panic!("install command");
+    };
+    assert!(check);
+    assert_eq!(output, Some(InstallOutputArg::Json));
+
+    let conflict = Cli::try_parse_from(["ayni", "install", "--check", "--apply"])
+        .expect_err("check and apply conflict");
+    assert!(conflict.to_string().contains("cannot be used with"));
+
+    let without_check = Cli::try_parse_from(["ayni", "install", "--output", "json"])
+        .expect_err("install JSON is check-only");
+    assert!(without_check.to_string().contains("required arguments"));
+    assert!(without_check.to_string().contains("--check"));
+}
+
+#[test]
 fn agents_sync_parser_accepts_repo_root() {
     let cli = Cli::try_parse_from(["ayni", "agents", "sync", "--repo-root", "fixture"])
         .expect("arguments parse");
@@ -272,6 +324,18 @@ fn analyze_json_selector_is_equivalent_to_output_json() {
 }
 
 #[test]
+fn analyze_rejects_focused_scope_selectors() {
+    for selector in ["--file", "--package", "--language"] {
+        let error = Cli::try_parse_from(["ayni", "analyze", selector, "value"])
+            .expect_err("analyze must be repository-only");
+        assert!(
+            error.to_string().contains("unexpected argument"),
+            "unexpected error for {selector}: {error}"
+        );
+    }
+}
+
+#[test]
 fn analyze_json_allows_same_output_mode_and_rejects_conflicts() {
     assert_eq!(
         resolve_output_mode(Some(OutputArg::Json), true).expect("same mode is allowed"),
@@ -288,7 +352,7 @@ fn analyze_json_allows_same_output_mode_and_rejects_conflicts() {
 }
 
 #[test]
-fn serialized_json_is_schema_v2_and_matches_persisted_artifact() {
+fn serialized_json_is_schema_v3_and_matches_persisted_artifact() {
     let dir = TempDir::new().expect("tempdir");
     fs::create_dir_all(dir.path().join(".ayni/last")).expect("artifact directory");
     let artifact = RunArtifact::new(
@@ -307,10 +371,11 @@ fn serialized_json_is_schema_v2_and_matches_persisted_artifact() {
             config_path: String::from("./.ayni.toml"),
             repository_root: String::from("."),
         },
+        ayni_core::RunCompletion::complete(ayni_core::CompletionScope::Repository, 1),
         vec![test_row(true, 1, 0)],
     );
     let serialized = serialize_artifact(&artifact).expect("serialize artifact");
-    persist_artifact(dir.path(), &serialized).expect("persist artifact");
+    persist_artifact_at(dir.path(), SIGNALS_ARTIFACT, &serialized).expect("persist artifact");
 
     let value: serde_json::Value = serde_json::from_str(&serialized).expect("valid json");
     assert_eq!(value["schema_version"], AYNI_SIGNAL_SCHEMA_VERSION);
@@ -444,7 +509,7 @@ roots = ["."]
     )
     .expect("policy");
 
-    let targets = super::build_analyze_targets(
+    let planning = super::build_analyze_targets(
         dir.path(),
         &policy,
         None,
@@ -454,9 +519,9 @@ roots = ["."]
     )
     .expect("targets");
 
-    assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].language, Language::Kotlin);
-    assert_eq!(targets[0].run_context.execution.runner, "gradle");
+    assert_eq!(planning.targets.len(), 1);
+    assert_eq!(planning.targets[0].language, Language::Kotlin);
+    assert_eq!(planning.targets[0].run_context.execution.runner, "gradle");
 }
 
 #[test]
@@ -485,7 +550,7 @@ roots = ["."]
     )
     .expect("policy");
 
-    let targets = super::build_analyze_targets(
+    let planning = super::build_analyze_targets(
         dir.path(),
         &policy,
         None,
@@ -494,10 +559,13 @@ roots = ["."]
         false,
     )
     .expect("targets");
-    assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].language, Language::Python);
-    assert_eq!(targets[0].run_context.execution.runner, "python");
-    assert_eq!(targets[0].run_context.execution.kind, "direct_root");
+    assert_eq!(planning.targets.len(), 1);
+    assert_eq!(planning.targets[0].language, Language::Python);
+    assert_eq!(planning.targets[0].run_context.execution.runner, "python");
+    assert_eq!(
+        planning.targets[0].run_context.execution.kind,
+        "direct_root"
+    );
 }
 
 #[test]
@@ -700,7 +768,6 @@ enabled = ["python"]
             package: None,
             file: None,
         },
-        diff: None,
         execution: ExecutionResolution::direct(
             "python",
             PathBuf::from("/repo/packages/api"),
@@ -747,6 +814,5 @@ fn test_row(pass: bool, passed: u64, failed: u64) -> ayni_core::SignalRow {
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(Vec::new()),
-        delta_vs_previous: None,
     }
 }

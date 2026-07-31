@@ -3,7 +3,7 @@ use ayni_adapters_common::exec::format_command;
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult, TestSelection,
+    TestFailure, TestResult, VerificationSelection,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -29,7 +29,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
 
 pub fn collect_selected(
     context: &RunContext,
-    selection: &TestSelection,
+    selection: &VerificationSelection,
     _on_line: &mut dyn FnMut(&str),
 ) -> Result<SignalRow, String> {
     let (program, mut args) = test_command(context);
@@ -119,6 +119,8 @@ fn collect_with_command(
             message: stderr.trim().to_string(),
             test_name: None,
         });
+    } else if success && total_tests == 0 {
+        offenders.push(zero_tests_failure());
     }
 
     Ok(SignalRow {
@@ -130,7 +132,7 @@ fn collect_with_command(
             package: context.scope.package.clone(),
             file: context.scope.file.clone(),
         },
-        pass: success && failed == 0,
+        pass: test_row_passes(success, total_tests, failed),
         result: SignalResult::Test(TestResult {
             total_tests,
             passed,
@@ -143,8 +145,22 @@ fn collect_with_command(
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
-        delta_vs_previous: None,
     })
+}
+
+fn zero_tests_failure() -> TestFailure {
+    TestFailure {
+        file: None,
+        line: None,
+        message: String::from(
+            "test runner completed successfully but discovered zero tests; add tests or correct the test selection",
+        ),
+        test_name: None,
+    }
+}
+
+fn test_row_passes(success: bool, total_tests: u64, failed: u64) -> bool {
+    success && total_tests > 0 && failed == 0
 }
 
 fn test_command(context: &RunContext) -> (String, Vec<String>) {
@@ -175,7 +191,7 @@ fn test_command(context: &RunContext) -> (String, Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::test_command;
+    use super::{test_command, test_row_passes, zero_tests_failure};
     use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use std::path::PathBuf;
 
@@ -187,7 +203,6 @@ mod tests {
             workdir: PathBuf::from("."),
             policy,
             scope: Scope::default(),
-            diff: None,
             execution: ExecutionResolution::direct("go", PathBuf::from("."), "test", 100),
             debug: false,
         }
@@ -240,5 +255,12 @@ args = ["--jsonfile", ".ayni/go-tests.json", "--", "./..."]
             args,
             vec!["--jsonfile", ".ayni/go-tests.json", "--", "./..."]
         );
+    }
+
+    #[test]
+    fn successful_zero_test_run_fails_with_an_actionable_finding() {
+        let failure = zero_tests_failure();
+        assert!(failure.message.contains("discovered zero tests"));
+        assert!(!test_row_passes(true, 0, 0));
     }
 }

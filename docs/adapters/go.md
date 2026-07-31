@@ -21,11 +21,25 @@ enabled and installation is applied.
 | `deps` | `go list` dependency graph | no version enforced |
 | `mutation` | `go test` mutation proxy, or a configured Go mutation command | no version enforced |
 
-Focused verification
+## Focused verification
 
-`ayni verify test --language go` supports a repository-relative `--file` or Go
-package passed through to `go test`, plus an optional `--name` selector. The
-name selector is passed as an exact `-run` regular expression.
+`verify` writes requested-scope evidence only to `.ayni/verify/last/signals.json`.
+Every command accepts an optional `--language go`; unscoped verification is
+always valid. The accepted selectors are:
+
+| Signal | `--file` | `--package` | `--name` |
+| --- | --- | --- | --- |
+| `test` | no | yes | yes |
+| `coverage` | no | no | no |
+| `size` | yes | no | no |
+| `complexity` | yes | no | no |
+| `deps` | yes | yes | no |
+| `mutation` | no | no | no |
+
+For `test`, pass a Go package and optional name; the name becomes an exact
+`-run` regular expression. `--name` is test-only, and `--file` cannot be
+combined with `--package`. Unsupported or ambiguous selectors are rejected
+before `go` runs.
 
 ## Contract
 

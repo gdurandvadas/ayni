@@ -4,7 +4,7 @@ use super::util::{
 };
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult, TestSelection,
+    TestFailure, TestResult, VerificationSelection,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -58,7 +58,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
 
 pub fn collect_selected(
     context: &RunContext,
-    selection: &TestSelection,
+    selection: &VerificationSelection,
     _on_line: &mut dyn FnMut(&str),
 ) -> Result<SignalRow, String> {
     let report_path = prepare_report_path(context, "pytest-report.json")?;
@@ -135,13 +135,16 @@ fn collect_with_command(
     let passed = summary.passed.unwrap_or(0);
     let failed = summary.failed.unwrap_or(0) + summary.error.unwrap_or(0);
     let duration_ms = report.duration.map(|value| (value * 1000.0) as u64);
-    let offenders = report
+    let mut offenders = report
         .tests
         .unwrap_or_default()
         .into_iter()
         .filter(|case| matches!(case.outcome.as_deref(), Some("failed" | "error")))
         .map(test_failure)
         .collect::<Vec<_>>();
+    if success && total_tests == 0 {
+        offenders.push(zero_tests_failure());
+    }
 
     Ok(SignalRow {
         kind: SignalKind::Test,
@@ -152,7 +155,7 @@ fn collect_with_command(
             package: context.scope.package.clone(),
             file: context.scope.file.clone(),
         },
-        pass: success && failed == 0 && total_tests > 0,
+        pass: test_row_passes(success, total_tests, failed),
         result: SignalResult::Test(TestResult {
             total_tests,
             passed,
@@ -163,8 +166,22 @@ fn collect_with_command(
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
-        delta_vs_previous: None,
     })
+}
+
+fn zero_tests_failure() -> TestFailure {
+    TestFailure {
+        file: None,
+        line: None,
+        message: String::from(
+            "test runner completed successfully but discovered zero tests; add tests or correct the test selection",
+        ),
+        test_name: None,
+    }
+}
+
+fn test_row_passes(success: bool, total_tests: u64, failed: u64) -> bool {
+    success && total_tests > 0 && failed == 0
 }
 
 fn is_no_tests_collected(output: &std::process::Output) -> bool {
@@ -205,5 +222,20 @@ fn test_failure(case: PytestCase) -> TestFailure {
         line: crash.and_then(|crash| crash.lineno),
         message,
         test_name: case.nodeid,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{test_row_passes, zero_tests_failure};
+
+    #[test]
+    fn successful_zero_test_run_fails_with_an_actionable_finding() {
+        assert!(!test_row_passes(true, 0, 0));
+        assert!(
+            zero_tests_failure()
+                .message
+                .contains("discovered zero tests")
+        );
     }
 }

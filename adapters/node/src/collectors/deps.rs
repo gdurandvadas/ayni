@@ -66,14 +66,13 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         },
         pass: offenders.is_empty(),
         result: SignalResult::Deps(DepsResult {
-            crate_count: workspace.members.len() as u64,
+            crate_count: visible.len() as u64,
             edge_count: edges.len() as u64,
             violation_count: offenders.len() as u64,
             failure: None,
         }),
         budget: Budget::Deps(json!({ "forbidden": rules })),
         offenders: Offenders::Deps(offenders),
-        delta_vs_previous: None,
     })
 }
 

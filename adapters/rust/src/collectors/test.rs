@@ -1,7 +1,7 @@
 use ayni_adapters_common::exec::{format_command, run_command_for_context_streaming};
 use ayni_core::{
     Budget, CommandFailure, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult, TestSelection,
+    TestFailure, TestResult, VerificationSelection,
 };
 use serde_json::json;
 
@@ -30,7 +30,7 @@ where
 
 pub fn collect_selected_with_lines<F>(
     context: &RunContext,
-    selection: &TestSelection,
+    selection: &VerificationSelection,
     on_line: F,
 ) -> Result<SignalRow, String>
 where
@@ -56,7 +56,7 @@ where
 
 fn selected_test_command(
     context: &RunContext,
-    selection: &TestSelection,
+    selection: &VerificationSelection,
 ) -> Result<(String, Vec<String>), String> {
     if context.scope.file.is_some() {
         return Err(String::from(
@@ -100,6 +100,8 @@ fn build_test_row(
             ),
             test_name: None,
         });
+    } else if total_tests == 0 {
+        offenders.push(zero_tests_failure());
     }
 
     SignalRow {
@@ -111,7 +113,7 @@ fn build_test_row(
             package: context.scope.package.clone(),
             file: context.scope.file.clone(),
         },
-        pass: failed == 0 && success,
+        pass: test_row_passes(success, total_tests, failed),
         result: SignalResult::Test(TestResult {
             total_tests,
             passed,
@@ -129,8 +131,22 @@ fn build_test_row(
         }),
         budget: Budget::Test(json!({})),
         offenders: Offenders::Test(offenders),
-        delta_vs_previous: None,
     }
+}
+
+fn zero_tests_failure() -> TestFailure {
+    TestFailure {
+        file: None,
+        line: None,
+        message: String::from(
+            "test runner completed successfully but discovered zero tests; add tests or correct the test selection",
+        ),
+        test_name: None,
+    }
+}
+
+fn test_row_passes(success: bool, total_tests: u64, failed: u64) -> bool {
+    success && total_tests > 0 && failed == 0
 }
 
 fn test_command(context: &RunContext) -> (String, Vec<String>) {
@@ -216,7 +232,6 @@ mod tests {
             workdir: PathBuf::from("."),
             policy,
             scope: Scope::default(),
-            diff: None,
             execution: ExecutionResolution::direct("cargo", PathBuf::from("."), "test", 100),
             debug: false,
         }
@@ -272,8 +287,9 @@ enabled = ["rust"]
         context.scope.package = Some(String::from("ayni-core"));
         let (_, args) = selected_test_command(
             &context,
-            &TestSelection {
-                language: ayni_core::Language::Rust,
+            &VerificationSelection {
+                file: None,
+                package: Some(String::from("ayni-core")),
                 name: Some(String::from("parses")),
             },
         )
@@ -294,8 +310,9 @@ enabled = ["rust"]
         context.scope.file = Some(String::from("core/src/lib.rs"));
         let error = selected_test_command(
             &context,
-            &TestSelection {
-                language: ayni_core::Language::Rust,
+            &VerificationSelection {
+                file: Some(String::from("core/src/lib.rs")),
+                package: None,
                 name: None,
             },
         )
@@ -356,5 +373,27 @@ enabled = ["rust"]
             panic!("test result");
         };
         assert_eq!(result.failure.expect("failure").exit_code, Some(17));
+    }
+
+    #[test]
+    fn successful_zero_test_run_fails_with_an_actionable_finding() {
+        let row = build_test_row(
+            &context_with_policy("[checks]\ntest = true\n[languages]\nenabled = [\"rust\"]"),
+            true,
+            Some(0),
+            "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+            "",
+            "cargo test",
+        );
+        assert!(!row.pass);
+        let SignalResult::Test(result) = &row.result else {
+            panic!("test result");
+        };
+        assert_eq!(result.total_tests, 0);
+        assert!(result.failure.is_none());
+        let Offenders::Test(offenders) = &row.offenders else {
+            panic!("test offenders");
+        };
+        assert!(offenders[0].message.contains("discovered zero tests"));
     }
 }

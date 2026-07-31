@@ -33,6 +33,14 @@ typed `result`, `budget`, and `offenders`, plus deterministic `pass`
 calculation. Use repository-relative POSIX offender paths, respect `scope`,
 `file`, and `package` when supplied, and never emit absolute paths.
 
+For each of the six signals, declare only selectors that the collector applies
+faithfully: `file`, `package`, and test-only `name`. The CLI rejects unsupported
+or conflicting selectors before a tool starts. Provide a verification target for
+each actionable offender that can be revalidated; it is checked against that
+signal's declared support and rendered as an exact `ayni verify <signal>`
+command. Do not advertise a selector merely because a tool accepts a similar
+flag.
+
 ## Module and collector layout
 
 Use this crate structure unless a language-specific need requires a small,
@@ -77,12 +85,15 @@ collector's required threshold is missing.
 ## Documentation format
 
 The adapter user page must use this ordered H2 outline: Installation; Signal
-Coverage; Contract; Configuration Example. State roots and detection,
+Coverage; Focused verification; Contract; Configuration Example. State roots and detection,
 language-specific package-manager or build-system resolution, each tool's
 required/optional ownership, and only versions enforced or selected by code;
 write “no version enforced” otherwise. Map all six canonical signals to their
-tools. Document policy fields, command overrides, and missing-policy behavior
-with a language-specific TOML example.
+tools. The focused-verification section must include a six-signal matrix for
+`--file`, `--package`, and `--name`, explain rejection behavior, and say that
+requested-scope evidence is written to `.ayni/verify/last/signals.json` rather
+than the repository completion artifact. Document policy fields, command
+overrides, and missing-policy behavior with a language-specific TOML example.
 
 Catalog-managed dependencies are installed only when their related check is
 enabled and installation is applied. Runtime and package-manager prerequisites
@@ -104,12 +115,16 @@ Do not:
 Before merging an adapter:
 
 1. `ayni install` installs or validates every catalog tool.
-2. `ayni analyze` emits typed rows for every enabled signal kind.
-3. Offender fields match the signal contract.
-4. Paths are relative and stable.
-5. Adapter documentation names the exact tools, version contract, and policy
+2. Unscoped `ayni analyze` emits typed rows for every enabled signal kind and
+   is the only repository-completion artifact writer.
+3. Each supported focused selector is faithfully applied; unsupported selectors
+   are rejected before tool invocation.
+4. Offender fields, stable IDs, and exact verification commands match the signal
+   contract.
+5. Paths are relative and stable.
+6. Adapter documentation names the exact tools, version contract, and policy
    controls.
-6. Run `cargo fmt --all -- --check`,
+7. Run `cargo fmt --all -- --check`,
    `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
    `cargo test --workspace --all-features`, and
    `cargo check --workspace --all-features`.

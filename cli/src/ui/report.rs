@@ -5,23 +5,40 @@ use std::fs;
 use std::path::Path;
 
 #[cfg(test)]
-use ayni_core::{AYNI_POLICY_FILE, AyniPolicy, RunArtifact};
+use ayni_core::{AYNI_POLICY_FILE, AyniPolicy};
 use ayni_core::{
-    Budget, CommandFailure, ComplexityOffender, CoverageOffender, DepsOffender, Level,
-    MutationOffender, SignalKind, SignalResult, SignalRow, SizeOffender, TestFailure,
+    Budget, CommandFailure, CompletionScope, CompletionStage, CompletionState, ComplexityOffender,
+    CoverageOffender, DepsOffender, Level, MutationOffender, RunArtifact, RunCompletion,
+    SignalKind, SignalResult, SignalRow, SizeOffender, TestFailure,
 };
 use owo_colors::OwoColorize;
 use serde_json::Value;
 
 use crate::ui::{FAIL_RGB, PASS_RGB, WARN_RGB, color_enabled};
 
-pub fn render_from_rows(rows: &[SignalRow], offenders_limit: usize, color: bool) -> String {
-    build_report_text(rows, color, offenders_limit)
+pub fn print_from_artifact(artifact: &RunArtifact, offenders_limit: usize) {
+    let mut text = build_report_text(
+        &artifact.rows,
+        Some(&artifact.completion),
+        color_enabled(),
+        offenders_limit,
+    );
+    append_verification_commands(&mut text, artifact);
+    println!("{text}");
 }
 
-pub fn print_from_rows(rows: &[SignalRow], offenders_limit: usize) {
-    let text = render_from_rows(rows, offenders_limit, color_enabled());
-    println!("{text}");
+fn append_verification_commands(out: &mut String, artifact: &RunArtifact) {
+    let commands: Vec<_> = artifact
+        .findings
+        .iter()
+        .flat_map(ayni_core::Findings::commands)
+        .collect();
+    if !commands.is_empty() {
+        out.push_str("verification commands\n");
+        for command in commands {
+            out.push_str(&format!("  {command}\n"));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -31,7 +48,12 @@ pub fn print_from_run_artifact(signals_path: &Path) -> Result<(), String> {
     let artifact: RunArtifact = serde_json::from_str(&content)
         .map_err(|e| format!("failed to parse {}: {e}", signals_path.display()))?;
     let offenders_limit = load_offenders_limit(signals_path);
-    let text = render_from_rows(&artifact.rows, offenders_limit, color_enabled());
+    let text = build_report_text(
+        &artifact.rows,
+        Some(&artifact.completion),
+        color_enabled(),
+        offenders_limit,
+    );
     println!("{text}");
     Ok(())
 }
@@ -81,7 +103,12 @@ fn test_summary_from_rows(rows: &[SignalRow]) -> Option<(u64, u64, u64)> {
     None
 }
 
-fn build_report_text(rows: &[SignalRow], color: bool, offenders_limit: usize) -> String {
+fn build_report_text(
+    rows: &[SignalRow],
+    completion: Option<&RunCompletion>,
+    color: bool,
+    offenders_limit: usize,
+) -> String {
     let mut out = String::new();
     out.push('\n');
     out.push_str(&stylize(
@@ -91,6 +118,28 @@ fn build_report_text(rows: &[SignalRow], color: bool, offenders_limit: usize) ->
         true,
     ));
     out.push('\n');
+
+    if let Some(completion) = completion {
+        out.push_str(&format!(
+            "completion  scope={} state={} targets={}/{} detected={} skipped={}\n",
+            completion_scope_label(completion.scope),
+            completion_state_label(completion.state),
+            completion.completed_targets,
+            completion.expected_targets,
+            completion.detected_targets,
+            completion.skipped_targets,
+        ));
+        for issue in &completion.issues {
+            out.push_str(&format!(
+                "  incomplete language={} root={} stage={}: {}\n",
+                issue.language.as_str(),
+                issue.configured_root,
+                completion_stage_label(issue.stage),
+                issue.message,
+            ));
+        }
+        out.push('\n');
+    }
 
     let mut grouped = BTreeMap::<String, Vec<&SignalRow>>::new();
     for row in rows {
@@ -145,6 +194,30 @@ fn build_report_text(rows: &[SignalRow], color: bool, offenders_limit: usize) ->
         ));
     }
     out
+}
+
+fn completion_scope_label(scope: CompletionScope) -> &'static str {
+    match scope {
+        CompletionScope::Repository => "repository",
+        CompletionScope::Requested => "requested",
+    }
+}
+
+fn completion_state_label(state: CompletionState) -> &'static str {
+    match state {
+        CompletionState::Complete => "complete",
+        CompletionState::Incomplete => "incomplete",
+    }
+}
+
+fn completion_stage_label(stage: CompletionStage) -> &'static str {
+    match stage {
+        CompletionStage::Detection => "detection",
+        CompletionStage::Resolution => "resolution",
+        CompletionStage::Selection => "selection",
+        CompletionStage::Scheduling => "scheduling",
+        CompletionStage::Collection => "collection",
+    }
 }
 
 fn summarize(row: &SignalRow) -> String {
@@ -640,7 +713,6 @@ mod tests {
                     fail: 700,
                     level: Level::Fail,
                 }]),
-                delta_vs_previous: None,
             },
             SignalRow {
                 kind: SignalKind::Deps,
@@ -655,13 +727,37 @@ mod tests {
                 }),
                 budget: Budget::Deps(serde_json::json!({})),
                 offenders: Offenders::Deps(Vec::new()),
-                delta_vs_previous: None,
             },
         ];
-        let text = build_report_text(&rows, false, 4);
+        let text = build_report_text(&rows, None, false, 4);
         assert!(text.contains("rust (apps/api)  0/1 passing"));
         assert!(text.contains("node (workspace)  1/1 passing"));
         assert!(text.contains("summary  1/2 checks passing"));
+    }
+
+    #[test]
+    fn build_report_text_renders_completion_scope_state_and_issue() {
+        let completion = ayni_core::RunCompletion {
+            scope: ayni_core::CompletionScope::Requested,
+            state: ayni_core::CompletionState::Incomplete,
+            expected_targets: 1,
+            detected_targets: 0,
+            completed_targets: 0,
+            skipped_targets: 1,
+            issues: vec![ayni_core::CompletionIssue {
+                language: Language::Rust,
+                configured_root: String::from("crates/api"),
+                stage: ayni_core::CompletionStage::Detection,
+                message: String::from("not detected"),
+            }],
+        };
+
+        let text = build_report_text(&[], Some(&completion), false, 3);
+        assert!(text.contains("scope=requested state=incomplete"));
+        assert!(text.contains("targets=0/1 detected=0 skipped=1"));
+        assert!(
+            text.contains("incomplete language=rust root=crates/api stage=detection: not detected")
+        );
     }
 
     #[test]
@@ -704,7 +800,6 @@ mod tests {
                         level: Level::Warn,
                     },
                 ]),
-                delta_vs_previous: None,
             },
             SignalRow {
                 kind: SignalKind::Complexity,
@@ -733,11 +828,10 @@ mod tests {
                     cognitive: Some(16.0),
                     level: Level::Warn,
                 }]),
-                delta_vs_previous: None,
             },
         ];
 
-        let text = build_report_text(&rows, false, 2);
+        let text = build_report_text(&rows, None, false, 2);
         assert!(text.contains("thresholds=warn=70.0 fail=50.0"));
         assert!(text.contains("deltas=warn=-2.0 fail=+18.0"));
         assert!(text.contains("cyclo_thresholds=warn=10.0 fail=20.0"));
@@ -755,6 +849,8 @@ mod tests {
         let artifact = RunArtifact {
             schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
             metadata: Default::default(),
+            completion: Default::default(),
+            findings: Vec::new(),
             rows: vec![SignalRow {
                 kind: SignalKind::Deps,
                 language: Language::Rust,
@@ -768,7 +864,6 @@ mod tests {
                 }),
                 budget: Budget::Deps(json!({})),
                 offenders: Offenders::Deps(vec![]),
-                delta_vs_previous: None,
             }],
         };
         let body = serde_json::to_string_pretty(&artifact).expect("serialize");

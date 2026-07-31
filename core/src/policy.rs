@@ -1,12 +1,26 @@
+use crate::adapter::PolicyEffectivenessFacts;
 use crate::language::Language;
 use crate::signal::SignalKind;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 
 pub const AYNI_POLICY_FILE: &str = ".ayni.toml";
+
+/// An advisory diagnostic for policy that parses successfully but cannot
+/// affect a requested signal. Codes are stable for renderer and JSON clients.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PolicyEffectivenessWarning {
+    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<Language>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal: Option<SignalKind>,
+    pub policy_path: String,
+    pub message: String,
+}
 
 /// Line-count budget for files matching a single glob pattern.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -204,6 +218,37 @@ impl AyniPolicy {
         }
     }
 
+    /// Produce deterministic advisory diagnostics using only policy and static
+    /// adapter declarations. This method performs no discovery, tool
+    /// execution, filesystem writes, or validation changes.
+    #[must_use]
+    pub fn effectiveness_warnings(
+        &self,
+        adapter_facts: &[PolicyEffectivenessFacts],
+    ) -> Vec<PolicyEffectivenessWarning> {
+        let mut warnings = Vec::new();
+        let enabled_languages = self.enabled_languages().unwrap_or_default();
+        let mut facts = adapter_facts.to_vec();
+        facts.sort_by_key(|fact| fact.language);
+        facts.dedup_by_key(|fact| fact.language);
+
+        for language in enabled_languages {
+            let tooling = self.language_tooling(language);
+            self.disabled_check_configuration_warnings(language, tooling, &mut warnings);
+            self.empty_enabled_rule_warnings(language, tooling, &mut warnings);
+            self.missing_complexity_threshold_warnings(language, tooling, &facts, &mut warnings);
+        }
+        warnings.sort_by(|left, right| {
+            (&left.language, &left.signal, &left.code, &left.policy_path).cmp(&(
+                &right.language,
+                &right.signal,
+                &right.code,
+                &right.policy_path,
+            ))
+        });
+        warnings
+    }
+
     fn normalize_and_validate(&mut self) -> Result<(), String> {
         if self.languages.enabled.is_empty() {
             return Err(String::from(
@@ -245,6 +290,177 @@ impl AyniPolicy {
             validate_language_thresholds(language, tooling)?;
         }
         Ok(())
+    }
+
+    fn disabled_check_configuration_warnings(
+        &self,
+        language: Language,
+        tooling: &LanguageTooling,
+        warnings: &mut Vec<PolicyEffectivenessWarning>,
+    ) {
+        for (kind, configured) in configured_signals(tooling) {
+            if configured && !self.signal_enabled(kind) {
+                let name = signal_policy_name(kind);
+                warnings.push(warning(
+                    "policy.effectiveness.disabled_check_hides_configuration",
+                    language,
+                    kind,
+                    format!("checks.{name}"),
+                    format!(
+                        "{name} policy is configured for {language}, but checks.{name} is disabled"
+                    ),
+                ));
+            }
+        }
+    }
+
+    fn empty_enabled_rule_warnings(
+        &self,
+        language: Language,
+        tooling: &LanguageTooling,
+        warnings: &mut Vec<PolicyEffectivenessWarning>,
+    ) {
+        if self.signal_enabled(SignalKind::Size) && tooling.size.is_empty() {
+            warnings.push(warning(
+                "policy.effectiveness.size.no_rules",
+                language,
+                SignalKind::Size,
+                format!("{}.size", language.as_str()),
+                format!("size is enabled for {language}, but no size rules are configured"),
+            ));
+        }
+        if self.signal_enabled(SignalKind::Coverage) && coverage_has_no_threshold(tooling) {
+            warnings.push(warning(
+                "policy.effectiveness.coverage.no_threshold",
+                language,
+                SignalKind::Coverage,
+                format!("{}.coverage", language.as_str()),
+                format!(
+                    "coverage is enabled for {language}, but no coverage threshold is configured"
+                ),
+            ));
+        }
+        if self.signal_enabled(SignalKind::Deps) && deps_has_no_forbidden_edges(tooling) {
+            warnings.push(warning(
+                "policy.effectiveness.deps.no_forbidden_edges",
+                language,
+                SignalKind::Deps,
+                format!("{}.deps.forbidden", language.as_str()),
+                format!("deps is enabled for {language}, but no forbidden dependency edges are configured"),
+            ));
+        }
+    }
+
+    fn missing_complexity_threshold_warnings(
+        &self,
+        language: Language,
+        tooling: &LanguageTooling,
+        facts: &[PolicyEffectivenessFacts],
+        warnings: &mut Vec<PolicyEffectivenessWarning>,
+    ) {
+        if !self.signal_enabled(SignalKind::Complexity) {
+            return;
+        }
+        let Some(fact) = facts.iter().find(|fact| fact.language == language) else {
+            return;
+        };
+        for required in &fact.required_complexity_thresholds {
+            if !complexity_threshold_configured(tooling, *required) {
+                let key = required.policy_key();
+                warnings.push(warning(
+                    "policy.effectiveness.complexity.missing_required_threshold",
+                    language,
+                    SignalKind::Complexity,
+                    format!("{}.complexity.{key}", language.as_str()),
+                    format!("complexity is enabled for {language}, but required threshold {key} is not configured"),
+                ));
+            }
+        }
+    }
+}
+
+fn warning(
+    code: &str,
+    language: Language,
+    signal: SignalKind,
+    policy_path: String,
+    message: String,
+) -> PolicyEffectivenessWarning {
+    PolicyEffectivenessWarning {
+        code: String::from(code),
+        language: Some(language),
+        signal: Some(signal),
+        policy_path,
+        message,
+    }
+}
+
+fn signal_policy_name(kind: SignalKind) -> &'static str {
+    match kind {
+        SignalKind::Test => "test",
+        SignalKind::Coverage => "coverage",
+        SignalKind::Size => "size",
+        SignalKind::Complexity => "complexity",
+        SignalKind::Deps => "deps",
+        SignalKind::Mutation => "mutation",
+    }
+}
+
+fn configured_signals(tooling: &LanguageTooling) -> [(SignalKind, bool); 6] {
+    [
+        (SignalKind::Test, tooling.tooling.test.is_some()),
+        (
+            SignalKind::Coverage,
+            tooling.coverage.is_some() || tooling.tooling.coverage.is_some(),
+        ),
+        (SignalKind::Size, !tooling.size.is_empty()),
+        (SignalKind::Complexity, tooling.complexity.is_some()),
+        (SignalKind::Deps, tooling.deps.is_some()),
+        (SignalKind::Mutation, tooling.tooling.mutation.is_some()),
+    ]
+}
+
+fn coverage_has_no_threshold(tooling: &LanguageTooling) -> bool {
+    tooling
+        .coverage
+        .as_ref()
+        .is_none_or(|coverage| coverage.line_percent.is_none() && coverage.branch_percent.is_none())
+}
+
+fn deps_has_no_forbidden_edges(tooling: &LanguageTooling) -> bool {
+    tooling
+        .deps
+        .as_ref()
+        .is_none_or(|deps| deps.forbidden.is_empty())
+}
+
+fn complexity_threshold_configured(
+    tooling: &LanguageTooling,
+    required: crate::adapter::ComplexityThresholdKind,
+) -> bool {
+    tooling
+        .complexity
+        .as_ref()
+        .is_some_and(|complexity| match required {
+            crate::adapter::ComplexityThresholdKind::FnCyclomatic => {
+                complexity.fn_cyclomatic.is_some()
+            }
+            crate::adapter::ComplexityThresholdKind::FnCognitive => {
+                complexity.fn_cognitive.is_some()
+            }
+        })
+}
+
+impl AyniPolicy {
+    fn signal_enabled(&self, kind: SignalKind) -> bool {
+        match kind {
+            SignalKind::Test => self.checks.test,
+            SignalKind::Coverage => self.checks.coverage,
+            SignalKind::Size => self.checks.size,
+            SignalKind::Complexity => self.checks.complexity,
+            SignalKind::Deps => self.checks.deps,
+            SignalKind::Mutation => self.checks.mutation,
+        }
     }
 }
 
@@ -414,6 +630,7 @@ pub struct ThresholdInt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::{ComplexityThresholdKind, PolicyEffectivenessFacts};
     use crate::language::Language;
 
     #[test]
@@ -862,5 +1079,114 @@ amount = 0
         let mut policy: AyniPolicy = toml::from_str(document).expect("parse");
         let error = policy.normalize_and_validate().expect_err("must fail");
         assert!(error.contains("at least 1"));
+    }
+
+    #[test]
+    fn effectiveness_warnings_cover_empty_enabled_rules_and_required_thresholds() {
+        let document = r#"
+[checks]
+test = false
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["rust", "python"]
+
+[rust.complexity]
+fn_cognitive = { warn = 10, fail = 20 }
+
+[python.coverage]
+branch_percent = { warn = 80, fail = 70 }
+"#;
+        let policy: AyniPolicy = toml::from_str(document).expect("parse");
+        let warnings = policy.effectiveness_warnings(&[
+            PolicyEffectivenessFacts::new(
+                Language::Rust,
+                vec![ComplexityThresholdKind::FnCyclomatic],
+            ),
+            PolicyEffectivenessFacts::new(
+                Language::Python,
+                vec![ComplexityThresholdKind::FnCognitive],
+            ),
+        ]);
+
+        let actual = warnings
+            .iter()
+            .map(|warning| (warning.code.as_str(), warning.policy_path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    "policy.effectiveness.coverage.no_threshold",
+                    "rust.coverage"
+                ),
+                ("policy.effectiveness.size.no_rules", "rust.size"),
+                (
+                    "policy.effectiveness.complexity.missing_required_threshold",
+                    "rust.complexity.fn_cyclomatic"
+                ),
+                (
+                    "policy.effectiveness.deps.no_forbidden_edges",
+                    "rust.deps.forbidden"
+                ),
+                ("policy.effectiveness.size.no_rules", "python.size"),
+                (
+                    "policy.effectiveness.complexity.missing_required_threshold",
+                    "python.complexity.fn_cognitive"
+                ),
+                (
+                    "policy.effectiveness.deps.no_forbidden_edges",
+                    "python.deps.forbidden"
+                ),
+            ]
+        );
+        assert!(warnings.iter().all(|warning| warning.language.is_some()));
+        assert!(warnings.iter().all(|warning| warning.signal.is_some()));
+    }
+
+    #[test]
+    fn effectiveness_warnings_report_configuration_hidden_by_disabled_check() {
+        let document = r#"
+[checks]
+test = false
+coverage = false
+size = false
+complexity = false
+deps = false
+mutation = false
+
+[languages]
+enabled = ["rust"]
+
+[rust.size]
+"*.rs" = { warn = 400, fail = 700 }
+
+[rust.coverage]
+line_percent = { warn = 80, fail = 70 }
+
+[rust.complexity]
+fn_cyclomatic = { warn = 10, fail = 20 }
+
+[rust.deps.forbidden]
+"src" = ["legacy"]
+
+[rust.tooling.test]
+command = "cargo"
+
+[rust.tooling.mutation]
+command = "cargo"
+"#;
+        let policy: AyniPolicy = toml::from_str(document).expect("parse");
+        let warnings = policy.effectiveness_warnings(&[]);
+        assert_eq!(warnings.len(), 6);
+        assert!(warnings.iter().all(|warning| {
+            warning.code == "policy.effectiveness.disabled_check_hides_configuration"
+        }));
+        assert_eq!(warnings[0].policy_path, "checks.test");
+        assert_eq!(warnings[5].policy_path, "checks.mutation");
     }
 }

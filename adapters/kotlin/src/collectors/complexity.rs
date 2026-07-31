@@ -1,7 +1,9 @@
 use super::util::{find_reports, gradle_command};
 use ayni_adapters_common::exec::{format_command, run_command_for_context};
 use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
-use ayni_adapters_common::paths::to_repo_relative_path;
+use ayni_adapters_common::paths::{
+    canonicalize_relative_posix, resolve_repo_path, to_repo_relative_path,
+};
 use ayni_adapters_common::xml::{attr_string, attr_u64};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
@@ -98,7 +100,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             "fn_cyclomatic": {"warn": cyclomatic.warn, "fail": cyclomatic.fail}
         })),
         offenders: Offenders::Complexity(offenders),
-        delta_vs_previous: None,
     })
 }
 
@@ -129,7 +130,6 @@ fn error_row(
         }),
         budget: Budget::Complexity(json!({})),
         offenders: Offenders::Complexity(Vec::new()),
-        delta_vs_previous: None,
     }
 }
 
@@ -155,10 +155,21 @@ fn parse_checkstyle_content(
     let number_re = Regex::new(r"(\d+(?:\.\d+)?)")
         .map_err(|error| format!("failed to compile number regex: {error}"))?;
     let mut offenders = Vec::new();
+    let selected_file = selected_file(context);
     for file_caps in file_re.captures_iter(content) {
         let file_attrs = file_caps.get(1).map(|value| value.as_str()).unwrap_or("");
         let file_name =
             attr_string(file_attrs, "name").unwrap_or_else(|| String::from("<unknown>"));
+        let normalized_file = canonicalize_relative_posix(&to_repo_relative_path(
+            &context.repo_root,
+            Path::new(&file_name),
+        ));
+        if selected_file
+            .as_ref()
+            .is_some_and(|selected| selected != &normalized_file)
+        {
+            continue;
+        }
         let body = file_caps.get(2).map(|value| value.as_str()).unwrap_or("");
         for error_caps in error_re.captures_iter(body) {
             let attrs = error_caps.get(1).map(|value| value.as_str()).unwrap_or("");
@@ -176,7 +187,7 @@ fn parse_checkstyle_content(
                 .and_then(|value| value.as_str().parse::<f64>().ok())
                 .unwrap_or(fallback_complexity);
             offenders.push(ComplexityOffender {
-                file: to_repo_relative_path(&context.repo_root, Path::new(&file_name)),
+                file: normalized_file.clone(),
                 line: attr_u64(attrs, "line").unwrap_or(1),
                 function: attr_string(attrs, "source").unwrap_or_else(|| String::from("detekt")),
                 cyclomatic,
@@ -186,6 +197,13 @@ fn parse_checkstyle_content(
         }
     }
     Ok(offenders)
+}
+
+fn selected_file(context: &RunContext) -> Option<String> {
+    context.scope.file.as_ref().map(|file| {
+        let resolved = resolve_repo_path(&context.repo_root, file);
+        canonicalize_relative_posix(&to_repo_relative_path(&context.repo_root, &resolved))
+    })
 }
 
 #[cfg(test)]
@@ -202,7 +220,6 @@ mod tests {
             workdir: PathBuf::from("/repo"),
             policy: AyniPolicy::default(),
             scope: Scope::default(),
-            diff: None,
             execution: ExecutionResolution::direct("gradle", PathBuf::from("/repo"), "test", 100),
             debug: false,
         };
@@ -216,5 +233,34 @@ mod tests {
         assert_eq!(offenders.len(), 1);
         assert_eq!(offenders[0].file, "src/App.kt");
         assert_eq!(offenders[0].cyclomatic, 22.0);
+    }
+
+    #[test]
+    fn file_scope_filters_detekt_report_before_metrics_are_calculated() {
+        let context = RunContext {
+            repo_root: PathBuf::from("/repo"),
+            target_root: PathBuf::from("/repo"),
+            workdir: PathBuf::from("/repo"),
+            policy: AyniPolicy::default(),
+            scope: Scope {
+                file: Some(String::from("src/Selected.kt")),
+                ..Scope::default()
+            },
+            execution: ExecutionResolution::direct("gradle", PathBuf::from("/repo"), "test", 100),
+            debug: false,
+        };
+        let offenders = parse_checkstyle_content(
+            r#"<checkstyle>
+                <file name="/repo/src/Selected.kt"><error line="7" source="ComplexMethod" message="complexity is 12"/></file>
+                <file name="/repo/src/Other.kt"><error line="9" source="ComplexMethod" message="complexity is 30"/></file>
+            </checkstyle>"#,
+            &context,
+            21.0,
+        )
+        .expect("detekt");
+
+        assert_eq!(offenders.len(), 1);
+        assert_eq!(offenders[0].file, "src/Selected.kt");
+        assert_eq!(offenders[0].cyclomatic, 12.0);
     }
 }

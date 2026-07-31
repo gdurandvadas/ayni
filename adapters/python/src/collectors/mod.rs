@@ -1,5 +1,6 @@
 use ayni_core::{
-    AdapterError, Language, RunContext, SignalCollector, SignalKind, SignalRow, TestSelection,
+    AdapterError, Language, RunContext, SignalCollector, SignalKind, SignalRow,
+    VerificationSelection,
 };
 
 pub mod complexity;
@@ -14,14 +15,18 @@ pub mod util;
 pub struct PythonCollector;
 
 impl SignalCollector for PythonCollector {
-    fn collect_selected_test(
+    fn collect_verification(
         &self,
+        kind: SignalKind,
         context: &RunContext,
-        selection: &TestSelection,
+        selection: &VerificationSelection,
         on_line: &mut dyn FnMut(&str),
     ) -> Result<SignalRow, AdapterError> {
-        test::collect_selected(context, selection, on_line)
-            .map_err(|message| AdapterError::new(Language::Python, message))
+        match kind {
+            SignalKind::Test => test::collect_selected(context, selection, on_line)
+                .map_err(|message| AdapterError::new(Language::Python, message)),
+            _ => self.collect_streaming(kind, context, on_line),
+        }
     }
 
     fn collect(&self, kind: SignalKind, context: &RunContext) -> Result<SignalRow, AdapterError> {

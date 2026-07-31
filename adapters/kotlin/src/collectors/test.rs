@@ -4,7 +4,7 @@ use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_adapters_common::xml::{attr_f64, attr_string, attr_u64};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult, TestSelection,
+    TestFailure, TestResult, VerificationSelection,
 };
 use regex::Regex;
 use serde_json::json;
@@ -19,7 +19,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
 
 pub fn collect_selected(
     context: &RunContext,
-    selection: &TestSelection,
+    selection: &VerificationSelection,
     _on_line: &mut dyn FnMut(&str),
 ) -> Result<SignalRow, String> {
     if context.scope.file.is_some() {
@@ -47,6 +47,10 @@ fn collect_with_command(
     let output = run_command_for_context(context, &program, &args)?;
     let report = parse_reports(&context.workdir.join("build/test-results/test"))?;
     let failed = report.failures + report.errors;
+    let mut offenders = report.offenders;
+    if output.status.success() && report.tests == 0 {
+        offenders.push(zero_tests_failure());
+    }
 
     Ok(SignalRow {
         kind: SignalKind::Test,
@@ -57,7 +61,7 @@ fn collect_with_command(
             package: context.scope.package.clone(),
             file: context.scope.file.clone(),
         },
-        pass: output.status.success() && failed == 0,
+        pass: test_row_passes(output.status.success(), report.tests, failed),
         result: SignalResult::Test(TestResult {
             total_tests: report.tests,
             passed: report
@@ -72,9 +76,23 @@ fn collect_with_command(
             }),
         }),
         budget: Budget::Test(json!({})),
-        offenders: Offenders::Test(report.offenders),
-        delta_vs_previous: None,
+        offenders: Offenders::Test(offenders),
     })
+}
+
+fn zero_tests_failure() -> TestFailure {
+    TestFailure {
+        file: None,
+        line: None,
+        message: String::from(
+            "test runner completed successfully but discovered zero tests; add tests or correct the test selection",
+        ),
+        test_name: None,
+    }
+}
+
+fn test_row_passes(success: bool, total_tests: u64, failed: u64) -> bool {
+    success && total_tests > 0 && failed == 0
 }
 
 #[derive(Default)]
@@ -170,7 +188,7 @@ fn parse_junit_xml(content: &str) -> Result<JunitSummary, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_junit_xml;
+    use super::{parse_junit_xml, test_row_passes, zero_tests_failure};
 
     #[test]
     fn parses_junit_failures() {
@@ -186,5 +204,15 @@ mod tests {
         assert_eq!(summary.failures, 1);
         assert_eq!(summary.duration_ms, Some(1500));
         assert_eq!(summary.offenders[0].test_name.as_deref(), Some("fails"));
+    }
+
+    #[test]
+    fn zero_test_finding_is_actionable() {
+        assert!(!test_row_passes(true, 0, 0));
+        assert!(
+            zero_tests_failure()
+                .message
+                .contains("discovered zero tests")
+        );
     }
 }

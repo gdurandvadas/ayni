@@ -52,7 +52,7 @@ docker-analyze:
 		work=$$(mktemp -d -t ayni-$(LANG)-$(FIXTURE)-XXXXXX); \
 		cp -a /repo/$(FIXTURE_PATH)/. "$$work"; \
 		ayni install --repo-root "$$work" --language $(LANG) --apply; \
-		ayni analyze --config "$$work/.ayni.toml" --language $(LANG); \
+		ayni analyze --config "$$work/.ayni.toml"; \
 		rm -rf "$$work"'
 
 docker-example: docker-build

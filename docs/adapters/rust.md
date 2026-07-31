@@ -22,9 +22,25 @@ catalog-managed tools when their checks are enabled and installation is applied:
 | `deps` | Cargo workspace/dependency graph scan | no version enforced |
 | `mutation` | `cargo-mutants` (opt-in) | no version enforced |
 
-`ayni verify test --language rust` supports `--package` and optional `--name`.
-Rust source files do not map reliably to Cargo test targets, so `--file` is
-rejected with guidance to select the package and test-name filter instead.
+## Focused verification
+
+`verify` writes requested-scope evidence only to `.ayni/verify/last/signals.json`.
+Every command accepts an optional `--language rust`; unscoped verification is
+always valid. The accepted selectors are:
+
+| Signal | `--file` | `--package` | `--name` |
+| --- | --- | --- | --- |
+| `test` | no | yes | yes |
+| `coverage` | no | no | no |
+| `size` | yes | no | no |
+| `complexity` | yes | yes | no |
+| `deps` | yes | yes | no |
+| `mutation` | no | no | no |
+
+Rust source files do not map reliably to Cargo test targets, so use package and
+test-name filters for `test`. `--name` is test-only, and `--file` cannot be
+combined with `--package`. Unsupported or ambiguous selectors are rejected
+before Cargo or another tool runs.
 
 ## Contract
 

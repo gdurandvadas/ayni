@@ -8,8 +8,38 @@ pub fn log_started_check(event: ProgressEvent) {
 }
 
 pub fn log_command_failures(artifact: &RunArtifact) {
+    for line in completion_issue_diagnostics(artifact) {
+        eprintln!("{line}");
+    }
     for line in command_failure_diagnostics(artifact) {
         eprintln!("{line}");
+    }
+}
+
+pub fn completion_issue_diagnostics(artifact: &RunArtifact) -> Vec<String> {
+    artifact
+        .completion
+        .issues
+        .iter()
+        .map(|issue| {
+            format!(
+                "incomplete target language={} root={} stage={}: {}",
+                issue.language.as_str(),
+                issue.configured_root,
+                completion_stage_label(issue.stage),
+                issue.message,
+            )
+        })
+        .collect()
+}
+
+fn completion_stage_label(stage: ayni_core::CompletionStage) -> &'static str {
+    match stage {
+        ayni_core::CompletionStage::Detection => "detection",
+        ayni_core::CompletionStage::Resolution => "resolution",
+        ayni_core::CompletionStage::Selection => "selection",
+        ayni_core::CompletionStage::Scheduling => "scheduling",
+        ayni_core::CompletionStage::Collection => "collection",
     }
 }
 
@@ -59,7 +89,8 @@ mod tests {
     use super::*;
     use crate::ui::runner::{ProgressEvent, ToolState};
     use ayni_core::{
-        Budget, CommandFailure, DepsResult, Language, Offenders, RunArtifact, Scope, SignalKind,
+        Budget, CommandFailure, CompletionIssue, CompletionScope, CompletionStage, CompletionState,
+        DepsResult, Language, Offenders, RunArtifact, RunCompletion, Scope, SignalKind,
         SignalResult, SignalRow, SizeResult, TestResult,
     };
     use std::time::Duration;
@@ -109,8 +140,10 @@ mod tests {
     #[test]
     fn command_failure_diagnostics_include_complete_failure_context() {
         let artifact = RunArtifact {
-            schema_version: String::from("0.2.0"),
+            schema_version: String::from(ayni_core::AYNI_SIGNAL_SCHEMA_VERSION),
             metadata: Default::default(),
+            completion: RunCompletion::complete(CompletionScope::Repository, 1),
+            findings: Vec::new(),
             rows: vec![SignalRow {
                 kind: SignalKind::Test,
                 language: Language::Rust,
@@ -133,7 +166,6 @@ mod tests {
                 }),
                 budget: Budget::Test(serde_json::json!({})),
                 offenders: Offenders::Test(Vec::new()),
-                delta_vs_previous: None,
             }],
         };
 
@@ -156,8 +188,10 @@ mod tests {
             message: format!("{kind} message"),
         };
         let artifact = RunArtifact {
-            schema_version: String::from("0.2.0"),
+            schema_version: String::from(ayni_core::AYNI_SIGNAL_SCHEMA_VERSION),
             metadata: Default::default(),
+            completion: RunCompletion::complete(CompletionScope::Repository, 1),
+            findings: Vec::new(),
             rows: vec![
                 SignalRow {
                     kind: SignalKind::Size,
@@ -173,7 +207,6 @@ mod tests {
                     }),
                     budget: Budget::Size(serde_json::json!({})),
                     offenders: Offenders::Size(Vec::new()),
-                    delta_vs_previous: None,
                 },
                 SignalRow {
                     kind: SignalKind::Deps,
@@ -188,7 +221,6 @@ mod tests {
                     }),
                     budget: Budget::Deps(serde_json::json!({})),
                     offenders: Offenders::Deps(Vec::new()),
-                    delta_vs_previous: None,
                 },
             ],
         };
@@ -206,5 +238,34 @@ mod tests {
             assert!(diagnostic.contains(&format!("exit_code: {exit_code}")));
             assert!(diagnostic.contains(&format!("message: {kind} message")));
         }
+    }
+
+    #[test]
+    fn completion_issue_diagnostics_include_structured_target_context() {
+        let artifact = RunArtifact {
+            schema_version: String::from(ayni_core::AYNI_SIGNAL_SCHEMA_VERSION),
+            metadata: Default::default(),
+            findings: Vec::new(),
+            completion: RunCompletion {
+                scope: CompletionScope::Requested,
+                state: CompletionState::Incomplete,
+                expected_targets: 1,
+                detected_targets: 1,
+                completed_targets: 0,
+                skipped_targets: 1,
+                issues: vec![CompletionIssue {
+                    language: Language::Rust,
+                    configured_root: String::from("crates/api"),
+                    stage: CompletionStage::Collection,
+                    message: String::from("collector stopped"),
+                }],
+            },
+            rows: Vec::new(),
+        };
+
+        assert_eq!(
+            completion_issue_diagnostics(&artifact),
+            ["incomplete target language=rust root=crates/api stage=collection: collector stopped"]
+        );
     }
 }

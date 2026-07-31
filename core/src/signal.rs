@@ -3,7 +3,7 @@ use crate::runtime::Scope;
 use serde::{Deserialize, Serialize};
 
 /// Semantic version of the JSON `RunArtifact` contract (`schema_version` field).
-pub const AYNI_SIGNAL_SCHEMA_VERSION: &str = "0.2.0";
+pub const AYNI_SIGNAL_SCHEMA_VERSION: &str = "0.3.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -23,12 +23,6 @@ pub enum SignalKind {
 pub enum Level {
     Warn,
     Fail,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct Delta {
-    #[serde(default)]
-    pub changes: serde_json::Value,
 }
 
 /// Serializable inputs supplied by the orchestration layer when building an artifact.
@@ -107,13 +101,117 @@ pub struct FailureSummary {
     pub message: String,
 }
 
-/// Schema-v2 artifact. Rows are the sole canonical analysis result; all aggregate,
-/// threshold, offender, and failure views are derived during serialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionScope {
+    Repository,
+    Requested,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionState {
+    Complete,
+    Incomplete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionStage {
+    Detection,
+    Resolution,
+    Selection,
+    Scheduling,
+    Collection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletionIssue {
+    pub language: Language,
+    pub configured_root: String,
+    pub stage: CompletionStage,
+    pub message: String,
+}
+
+/// Completion accounting for the exact target set represented by a run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunCompletion {
+    pub scope: CompletionScope,
+    pub state: CompletionState,
+    pub expected_targets: u64,
+    pub detected_targets: u64,
+    pub completed_targets: u64,
+    pub skipped_targets: u64,
+    pub issues: Vec<CompletionIssue>,
+}
+
+impl RunCompletion {
+    #[must_use]
+    pub fn complete(scope: CompletionScope, target_count: u64) -> Self {
+        Self {
+            scope,
+            state: CompletionState::Complete,
+            expected_targets: target_count,
+            detected_targets: target_count,
+            completed_targets: target_count,
+            skipped_targets: 0,
+            issues: Vec::new(),
+        }
+    }
+
+    fn validate(&self) -> Result<(), &'static str> {
+        if self.detected_targets > self.expected_targets
+            || self.completed_targets > self.detected_targets
+            || self.skipped_targets != self.expected_targets - self.completed_targets
+        {
+            return Err("artifact completion target counts do not reconcile");
+        }
+
+        let detection_issues = self
+            .issues
+            .iter()
+            .filter(|issue| issue.stage == CompletionStage::Detection)
+            .count() as u64;
+        if detection_issues != self.expected_targets - self.detected_targets
+            || self.issues.len() as u64 != self.skipped_targets
+        {
+            return Err("artifact completion issues do not reconcile with skipped targets");
+        }
+
+        match self.state {
+            CompletionState::Complete if self.skipped_targets == 0 && self.issues.is_empty() => {
+                Ok(())
+            }
+            CompletionState::Incomplete if self.skipped_targets > 0 && !self.issues.is_empty() => {
+                Ok(())
+            }
+            CompletionState::Complete => {
+                Err("complete artifact must have no skipped targets or completion issues")
+            }
+            CompletionState::Incomplete => {
+                Err("incomplete artifact must have skipped targets and completion issues")
+            }
+        }
+    }
+}
+
+impl Default for RunCompletion {
+    fn default() -> Self {
+        Self::complete(CompletionScope::Repository, 0)
+    }
+}
+
+/// Schema-v3 artifact. Rows are canonical analysis results; completion separately
+/// records whether every target emitted its complete requested row set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunArtifact {
     pub schema_version: String,
     pub metadata: RunArtifactMetadata,
+    pub completion: RunCompletion,
     pub rows: Vec<SignalRow>,
+    /// CLI-materialized finding metadata used only for the serialized row wire
+    /// representation. Collection continues to use the typed offender payload.
+    pub findings: Vec<Findings>,
 }
 
 impl Default for RunArtifact {
@@ -121,18 +219,26 @@ impl Default for RunArtifact {
         Self {
             schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
             metadata: RunArtifactMetadata::default(),
+            completion: RunCompletion::default(),
             rows: Vec::new(),
+            findings: Vec::new(),
         }
     }
 }
 
 impl RunArtifact {
     #[must_use]
-    pub fn new(metadata: RunArtifactMetadata, rows: Vec<SignalRow>) -> Self {
+    pub fn new(
+        metadata: RunArtifactMetadata,
+        completion: RunCompletion,
+        rows: Vec<SignalRow>,
+    ) -> Self {
         Self {
             schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
             metadata,
+            completion,
             rows,
+            findings: Vec::new(),
         }
     }
 
@@ -148,7 +254,9 @@ impl RunArtifact {
                 (warnings + warn, failures + fail)
             });
         AggregateSummary {
-            status: if passing_rows == total_rows {
+            status: if self.completion.state == CompletionState::Complete
+                && passing_rows == total_rows
+            {
                 AggregateStatus::Pass
             } else {
                 AggregateStatus::Fail
@@ -221,6 +329,15 @@ impl Serialize for RunArtifact {
     where
         S: serde::Serializer,
     {
+        if self.schema_version != AYNI_SIGNAL_SCHEMA_VERSION {
+            return Err(serde::ser::Error::custom(format!(
+                "unsupported artifact schema_version {}; expected {}",
+                self.schema_version, AYNI_SIGNAL_SCHEMA_VERSION
+            )));
+        }
+        self.completion
+            .validate()
+            .map_err(serde::ser::Error::custom)?;
         RunArtifactSerialization::from(self).serialize(serializer)
     }
 }
@@ -234,9 +351,10 @@ struct RunArtifactSerialization<'a> {
     output: &'a OutputContext,
     config_path: &'a str,
     repository_root: &'a str,
+    completion: &'a RunCompletion,
     aggregate: AggregateSummary,
     applied_thresholds: Vec<AppliedThreshold>,
-    rows: &'a [SignalRow],
+    rows: Vec<SignalRowSerialization<'a>>,
     offender_summaries: Vec<OffenderSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_summaries: Option<Vec<FailureSummary>>,
@@ -252,11 +370,68 @@ impl<'a> From<&'a RunArtifact> for RunArtifactSerialization<'a> {
             output: &artifact.metadata.output,
             config_path: &artifact.metadata.config_path,
             repository_root: &artifact.metadata.repository_root,
+            completion: &artifact.completion,
             aggregate: artifact.aggregate(),
             applied_thresholds: artifact.applied_thresholds(),
-            rows: &artifact.rows,
+            rows: artifact
+                .rows
+                .iter()
+                .enumerate()
+                .map(|(index, row)| SignalRowSerialization::new(row, artifact.findings.get(index)))
+                .collect(),
             offender_summaries: artifact.offender_summaries(),
             failure_summaries: artifact.failure_summaries(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SignalRowSerialization<'a> {
+    kind: SignalKind,
+    language: Language,
+    scope: &'a Scope,
+    pass: bool,
+    result: &'a SignalResult,
+    budget: &'a Budget,
+    offenders: SerializedOffenders<'a>,
+}
+
+impl<'a> SignalRowSerialization<'a> {
+    fn new(row: &'a SignalRow, findings: Option<&'a Findings>) -> Self {
+        Self {
+            kind: row.kind,
+            language: row.language,
+            scope: &row.scope,
+            pass: row.pass,
+            result: &row.result,
+            budget: &row.budget,
+            offenders: SerializedOffenders {
+                raw: &row.offenders,
+                findings,
+            },
+        }
+    }
+}
+
+impl<'a> From<(&'a SignalRow, Option<&'a Findings>)> for SignalRowSerialization<'a> {
+    fn from((row, findings): (&'a SignalRow, Option<&'a Findings>)) -> Self {
+        Self::new(row, findings)
+    }
+}
+
+struct SerializedOffenders<'a> {
+    raw: &'a Offenders,
+    findings: Option<&'a Findings>,
+}
+
+impl Serialize for SerializedOffenders<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self.findings {
+            Some(findings) => findings.serialize(serializer),
+            None => self.raw.serialize(serializer),
         }
     }
 }
@@ -270,12 +445,150 @@ struct RunArtifactWire {
     output: OutputContext,
     config_path: String,
     repository_root: String,
+    completion: RunCompletion,
     aggregate: AggregateSummary,
     applied_thresholds: Vec<AppliedThreshold>,
-    rows: Vec<SignalRow>,
+    rows: Vec<serde_json::Value>,
     offender_summaries: Vec<OffenderSummary>,
     #[serde(default)]
     failure_summaries: Option<Vec<FailureSummary>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OffenderWireEncoding {
+    Legacy,
+    Finding,
+}
+
+struct ParsedArtifactRows {
+    rows: Vec<SignalRow>,
+    findings: Vec<Findings>,
+}
+
+impl ParsedArtifactRows {
+    fn parse(row_values: Vec<serde_json::Value>) -> Result<Self, String> {
+        let mut rows = Vec::with_capacity(row_values.len());
+        let mut parsed_findings = Vec::with_capacity(row_values.len());
+        let mut encoding = None;
+
+        for row_value in row_values {
+            let parsed = ParsedArtifactRow::parse(row_value, &mut encoding)?;
+            rows.push(parsed.row);
+            if let Some(findings) = parsed.findings {
+                parsed_findings.push(findings);
+            }
+        }
+
+        let findings = match encoding {
+            Some(OffenderWireEncoding::Finding) => parsed_findings,
+            Some(OffenderWireEncoding::Legacy) | None => Vec::new(),
+        };
+        Ok(Self { rows, findings })
+    }
+}
+
+struct ParsedArtifactRow {
+    row: SignalRow,
+    findings: Option<Findings>,
+}
+
+impl ParsedArtifactRow {
+    fn parse(
+        row_value: serde_json::Value,
+        observed_encoding: &mut Option<OffenderWireEncoding>,
+    ) -> Result<Self, String> {
+        let offenders = row_value
+            .get("offenders")
+            .ok_or_else(|| String::from("artifact row is missing offenders"))?;
+        let items = offenders
+            .get("items")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| String::from("artifact row offenders are invalid"))?;
+        let encoding = if items
+            .iter()
+            .any(|item| item.get("id").is_some() || item.get("verification").is_some())
+        {
+            OffenderWireEncoding::Finding
+        } else {
+            OffenderWireEncoding::Legacy
+        };
+
+        if !items.is_empty() {
+            match observed_encoding {
+                Some(observed) if *observed != encoding => {
+                    return Err(String::from(
+                        "artifact rows mix finding and legacy offender encodings",
+                    ));
+                }
+                Some(_) => {}
+                None => *observed_encoding = Some(encoding),
+            }
+        }
+
+        let findings = if encoding == OffenderWireEncoding::Finding || items.is_empty() {
+            Some(
+                serde_json::from_value::<Findings>(offenders.clone())
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        };
+        let row =
+            serde_json::from_value::<SignalRow>(row_value).map_err(|error| error.to_string())?;
+        Ok(Self { row, findings })
+    }
+}
+
+impl RunArtifactWire {
+    fn into_artifact(self) -> Result<RunArtifact, String> {
+        let parsed = ParsedArtifactRows::parse(self.rows)?;
+        let artifact = RunArtifact {
+            schema_version: self.schema_version,
+            metadata: RunArtifactMetadata {
+                generated_at: self.generated_at,
+                ayni_version: self.ayni_version,
+                invocation: self.invocation,
+                output: self.output,
+                config_path: self.config_path,
+                repository_root: self.repository_root,
+            },
+            completion: self.completion,
+            rows: parsed.rows,
+            findings: parsed.findings,
+        };
+        validate_deserialized_artifact(
+            &artifact,
+            self.aggregate,
+            self.applied_thresholds,
+            self.offender_summaries,
+            self.failure_summaries,
+        )?;
+        Ok(artifact)
+    }
+}
+
+fn validate_deserialized_artifact(
+    artifact: &RunArtifact,
+    aggregate: AggregateSummary,
+    applied_thresholds: Vec<AppliedThreshold>,
+    offender_summaries: Vec<OffenderSummary>,
+    failure_summaries: Option<Vec<FailureSummary>>,
+) -> Result<(), String> {
+    if artifact.schema_version != AYNI_SIGNAL_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported artifact schema_version {}; expected {}",
+            artifact.schema_version, AYNI_SIGNAL_SCHEMA_VERSION
+        ));
+    }
+    artifact.completion.validate().map_err(String::from)?;
+    if artifact.aggregate() != aggregate
+        || artifact.applied_thresholds() != applied_thresholds
+        || artifact.offender_summaries() != offender_summaries
+        || artifact.failure_summaries() != failure_summaries
+    {
+        return Err(String::from("artifact summaries must match canonical rows"));
+    }
+    Ok(())
 }
 
 impl<'de> Deserialize<'de> for RunArtifact {
@@ -283,29 +596,9 @@ impl<'de> Deserialize<'de> for RunArtifact {
     where
         D: serde::Deserializer<'de>,
     {
-        let wire = RunArtifactWire::deserialize(deserializer)?;
-        let artifact = Self {
-            schema_version: wire.schema_version,
-            metadata: RunArtifactMetadata {
-                generated_at: wire.generated_at,
-                ayni_version: wire.ayni_version,
-                invocation: wire.invocation,
-                output: wire.output,
-                config_path: wire.config_path,
-                repository_root: wire.repository_root,
-            },
-            rows: wire.rows,
-        };
-        if artifact.aggregate() != wire.aggregate
-            || artifact.applied_thresholds() != wire.applied_thresholds
-            || artifact.offender_summaries() != wire.offender_summaries
-            || artifact.failure_summaries() != wire.failure_summaries
-        {
-            return Err(serde::de::Error::custom(
-                "artifact summaries must match canonical rows",
-            ));
-        }
-        Ok(artifact)
+        RunArtifactWire::deserialize(deserializer)?
+            .into_artifact()
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -350,8 +643,6 @@ pub struct SignalRow {
     pub result: SignalResult,
     pub budget: Budget,
     pub offenders: Offenders,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delta_vs_previous: Option<Delta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -397,6 +688,11 @@ pub enum Offenders {
     Deps(Vec<DepsOffender>),
     Mutation(Vec<MutationOffender>),
 }
+
+pub use crate::finding::{
+    Finding, FindingError, FindingMetadata, Findings, OffenderIdentity, VerificationMetadata,
+    VerificationTarget,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TestResult {
@@ -540,7 +836,7 @@ pub struct MutationOffender {
 }
 
 #[cfg(test)]
-mod run_artifact_tests {
+mod tests {
     use super::*;
     use crate::language::Language;
     use crate::runtime::Scope;
@@ -563,6 +859,7 @@ mod run_artifact_tests {
                 config_path: String::from(".ayni.toml"),
                 repository_root: String::from("."),
             },
+            RunCompletion::complete(CompletionScope::Repository, 1),
             vec![SignalRow {
                 kind: SignalKind::Test,
                 language: Language::Rust,
@@ -595,7 +892,6 @@ mod run_artifact_tests {
                     message: String::from("assertion failed"),
                     test_name: Some(String::from("does_thing")),
                 }]),
-                delta_vs_previous: None,
             }],
         );
 
@@ -642,9 +938,12 @@ mod run_artifact_tests {
                 fail: 30,
                 level: Level::Warn,
             }]),
-            delta_vs_previous: None,
         };
-        let artifact = RunArtifact::new(RunArtifactMetadata::default(), vec![row]);
+        let artifact = RunArtifact::new(
+            RunArtifactMetadata::default(),
+            RunCompletion::complete(CompletionScope::Repository, 1),
+            vec![row],
+        );
 
         assert_eq!(artifact.aggregate().status, AggregateStatus::Pass);
         assert_eq!(artifact.aggregate().warning_offenders, 1);
@@ -672,6 +971,7 @@ mod run_artifact_tests {
         };
         let artifact = RunArtifact::new(
             RunArtifactMetadata::default(),
+            RunCompletion::complete(CompletionScope::Repository, 1),
             vec![
                 SignalRow {
                     kind: SignalKind::Size,
@@ -687,7 +987,6 @@ mod run_artifact_tests {
                     }),
                     budget: Budget::Size(serde_json::json!({})),
                     offenders: Offenders::Size(Vec::new()),
-                    delta_vs_previous: None,
                 },
                 SignalRow {
                     kind: SignalKind::Deps,
@@ -702,7 +1001,6 @@ mod run_artifact_tests {
                     }),
                     budget: Budget::Deps(serde_json::json!({})),
                     offenders: Offenders::Deps(Vec::new()),
-                    delta_vs_previous: None,
                 },
             ],
         );
@@ -732,6 +1030,70 @@ mod run_artifact_tests {
         assert_eq!(
             serde_json::from_str::<RunArtifact>(&serialized).expect("roundtrip"),
             artifact
+        );
+    }
+
+    #[test]
+    fn incomplete_artifact_fails_aggregate_even_with_no_rows() {
+        let artifact = RunArtifact::new(
+            RunArtifactMetadata::default(),
+            RunCompletion {
+                scope: CompletionScope::Requested,
+                state: CompletionState::Incomplete,
+                expected_targets: 1,
+                detected_targets: 0,
+                completed_targets: 0,
+                skipped_targets: 1,
+                issues: vec![CompletionIssue {
+                    language: Language::Rust,
+                    configured_root: String::from("."),
+                    stage: CompletionStage::Detection,
+                    message: String::from("configured target was not detected"),
+                }],
+            },
+            Vec::new(),
+        );
+
+        assert_eq!(artifact.aggregate().status, AggregateStatus::Fail);
+        let value = serde_json::to_value(&artifact).expect("serialize");
+        assert_eq!(value["completion"]["scope"], "requested");
+        assert_eq!(value["completion"]["state"], "incomplete");
+        assert_eq!(value["aggregate"]["status"], "fail");
+        assert_eq!(
+            serde_json::from_value::<RunArtifact>(value).expect("roundtrip"),
+            artifact
+        );
+    }
+
+    #[test]
+    fn deserialization_rejects_unreconciled_completion() {
+        let artifact = RunArtifact::new(
+            RunArtifactMetadata::default(),
+            RunCompletion::complete(CompletionScope::Repository, 0),
+            Vec::new(),
+        );
+        let mut value = serde_json::to_value(artifact).expect("serialize");
+        value["completion"]["state"] = serde_json::json!("incomplete");
+
+        let error = serde_json::from_value::<RunArtifact>(value).expect_err("invalid completion");
+        assert!(error.to_string().contains("incomplete artifact"));
+    }
+
+    #[test]
+    fn deserialization_rejects_historical_schema() {
+        let artifact = RunArtifact::new(
+            RunArtifactMetadata::default(),
+            RunCompletion::complete(CompletionScope::Repository, 0),
+            Vec::new(),
+        );
+        let mut value = serde_json::to_value(artifact).expect("serialize");
+        value["schema_version"] = serde_json::json!("0.2.0");
+
+        let error = serde_json::from_value::<RunArtifact>(value).expect_err("historical schema");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported artifact schema_version")
         );
     }
 }

@@ -1,5 +1,5 @@
 use super::util::run_tool_for_context;
-use ayni_adapters_common::paths::to_repo_relative_path;
+use ayni_adapters_common::paths::{resolve_repo_path, to_repo_relative_path};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
@@ -19,7 +19,8 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .fn_cyclomatic
         .ok_or_else(|| String::from("missing go.complexity.fn_cyclomatic"))?;
 
-    let output = run_tool_for_context(context, "gocyclo", &[String::from(".")])?;
+    let args = complexity_args(context);
+    let output = run_tool_for_context(context, "gocyclo", &args)?;
     let status_ok = output.status.success();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -56,7 +57,10 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             .get(5)
             .and_then(|value| value.as_str().parse::<u64>().ok())
             .unwrap_or(1);
-        let file = to_repo_relative_path(&context.repo_root, Path::new(raw_file));
+        let file = to_repo_relative_path(
+            &context.repo_root,
+            &resolve_reported_path(context, raw_file),
+        );
 
         measured_functions += 1;
         max_fn_cyclomatic = max_fn_cyclomatic.max(complexity);
@@ -126,6 +130,55 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         }),
         budget: Budget::Complexity(budget),
         offenders: Offenders::Complexity(offenders),
-        delta_vs_previous: None,
     })
+}
+
+fn complexity_args(context: &RunContext) -> Vec<String> {
+    context.scope.file.as_ref().map_or_else(
+        || vec![String::from(".")],
+        |file| {
+            vec![
+                resolve_repo_path(&context.repo_root, file)
+                    .to_string_lossy()
+                    .into_owned(),
+            ]
+        },
+    )
+}
+
+fn resolve_reported_path(context: &RunContext, raw_file: &str) -> std::path::PathBuf {
+    let path = Path::new(raw_file);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        context.execution.exec_cwd.join(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::complexity_args;
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    use std::path::PathBuf;
+
+    #[test]
+    fn file_scope_is_passed_as_the_only_gocyclo_target() {
+        let context = RunContext {
+            repo_root: PathBuf::from("/repo"),
+            target_root: PathBuf::from("/repo"),
+            workdir: PathBuf::from("/repo"),
+            policy: AyniPolicy::default(),
+            scope: Scope {
+                file: Some(String::from("internal/api/handler.go")),
+                ..Scope::default()
+            },
+            execution: ExecutionResolution::direct("go", PathBuf::from("/repo"), "go.mod", 100),
+            debug: false,
+        };
+
+        assert_eq!(
+            complexity_args(&context),
+            vec![String::from("/repo/internal/api/handler.go")]
+        );
+    }
 }

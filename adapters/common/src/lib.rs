@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod discovery;
 pub mod exec;
 pub mod failure;
+pub mod finding;
 pub mod paths;
 pub mod reports;
 pub mod xml;
