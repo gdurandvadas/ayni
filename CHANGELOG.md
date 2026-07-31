@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.7.0...ayni-v0.8.0) (2026-07-31)
+
+
+### Features
+
+* **verify:** make analysis completion evidence fail closed ([#37](https://github.com/gdurandvadas/ayni/issues/37)) ([b8ac9a1](https://github.com/gdurandvadas/ayni/commit/b8ac9a19246d14e6c1cdf76c5fc36b641099e833))
+
 ## [0.7.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.6.0...ayni-v0.7.0) (2026-07-25)
 
 
