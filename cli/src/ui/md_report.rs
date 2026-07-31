@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use ayni_core::{
-    CommandFailure, FailureSummary, Level, Offenders, RunArtifact, SignalResult, SignalRow,
+    AggregateStatus, CommandFailure, CompletionScope, CompletionStage, CompletionState,
+    FailureSummary, Level, Offenders, RunArtifact, SignalResult, SignalRow,
 };
 
 const PASS_IMAGE_URL: &str =
@@ -15,11 +16,37 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
     let mut out = String::new();
     let total = artifact.rows.len();
     let passing = artifact.rows.iter().filter(|row| row.pass).count();
+    let aggregate = match artifact.aggregate().status {
+        AggregateStatus::Pass => "pass",
+        AggregateStatus::Fail => "fail",
+    };
     out.push_str("# ayni analyze\n\n");
     out.push_str(&format!(
-        "**{}** / **{}** checks passing · schema `{}`\n\n",
-        passing, total, artifact.schema_version
+        "**{}** / **{}** checks passing · aggregate **{}** · schema `{}`\n\n",
+        passing, total, aggregate, artifact.schema_version
     ));
+    out.push_str(&format!(
+        "**Completion:** scope `{}` · state **{}** · targets **{}** / **{}** completed · **{}** detected · **{}** skipped\n\n",
+        completion_scope_label(artifact.completion.scope),
+        completion_state_label(artifact.completion.state),
+        artifact.completion.completed_targets,
+        artifact.completion.expected_targets,
+        artifact.completion.detected_targets,
+        artifact.completion.skipped_targets,
+    ));
+    if !artifact.completion.issues.is_empty() {
+        out.push_str("## Completion issues\n\n");
+        for issue in &artifact.completion.issues {
+            out.push_str(&format!(
+                "- `{}` `{}` `{}` — {}\n",
+                issue.language.as_str(),
+                issue.configured_root,
+                completion_stage_label(issue.stage),
+                issue.message,
+            ));
+        }
+        out.push('\n');
+    }
 
     let mut grouped = BTreeMap::<String, Vec<&SignalRow>>::new();
     for row in &artifact.rows {
@@ -75,7 +102,43 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
         }
     }
     render_failures(&mut out, artifact.failure_summaries());
+    let commands: Vec<_> = artifact
+        .findings
+        .iter()
+        .flat_map(ayni_core::Findings::commands)
+        .collect();
+    if !commands.is_empty() {
+        out.push_str("## Verification commands\n\n");
+        for command in commands {
+            out.push_str(&format!("- `{command}`\n"));
+        }
+        out.push('\n');
+    }
     out
+}
+
+fn completion_scope_label(scope: CompletionScope) -> &'static str {
+    match scope {
+        CompletionScope::Repository => "repository",
+        CompletionScope::Requested => "requested",
+    }
+}
+
+fn completion_state_label(state: CompletionState) -> &'static str {
+    match state {
+        CompletionState::Complete => "complete",
+        CompletionState::Incomplete => "incomplete",
+    }
+}
+
+fn completion_stage_label(stage: CompletionStage) -> &'static str {
+    match stage {
+        CompletionStage::Detection => "detection",
+        CompletionStage::Resolution => "resolution",
+        CompletionStage::Selection => "selection",
+        CompletionStage::Scheduling => "scheduling",
+        CompletionStage::Collection => "collection",
+    }
 }
 
 fn render_failures(out: &mut String, failures: Option<Vec<FailureSummary>>) {
@@ -325,9 +388,10 @@ fn has_warn_offenders(offenders: &Offenders) -> bool {
 mod tests {
     use super::build_markdown;
     use ayni_core::{
-        AYNI_SIGNAL_SCHEMA_VERSION, Budget, CommandFailure, CoverageOffender, CoverageResult,
-        Delta, DepsResult, Language, Level, Offenders, RunArtifact, Scope, SignalKind,
-        SignalResult, SignalRow, SizeResult, TestFailure, TestResult,
+        AYNI_SIGNAL_SCHEMA_VERSION, Budget, CommandFailure, CompletionIssue, CompletionScope,
+        CompletionStage, CompletionState, CoverageOffender, CoverageResult, DepsResult, Language,
+        Level, Offenders, RunArtifact, RunCompletion, Scope, SignalKind, SignalResult, SignalRow,
+        SizeResult, TestFailure, TestResult,
     };
     use serde_json::json;
 
@@ -336,6 +400,8 @@ mod tests {
         let artifact = RunArtifact {
             schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
             metadata: Default::default(),
+            completion: Default::default(),
+            findings: Vec::new(),
             rows: vec![SignalRow {
                 kind: SignalKind::Coverage,
                 language: Language::Rust,
@@ -356,12 +422,6 @@ mod tests {
                     value: 41.0,
                     level: Level::Fail,
                 }]),
-                delta_vs_previous: Some(Delta {
-                    changes: json!({
-                        "status": "changed",
-                        "metrics": { "percent": { "from": 43.0, "to": 41.0, "delta": -2.0 } }
-                    }),
-                }),
             }],
         };
 
@@ -379,10 +439,42 @@ mod tests {
     }
 
     #[test]
+    fn build_markdown_distinguishes_incomplete_requested_evidence() {
+        let artifact = RunArtifact {
+            schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
+            metadata: Default::default(),
+            findings: Vec::new(),
+            completion: RunCompletion {
+                scope: CompletionScope::Requested,
+                state: CompletionState::Incomplete,
+                expected_targets: 1,
+                detected_targets: 1,
+                completed_targets: 0,
+                skipped_targets: 1,
+                issues: vec![CompletionIssue {
+                    language: Language::Rust,
+                    configured_root: String::from("crates/api"),
+                    stage: CompletionStage::Collection,
+                    message: String::from("collector stopped"),
+                }],
+            },
+            rows: Vec::new(),
+        };
+
+        let text = build_markdown(&artifact, 3);
+        assert!(text.contains("aggregate **fail**"));
+        assert!(text.contains("scope `requested` · state **incomplete**"));
+        assert!(text.contains("## Completion issues"));
+        assert!(text.contains("`rust` `crates/api` `collection` — collector stopped"));
+    }
+
+    #[test]
     fn build_markdown_renders_all_failures_without_truncating_them() {
         let artifact = RunArtifact {
-            schema_version: String::from("0.2.0"),
+            schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
             metadata: Default::default(),
+            completion: Default::default(),
+            findings: Vec::new(),
             rows: vec![
                 SignalRow {
                     kind: SignalKind::Test,
@@ -419,7 +511,6 @@ mod tests {
                             test_name: Some(String::from("second_failure")),
                         },
                     ]),
-                    delta_vs_previous: None,
                 },
                 SignalRow {
                     kind: SignalKind::Coverage,
@@ -443,7 +534,6 @@ mod tests {
                     }),
                     budget: Budget::Coverage(json!({})),
                     offenders: Offenders::Coverage(Vec::new()),
-                    delta_vs_previous: None,
                 },
             ],
         };
@@ -482,8 +572,10 @@ mod tests {
             message: format!("{kind} message"),
         };
         let artifact = RunArtifact {
-            schema_version: String::from("0.2.0"),
+            schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
             metadata: Default::default(),
+            completion: Default::default(),
+            findings: Vec::new(),
             rows: vec![
                 SignalRow {
                     kind: SignalKind::Size,
@@ -499,7 +591,6 @@ mod tests {
                     }),
                     budget: Budget::Size(json!({})),
                     offenders: Offenders::Size(Vec::new()),
-                    delta_vs_previous: None,
                 },
                 SignalRow {
                     kind: SignalKind::Deps,
@@ -514,7 +605,6 @@ mod tests {
                     }),
                     budget: Budget::Deps(json!({})),
                     offenders: Offenders::Deps(Vec::new()),
-                    delta_vs_previous: None,
                 },
             ],
         };

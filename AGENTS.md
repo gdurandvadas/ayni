@@ -2,6 +2,13 @@
 
 Ayni is an open-source code-quality signal tool for AI agents.
 
+## Checkout Dogfooding
+
+- When behavior changes, exercise the checkout binary via `cargo run -p ayni-cli -- …`;
+  never rely on a globally installed Ayni.
+- Use focused `verify` during implementation.
+- Run the full repository contract only at the final milestone gate.
+
 ## Documentation
 
 Read these before implementing anything. They are the source of truth for
@@ -11,7 +18,8 @@ decisions that are not visible in the code.
 - `README.md` — product framing, AI feedback loop, and high-level architecture
 - `docs/product/config.md` — `.ayni.toml` reference
 - `docs/product/signals.md` — canonical signal vocabulary, schema selection, and compatibility posture
-- `docs/product/signals/v2.md` — current `0.2.0` serialized signal-artifact contract
+- `docs/product/signals/v3.md` — current `0.3.0` serialized signal-artifact contract
+- `docs/product/signals/v2.md` — historical `0.2.0` serialized signal-artifact reference only
 - `docs/product/signals/v1.md` — historical `0.1.0` serialized signal-artifact reference only
 - `docs/adapters/rust.md` — Rust adapter installation, signal coverage, and policy contract
 - `docs/adapters/node.md` — Node adapter package-manager resolution, signal coverage, and policy contract
@@ -78,8 +86,8 @@ cargo doc-cli > docs/cli.md
 - Repeat install languages for polyglot fixtures, for example
   `--language rust --language node`; repeated values are deduplicated.
 - `cargo test -p <pkg>` runs package-scoped tests.
-- `cargo run -p ayni-cli -- analyze --config ./.ayni.toml --package <pkg>`
-  runs scoped analysis.
+- `cargo run -p ayni-cli -- analyze --config ./.ayni.toml`
+  runs repository completion analysis.
 - Artifact output: `.ayni/last/signals.json`.
 
 ## Example Workspaces
@@ -112,11 +120,18 @@ Treat `.ayni.toml` as the authoritative repository quality policy. Run
 `ayni contract display` for a concise view of its effective configured signal
 contract instead of reading the full policy file.
 
-During iteration, run a focused test when the language scope is known:
+During an edit, use the narrowest supported `ayni verify <signal>`:
 
 ```sh
-ayni verify test --language <rust|go|node|python|kotlin> [selectors]
+ayni verify <signal> [selectors]
 ```
+
+Rerun the exact verification command supplied by a finding. Do not use
+`ayni analyze` for individual tasks or iteration. Run one unscoped
+`ayni analyze` at the caller's completion boundary.
+
+Treat incomplete artifacts as failure, and never loosen `.ayni.toml` merely
+to silence a finding.
 
 Use the full repository analysis as the completion gate:
 
@@ -125,7 +140,7 @@ ayni analyze
 ```
 
 A non-zero exit code means at least one signal failed. Read
-`.ayni/last/signals.json` for detailed, typed schema-v2 results, including
-per-signal offenders, budgets, and deltas. Repair the listed offenders and
-re-run `ayni analyze` until every row passes.
+`.ayni/last/signals.json` for detailed, typed signal results, including
+completion state and target accounting. For each finding, rerun its exact
+verification command and repair the listed offenders.
 <!-- AYNI:END -->

@@ -296,7 +296,7 @@ fn install_for_root(
     failures
 }
 
-fn install_context_for_execution(execution: &ExecutionResolution) -> InstallContext<'_> {
+pub(crate) fn install_context_for_execution(execution: &ExecutionResolution) -> InstallContext<'_> {
     InstallContext {
         cwd: Some(execution.install_cwd.as_path()),
         node_package_manager: NodePackageManager::from_executable(&execution.runner),
@@ -631,10 +631,4 @@ pub(crate) fn enabled_signal_kinds(policy: &AyniPolicy) -> Vec<SignalKind> {
         kinds.push(SignalKind::Mutation);
     }
     kinds
-}
-
-pub(crate) fn persist_artifact(repo_root: &Path, serialized: &str) -> Result<(), String> {
-    fs::write(repo_root.join(crate::SIGNALS_ARTIFACT), serialized)
-        .map_err(|error| format!("failed to write {}: {error}", crate::SIGNALS_ARTIFACT))?;
-    Ok(())
 }

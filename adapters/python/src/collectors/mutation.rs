@@ -34,7 +34,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             }),
             budget: Budget::Mutation(json!({"enabled": false})),
             offenders: Offenders::Mutation(Vec::new()),
-            delta_vs_previous: None,
         });
     }
 
@@ -108,7 +107,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         }),
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(report.offenders),
-        delta_vs_previous: None,
     })
 }
 
@@ -137,7 +135,6 @@ fn error_row(
         }),
         budget: Budget::Mutation(json!({"enabled": true})),
         offenders: Offenders::Mutation(Vec::new()),
-        delta_vs_previous: None,
     }
 }
 

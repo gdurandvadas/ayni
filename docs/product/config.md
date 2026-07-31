@@ -10,14 +10,19 @@ and tool command overrides.
 
 Use `ayni contract display` to print a concise, deterministic projection of the
 validated configured policy. Pass `--config <path>` to select a policy other
-than `./.ayni.toml`. The command shows every signal's enabled state for each
-enabled language, normalized roots, configured thresholds, size rules,
-dependency restrictions, and explicit tool overrides. It does not discover
+than `./.ayni.toml`, or `--output json` for a machine-readable, deterministic
+projection. JSON output has a `projection_version` field (currently `0.1.0`),
+ordered `languages` and `signals` arrays, and structured `warnings`. The
+command shows every signal's enabled state for each enabled language,
+normalized roots, configured thresholds, size rules,
+dependency restrictions, and explicit tool overrides. Both formats include
+advisory effectiveness warnings with stable codes; warnings do not make a valid
+policy fail. It does not discover
 projects, inspect or invoke tools, run adapters, analyze code, or write
 artifacts. Use `ayni analyze` for measured results and completion evidence.
 
 For the signal vocabulary and schema selection, see [`signals.md`](signals.md);
-for current JSON artifact fields, see [schema v2](signals/v2.md).
+for current JSON artifact fields, see [schema v3](signals/v3.md).
 For runner resolution, setup validation, failure categories, and debug
 telemetry, see [`runtime.md`](runtime.md).
 
@@ -326,20 +331,20 @@ Warnings are retained in reports and aggregate warning counts, while only
 fail-level offenders make a row and the aggregate run status fail.
 
 The effective typed budgets applied to each analyzed row are preserved in the
-schema-v2 artifact's `applied_thresholds` field; see [schema v2](signals/v2.md).
+current artifact's `applied_thresholds` field; see [schema v3](signals/v3.md).
 
 ## Output and report safety
 
 `ayni analyze --output md` renders typed findings under **Offenders** and adds a
 **Failures** section only when a collector command failed. Failure entries can
 include the command, working directory, exit code, and tool message. Markdown
-and the schema-v2 JSON artifact can consequently expose repository paths and raw
+and the schema-v3 JSON artifact can consequently expose repository paths and raw
 tool output; do not publish them without reviewing that diagnostic data.
 
 For machine consumers, `ayni analyze --json` and `ayni analyze --output json`
-select the same schema-v2 artifact. `--json` conflicts with an explicit
+select the same schema-v3 artifact. `--json` conflicts with an explicit
 non-JSON `--output` value (`stdout` or `md`); choose one output mode. See
-[schema v2](signals/v2.md) for the current schema and migration posture.
+[schema v3](signals/v3.md) for the current schema and migration posture.
 
 ---
 
@@ -354,12 +359,17 @@ Forbidden edges use the same map style as size: keys and values are glob pattern
 
 ---
 
-## CLI scope flags
+## Completion and focused verification
 
-Narrowing a run does not replace `.ayni.toml`; it limits **what** is analyzed in that invocation. See the CLI reference: [`../cli.md`](../cli.md) (`--file`, `--package`, `--language`).
+`ayni analyze` always evaluates every configured language root. It is the
+repository completion operation and the sole writer of
+`.ayni/last/signals.json`; it does not accept `--file`, `--package`, or
+`--language` selectors.
 
-For the fast TDD loop, `ayni verify test` runs only the test signal. Selectors
-are adapter-owned for Rust, Go, Node, Python, and Kotlin, and schema-v2 evidence
-is persisted at `.ayni/verify/last/signals.json`. Focused verification does not
-calculate deltas and does not overwrite the full completion artifact under
-`.ayni/last/`.
+For the fast TDD loop, `ayni verify <signal>` runs one of the six canonical
+signals. `--file`, `--package`, and test-only `--name` are adapter- and
+signal-owned capabilities, not generic filters; unsupported, conflicting, or
+ambiguous selections are rejected before a collector invokes a tool. Requested
+schema-v3 evidence is persisted at `.ayni/verify/last/signals.json`. It has
+`completion.scope = "requested"`, cannot establish repository completion, and
+does not overwrite the full completion artifact under `.ayni/last/`.

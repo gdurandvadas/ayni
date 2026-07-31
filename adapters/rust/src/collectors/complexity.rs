@@ -102,7 +102,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         }),
         budget: Budget::Complexity(budget),
         offenders: Offenders::Complexity(offenders),
-        delta_vs_previous: None,
     })
 }
 
@@ -127,12 +126,22 @@ struct CargoMetadata {
 }
 
 fn resolve_analysis_target(context: &RunContext) -> Result<PathBuf, String> {
+    resolve_analysis_target_with(context, resolve_package_path)
+}
+
+fn resolve_analysis_target_with<F>(
+    context: &RunContext,
+    resolve_package: F,
+) -> Result<PathBuf, String>
+where
+    F: FnOnce(&Path, &str) -> Result<PathBuf, String>,
+{
     let target = if let Some(file) = &context.scope.file {
         resolve_repo_path(&context.repo_root, file)
+    } else if let Some(package) = &context.scope.package {
+        resolve_package(&context.workdir, package)?
     } else if let Some(path) = &context.scope.path {
         resolve_repo_path(&context.repo_root, path)
-    } else if let Some(package) = &context.scope.package {
-        resolve_package_path(&context.workdir, package)?
     } else {
         context.workdir.clone()
     };
@@ -436,9 +445,26 @@ fn level_rank(level: Level) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_function_metric, parse_rust_code_analysis_output};
+    use super::{
+        parse_function_metric, parse_rust_code_analysis_output, resolve_analysis_target_with,
+    };
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use serde_json::json;
+    use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn context(root: &std::path::Path, scope: Scope) -> RunContext {
+        RunContext {
+            repo_root: root.to_path_buf(),
+            target_root: root.to_path_buf(),
+            workdir: root.to_path_buf(),
+            policy: AyniPolicy::default(),
+            scope,
+            execution: ExecutionResolution::direct("cargo", root.to_path_buf(), "test", 100),
+            debug: false,
+        }
+    }
 
     #[test]
     fn parse_single_json_document_metrics() {
@@ -525,5 +551,61 @@ mod tests {
         assert_eq!(metric.line, 42);
         assert_eq!(metric.cyclomatic, 12.0);
         assert_eq!(metric.cognitive, Some(7.0));
+    }
+
+    #[test]
+    fn file_scope_resolves_the_exact_file() {
+        let temp = TempDir::new().expect("tempdir");
+        fs::create_dir_all(temp.path().join("src")).expect("src");
+        fs::write(temp.path().join("src/lib.rs"), "fn example() {}\n").expect("file");
+        let context = context(
+            temp.path(),
+            Scope {
+                file: Some(String::from("src/lib.rs")),
+                ..Scope::default()
+            },
+        );
+
+        let target = resolve_analysis_target_with(&context, |_, _| {
+            Err(String::from("package resolver must not be called"))
+        })
+        .expect("file target");
+
+        assert_eq!(
+            target,
+            temp.path()
+                .join("src/lib.rs")
+                .canonicalize()
+                .expect("canonical")
+        );
+    }
+
+    #[test]
+    fn package_scope_takes_precedence_over_the_broader_path_scope() {
+        let temp = TempDir::new().expect("tempdir");
+        fs::create_dir_all(temp.path().join("crates/api")).expect("package");
+        let context = context(
+            temp.path(),
+            Scope {
+                path: Some(String::from(".")),
+                package: Some(String::from("api")),
+                ..Scope::default()
+            },
+        );
+
+        let target = resolve_analysis_target_with(&context, |workdir, package| {
+            assert_eq!(workdir, temp.path());
+            assert_eq!(package, "api");
+            Ok(PathBuf::from(workdir).join("crates/api"))
+        })
+        .expect("package target");
+
+        assert_eq!(
+            target,
+            temp.path()
+                .join("crates/api")
+                .canonicalize()
+                .expect("canonical")
+        );
     }
 }

@@ -1,9 +1,11 @@
 use crate::catalog::KOTLIN_CATALOG;
 use crate::collectors::KotlinCollector;
 use crate::discovery;
+use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
-    CatalogEntry, DetectResult, ExecutionResolution, Language, LanguageAdapter, LanguageProfile,
-    ProjectDiscovery, SignalCollector,
+    CatalogEntry, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
+    LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts, ProjectDiscovery,
+    Scope, SignalCollector, SignalKind, VerificationSelectorSupport, VerificationTarget,
 };
 use std::path::Path;
 
@@ -79,6 +81,40 @@ impl LanguageAdapter for KotlinAdapter {
         &self.collector
     }
 
+    fn policy_effectiveness_facts(&self) -> PolicyEffectivenessFacts {
+        PolicyEffectivenessFacts::new(
+            Language::Kotlin,
+            vec![ComplexityThresholdKind::FnCyclomatic],
+        )
+    }
+
+    fn verification_selector_support(&self, kind: SignalKind) -> VerificationSelectorSupport {
+        match kind {
+            SignalKind::Test => VerificationSelectorSupport::new(false, true, true),
+            SignalKind::Size | SignalKind::Complexity => {
+                VerificationSelectorSupport::new(true, false, false)
+            }
+            SignalKind::Coverage | SignalKind::Deps | SignalKind::Mutation => {
+                VerificationSelectorSupport::NONE
+            }
+        }
+    }
+
+    fn verification_target(
+        &self,
+        kind: SignalKind,
+        scope: &Scope,
+        offender: OffenderIdentity<'_>,
+    ) -> VerificationTarget {
+        target_for_finding(
+            kind,
+            self.verification_selector_support(kind),
+            scope,
+            offender,
+            DependencySource::Unscoped,
+        )
+    }
+
     fn prepare_install(&self, execution: &ExecutionResolution) -> Result<(), String> {
         crate::install::ensure_gradle_plugins(&execution.install_cwd)
     }
@@ -104,7 +140,10 @@ fn gradle_runner(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::KotlinAdapter;
-    use ayni_core::LanguageAdapter;
+    use ayni_core::{
+        LanguageAdapter, OffenderIdentity, Scope, SignalKind, TestFailure,
+        VerificationSelectorSupport,
+    };
     use std::fs;
     use tempfile::TempDir;
 
@@ -122,5 +161,51 @@ mod tests {
         assert_eq!(resolution.runner, "./gradlew");
         assert_eq!(resolution.kind, "direct_root");
         assert_eq!(resolution.install_cwd, dir.path());
+    }
+
+    #[test]
+    fn declares_honest_selector_support() {
+        let adapter = KotlinAdapter::new();
+        assert_eq!(
+            adapter.verification_selector_support(SignalKind::Test),
+            VerificationSelectorSupport::new(false, true, true)
+        );
+        for kind in [SignalKind::Size, SignalKind::Complexity] {
+            assert_eq!(
+                adapter.verification_selector_support(kind),
+                VerificationSelectorSupport::new(true, false, false)
+            );
+        }
+        for kind in [SignalKind::Coverage, SignalKind::Deps, SignalKind::Mutation] {
+            assert_eq!(
+                adapter.verification_selector_support(kind),
+                VerificationSelectorSupport::NONE
+            );
+        }
+    }
+
+    #[test]
+    fn finding_zero_test_uses_supported_package_scope() {
+        let adapter = KotlinAdapter::new();
+        let offender = TestFailure {
+            file: None,
+            line: None,
+            message: String::from("discovered zero tests"),
+            test_name: None,
+        };
+        let scope = Scope {
+            package: Some(String::from("com.example.ApiTest")),
+            ..Scope::default()
+        };
+        let target = adapter.verification_target(
+            SignalKind::Test,
+            &scope,
+            OffenderIdentity::Test(&offender),
+        );
+        adapter
+            .verification_selector_support(SignalKind::Test)
+            .validate_target(SignalKind::Test, &target)
+            .expect("mapped target must match declared support");
+        assert_eq!(target.package, scope.package);
     }
 }

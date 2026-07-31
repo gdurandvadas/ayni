@@ -26,6 +26,63 @@ pub fn collect_size(
     size_map: &BTreeMap<String, SizeThreshold>,
     excluded_dir_names: &[&str],
 ) -> Result<SizeCollection, String> {
+    collect_size_inner(repo_root, workdir, None, size_map, excluded_dir_names)
+}
+
+/// Collects size for exactly one repository file while applying the same
+/// include rules, rule exclusions, and adapter-owned directory exclusions as
+/// repository collection.
+pub fn collect_size_file(
+    repo_root: &Path,
+    workdir: &Path,
+    file: &str,
+    size_map: &BTreeMap<String, SizeThreshold>,
+    excluded_dir_names: &[&str],
+) -> Result<SizeCollection, String> {
+    let candidate = Path::new(file);
+    let candidate = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        repo_root.join(candidate)
+    };
+    let canonical_repo_root = repo_root
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve repository root: {error}"))?;
+    let candidate = candidate.canonicalize().map_err(|error| {
+        format!(
+            "selected size file {} could not be resolved: {error}",
+            candidate.display()
+        )
+    })?;
+    if !candidate.is_file() {
+        return Err(format!(
+            "selected size path {} is not a file",
+            candidate.display()
+        ));
+    }
+    candidate.strip_prefix(&canonical_repo_root).map_err(|_| {
+        format!(
+            "selected size file {} is outside repository root {}",
+            candidate.display(),
+            canonical_repo_root.display()
+        )
+    })?;
+    collect_size_inner(
+        repo_root,
+        workdir,
+        Some(candidate.as_path()),
+        size_map,
+        excluded_dir_names,
+    )
+}
+
+fn collect_size_inner(
+    repo_root: &Path,
+    workdir: &Path,
+    selected_file: Option<&Path>,
+    size_map: &BTreeMap<String, SizeThreshold>,
+    excluded_dir_names: &[&str],
+) -> Result<SizeCollection, String> {
     let compiled = compile_rules(size_map)?;
     let mut offenders = Vec::new();
     let mut max_lines = 0_u64;
@@ -33,9 +90,10 @@ pub fn collect_size(
     let mut fail_count = 0_u64;
     let mut total_files = 0_u64;
 
-    for entry in WalkDir::new(workdir)
+    let walk_root = selected_file.unwrap_or(workdir);
+    for entry in WalkDir::new(walk_root)
         .into_iter()
-        .filter_entry(|entry| !is_excluded_dir(entry.path(), excluded_dir_names))
+        .filter_entry(|entry| !is_excluded_path(workdir, entry.path(), excluded_dir_names))
     {
         let entry = match entry {
             Ok(value) => value,
@@ -123,11 +181,16 @@ fn first_matching<'a>(compiled: &[CompiledRule<'a>], rel: &str) -> Option<&'a Si
         .map(|rule| rule.threshold)
 }
 
-fn is_excluded_dir(path: &Path, excluded_dir_names: &[&str]) -> bool {
-    matches!(
-        path.file_name().and_then(|value| value.to_str()),
-        Some(name) if excluded_dir_names.contains(&name)
-    )
+fn is_excluded_path(workdir: &Path, path: &Path, excluded_dir_names: &[&str]) -> bool {
+    path.strip_prefix(workdir)
+        .unwrap_or(path)
+        .components()
+        .any(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .is_some_and(|name| excluded_dir_names.contains(&name))
+        })
 }
 
 fn to_repo_relative_path(repo_root: &Path, candidate: &Path) -> String {
@@ -145,7 +208,7 @@ fn to_repo_relative_path(repo_root: &Path, candidate: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::collect_size;
+    use super::{collect_size, collect_size_file};
     use crate::SizeThreshold;
     use crate::signal::Level;
     use std::collections::BTreeMap;
@@ -255,5 +318,55 @@ mod tests {
         assert_eq!(rules[0]["glob"], "*.rs");
         assert_eq!(rules[0]["warn"], 5);
         assert_eq!(rules[0]["fail"], 9);
+    }
+
+    #[test]
+    fn exact_file_collection_measures_only_the_selected_file() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::create_dir_all(dir.path().join("src")).expect("src dir");
+        fs::write(dir.path().join("src/selected.rs"), lines(12)).expect("selected");
+        fs::write(dir.path().join("src/other.rs"), lines(30)).expect("other");
+
+        let collection = collect_size_file(
+            dir.path(),
+            dir.path(),
+            "src/selected.rs",
+            &size_map("**/*.rs", 10, 20, Vec::new()),
+            &[],
+        )
+        .expect("collect selected file");
+
+        assert_eq!(collection.result.total_files, 1);
+        assert_eq!(collection.result.max_lines, 12);
+        assert_eq!(collection.result.warn_count, 1);
+        assert_eq!(collection.result.fail_count, 0);
+        assert_eq!(collection.offenders[0].file, "src/selected.rs");
+    }
+
+    #[test]
+    fn exact_file_collection_honors_rules_and_exclusions() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::create_dir_all(dir.path().join("generated")).expect("generated dir");
+        fs::write(dir.path().join("generated/selected.rs"), lines(30)).expect("selected");
+
+        let rule_excluded = collect_size_file(
+            dir.path(),
+            dir.path(),
+            "generated/selected.rs",
+            &size_map("**/*.rs", 10, 20, vec![String::from("generated/**")]),
+            &[],
+        )
+        .expect("rule-excluded file");
+        assert_eq!(rule_excluded.result.total_files, 0);
+
+        let directory_excluded = collect_size_file(
+            dir.path(),
+            dir.path(),
+            "generated/selected.rs",
+            &size_map("**/*.rs", 10, 20, Vec::new()),
+            &["generated"],
+        )
+        .expect("directory-excluded file");
+        assert_eq!(directory_excluded.result.total_files, 0);
     }
 }

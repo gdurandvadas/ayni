@@ -84,7 +84,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         }),
         budget: Budget::Coverage(coverage_budget),
         offenders: Offenders::Coverage(offenders),
-        delta_vs_previous: None,
     })
 }
 
@@ -173,7 +172,6 @@ mod tests {
             workdir: PathBuf::from("."),
             policy,
             scope: Scope::default(),
-            diff: None,
             execution: ExecutionResolution::direct("go", PathBuf::from("."), "test", 100),
             debug: false,
         }

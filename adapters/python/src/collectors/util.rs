@@ -147,7 +147,6 @@ mod tests {
                 package: None,
                 file: None,
             },
-            diff: None,
             execution: ExecutionResolution::direct(
                 "uv",
                 PathBuf::from("packages/config"),

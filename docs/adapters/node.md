@@ -24,9 +24,24 @@ dependencies using that resolved manager.
 | `deps` | package and workspace manifest graph | no version enforced |
 | `mutation` | `@stryker-mutator/core` (opt-in) | no version enforced |
 
-`ayni verify test --language node` supports workspace `--package`,
-repository-relative `--file`, and optional Vitest `--name` selectors. Package
-selection remains owned by the resolved npm, pnpm, Yarn, or Bun adapter path.
+## Focused verification
+
+`verify` writes requested-scope evidence only to `.ayni/verify/last/signals.json`.
+Every command accepts an optional `--language node`; unscoped verification is
+always valid. The accepted selectors are:
+
+| Signal | `--file` | `--package` | `--name` |
+| --- | --- | --- | --- |
+| `test` | yes | yes | yes |
+| `coverage` | no | no | no |
+| `size` | yes | no | no |
+| `complexity` | yes | no | no |
+| `deps` | yes | yes | no |
+| `mutation` | no | no | no |
+
+Package selection remains owned by the resolved npm, pnpm, Yarn, or Bun adapter
+path. `--name` is test-only, and `--file` cannot be combined with `--package`.
+Unsupported or ambiguous selectors are rejected before a tool runs.
 
 ## Contract
 

@@ -1,9 +1,12 @@
 use crate::catalog::NODE_CATALOG;
 use crate::collectors::NodeCollector;
 use crate::discovery;
+use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
-    CatalogEntry, DetectResult, ExecutionResolution, Language, LanguageAdapter, LanguageProfile,
-    NodePackageManager, ProjectDiscovery, SignalCollector, detect_node_package_manager,
+    CatalogEntry, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
+    LanguageAdapter, LanguageProfile, NodePackageManager, OffenderIdentity,
+    PolicyEffectivenessFacts, ProjectDiscovery, Scope, SignalCollector, SignalKind,
+    VerificationSelectorSupport, VerificationTarget, detect_node_package_manager,
 };
 use std::path::{Path, PathBuf};
 
@@ -112,6 +115,36 @@ impl LanguageAdapter for NodeAdapter {
         &self.collector
     }
 
+    fn policy_effectiveness_facts(&self) -> PolicyEffectivenessFacts {
+        PolicyEffectivenessFacts::new(Language::Node, vec![ComplexityThresholdKind::FnCyclomatic])
+    }
+
+    fn verification_selector_support(&self, kind: SignalKind) -> VerificationSelectorSupport {
+        match kind {
+            SignalKind::Test => VerificationSelectorSupport::new(true, true, true),
+            SignalKind::Deps => VerificationSelectorSupport::new(true, true, false),
+            SignalKind::Size | SignalKind::Complexity => {
+                VerificationSelectorSupport::new(true, false, false)
+            }
+            SignalKind::Coverage | SignalKind::Mutation => VerificationSelectorSupport::NONE,
+        }
+    }
+
+    fn verification_target(
+        &self,
+        kind: SignalKind,
+        scope: &Scope,
+        offender: OffenderIdentity<'_>,
+    ) -> VerificationTarget {
+        target_for_finding(
+            kind,
+            self.verification_selector_support(kind),
+            scope,
+            offender,
+            DependencySource::Package,
+        )
+    }
+
     fn prepare_install(&self, execution: &ExecutionResolution) -> Result<(), String> {
         let manager = NodePackageManager::from_executable(&execution.runner)
             .unwrap_or(NodePackageManager::Npm);
@@ -200,7 +233,10 @@ fn package_json_has_workspaces(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::NodeAdapter;
-    use ayni_core::LanguageAdapter;
+    use ayni_core::{
+        LanguageAdapter, OffenderIdentity, Scope, SignalKind, TestFailure,
+        VerificationSelectorSupport,
+    };
     use std::fs;
     use tempfile::TempDir;
 
@@ -225,5 +261,52 @@ mod tests {
         assert_eq!(resolution.kind, "workspace_ancestor");
         assert_eq!(resolution.install_cwd, dir.path());
         assert_eq!(resolution.exec_cwd, dir.path().join("apps/api"));
+    }
+
+    #[test]
+    fn declares_honest_selector_support() {
+        let adapter = NodeAdapter::new();
+        assert_eq!(
+            adapter.verification_selector_support(SignalKind::Test),
+            VerificationSelectorSupport::new(true, true, true)
+        );
+        assert_eq!(
+            adapter.verification_selector_support(SignalKind::Deps),
+            VerificationSelectorSupport::new(true, true, false)
+        );
+        for kind in [SignalKind::Size, SignalKind::Complexity] {
+            assert_eq!(
+                adapter.verification_selector_support(kind),
+                VerificationSelectorSupport::new(true, false, false)
+            );
+        }
+        for kind in [SignalKind::Coverage, SignalKind::Mutation] {
+            assert_eq!(
+                adapter.verification_selector_support(kind),
+                VerificationSelectorSupport::NONE
+            );
+        }
+    }
+
+    #[test]
+    fn finding_test_maps_file_and_name_when_both_are_supported() {
+        let adapter = NodeAdapter::new();
+        let offender = TestFailure {
+            file: Some(String::from("tests/api.test.ts")),
+            line: Some(10),
+            message: String::from("failed"),
+            test_name: Some(String::from("creates user")),
+        };
+        let target = adapter.verification_target(
+            SignalKind::Test,
+            &Scope::default(),
+            OffenderIdentity::Test(&offender),
+        );
+        adapter
+            .verification_selector_support(SignalKind::Test)
+            .validate_target(SignalKind::Test, &target)
+            .expect("mapped target must match declared support");
+        assert_eq!(target.file, offender.file);
+        assert_eq!(target.name, offender.test_name);
     }
 }

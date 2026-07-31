@@ -71,8 +71,9 @@ ayni agents sync
 ayni analyze
 ```
 
-Use focused verification for the inner TDD loop, then keep `analyze` as the
-repository completion gate:
+Use focused verification for the inner TDD loop. `analyze` always evaluates the
+configured repository and is the only completion gate and writer of
+`.ayni/last/signals.json`:
 
 ```sh
 ayni verify test --language rust --package my-crate --name test_filter
@@ -83,7 +84,11 @@ ayni verify test --language kotlin --package com.example.ApiTest --name createsU
 ```
 
 Focused evidence is written to `.ayni/verify/last/signals.json` and never
-replaces `.ayni/last/signals.json`.
+replaces `.ayni/last/signals.json`. `verify` has one subcommand for each of the
+six signals; selector support is signal- and adapter-specific. Unsupported,
+conflicting, ambiguous, or out-of-scope selectors are rejected before a tool
+runs. Re-run the exact `verification.command` supplied with a finding rather
+than broadening it by hand.
 
 Inspect the validated configured signal contract without running discovery,
 adapters, or analysis:
@@ -108,6 +113,23 @@ ayni install --apply
 installs catalog tools. It never changes `AGENTS.md`; run `ayni agents sync`
 when you intentionally want its marked Ayni section created or refreshed.
 
+To inspect whether an already-configured repository is ready without changing
+any files, use check mode:
+
+```sh
+ayni install --check
+ayni install --check --output json
+```
+
+Check mode requires an existing valid `.ayni.toml`. It only detects configured
+targets, resolves their execution contexts, and inspects enabled catalog
+requirements; it never scaffolds, prepares, installs, validates writable
+artifact paths, or writes output files. The human report is the default. JSON
+mode emits one deterministic readiness document on stdout and reserves stderr
+for command diagnostics. A missing or outdated requirement, undetected target,
+or unresolved target produces `not_ready` and a non-zero exit status. `--check`
+cannot be combined with `--apply`, and `--output` is check-only.
+
 For a polyglot repository, repeat `--language`; duplicate values are ignored:
 
 ```sh
@@ -122,7 +144,7 @@ Generate Markdown output:
 ayni analyze --output md
 ```
 
-Emit the schema-v2 artifact for scripts with either equivalent selector:
+Emit the schema-v3 artifact for scripts with either equivalent selector:
 
 ```sh
 ayni analyze --json
@@ -132,6 +154,19 @@ ayni analyze --output json
 Do not combine `--json` with `--output stdout` or `--output md`; use one JSON
 selector instead. JSON is written to stdout and progress to stderr.
 
+Compare two already-produced complete schema-v3 artifacts explicitly. This
+command reads only the two supplied files: it does not discover a repository,
+consult Git or history, fetch or store artifacts, or write files. Differences
+are reported successfully; invalid, incomplete, or incompatible inputs fail
+with diagnostics on stderr.
+
+```sh
+ayni artifact compare --baseline before.json --candidate after.json
+ayni artifact compare --baseline before.json --candidate after.json --output json
+```
+
+The JSON form writes exactly one deterministic comparison document to stdout.
+
 For the full CLI reference, see [`docs/cli.md`](docs/cli.md).
 
 ## Example Report
@@ -139,7 +174,14 @@ For the full CLI reference, see [`docs/cli.md`](docs/cli.md).
 <!-- ayni:md branch=feat/kotlin -->
 # ayni analyze
 
-**5** / **5** checks passing · schema `0.2.0`
+**5** / **5** checks passing · aggregate **pass** · schema `0.3.0`
+
+**Completion:** scope `repository` · state **complete** · targets **1** / **1** completed · **1** detected · **0** skipped
+
+The five rows shown here reflect a policy with mutation disabled. In schema v3,
+completion separately reconciles expected, detected, completed, and skipped
+targets; an incomplete artifact includes one ordered issue per skipped target
+and always aggregates to failure, even if its emitted rows pass.
 
 ## rust (workspace) — 5/5 passing
 
@@ -216,7 +258,9 @@ Ayni emits a closed signal vocabulary shared across language adapters.
 
 For the canonical vocabulary and version selection, see
 [`docs/product/signals.md`](docs/product/signals.md); the current JSON envelope
-is [schema v2](docs/product/signals/v2.md).
+is [schema v3](docs/product/signals/v3.md). Schema v2 remains available only
+as a [historical reference](docs/product/signals/v2.md); there is no automatic
+conversion or compatibility payload.
 
 ## Configuration
 
@@ -269,7 +313,7 @@ For layer boundaries and change rules, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 - [CLI reference](docs/cli.md)
 - [Configuration reference](docs/product/config.md)
-- [Signal contract index](docs/product/signals.md) ([current v2](docs/product/signals/v2.md), [historical v1](docs/product/signals/v1.md))
+- [Signal contract index](docs/product/signals.md) ([current v3](docs/product/signals/v3.md), [historical v2](docs/product/signals/v2.md), [historical v1](docs/product/signals/v1.md))
 - [Runtime and setup rules](docs/product/runtime.md)
 - [Architecture](ARCHITECTURE.md)
 - Language adapters:

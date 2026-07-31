@@ -129,8 +129,8 @@ fn json_selectors_emit_only_json_and_match_persisted_artifacts() {
         );
 
         let stdout = String::from_utf8(output.stdout).expect("UTF-8 JSON stdout");
-        let artifact: Value = serde_json::from_str(&stdout).expect("schema-v2 JSON stdout");
-        assert_eq!(artifact["schema_version"], "0.2.0");
+        let artifact: Value = serde_json::from_str(&stdout).expect("schema-v3 JSON stdout");
+        assert_eq!(artifact["schema_version"], "0.3.0");
         assert_eq!(artifact["output"]["format"], "json");
         assert!(!stdout.contains("running language="));
         assert!(!stdout.contains("command failure"));
@@ -170,6 +170,26 @@ fn conflicting_json_and_markdown_selectors_fail_before_analysis() {
         String::from_utf8_lossy(&output.stderr)
             .contains("--json cannot be combined with --output md; use --output json or --json")
     );
+}
+
+#[test]
+fn analyze_rejects_focused_scope_selectors() {
+    for selector in ["--file", "--package", "--language"] {
+        let output = ayni()
+            .args(["analyze", selector, "value"])
+            .output()
+            .expect("launch ayni binary");
+
+        assert!(
+            !output.status.success(),
+            "{selector} unexpectedly succeeded"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("unexpected argument"),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]

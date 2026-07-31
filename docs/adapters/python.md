@@ -25,11 +25,25 @@ uses the resolved manager for local development packages and `uv tool` for
 | `deps` | Python import scan | no version enforced |
 | `mutation` | `mutmut` (opt-in) | no version enforced |
 
-Focused verification
+## Focused verification
 
-`ayni verify test --language python` supports a repository-relative `--file`
-or package path, plus an optional `--name` selector. Selectors are translated
-to pytest node IDs and use the configured Python test command when one exists.
+`verify` writes requested-scope evidence only to `.ayni/verify/last/signals.json`.
+Every command accepts an optional `--language python`; unscoped verification is
+always valid. The accepted selectors are:
+
+| Signal | `--file` | `--package` | `--name` |
+| --- | --- | --- | --- |
+| `test` | yes | yes | yes |
+| `coverage` | no | no | no |
+| `size` | yes | no | no |
+| `complexity` | yes | no | no |
+| `deps` | no | no | no |
+| `mutation` | no | no | no |
+
+Test selectors are translated to pytest node IDs and use the configured Python
+test command when one exists. `--name` is test-only, and `--file` cannot be
+combined with `--package`. Unsupported or ambiguous selectors are rejected
+before a tool runs.
 
 ## Contract
 

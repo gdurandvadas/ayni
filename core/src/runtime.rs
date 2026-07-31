@@ -14,14 +14,6 @@ pub struct Scope {
     pub file: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct BranchDiff {
-    #[serde(default)]
-    pub merge_base: Option<String>,
-    #[serde(default)]
-    pub changed_paths: Vec<String>,
-}
-
 #[derive(Debug, Clone)]
 pub struct RunContext {
     pub repo_root: PathBuf,
@@ -29,7 +21,6 @@ pub struct RunContext {
     pub workdir: PathBuf,
     pub policy: AyniPolicy,
     pub scope: Scope,
-    pub diff: Option<BranchDiff>,
     pub execution: ExecutionResolution,
     pub debug: bool,
 }

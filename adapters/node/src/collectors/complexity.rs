@@ -8,6 +8,7 @@ use ayni_core::{
 use regex::Regex;
 use serde_json::Value as JsonValue;
 use serde_json::json;
+use std::path::Path;
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let config = context
@@ -20,11 +21,12 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .fn_cyclomatic
         .ok_or_else(|| String::from("missing node.complexity.fn_cyclomatic"))?;
 
+    let target = complexity_target(context);
     let output = run_tool(
         context,
         "eslint",
         &[
-            ".",
+            &target,
             "--format",
             "json",
             "--ext",
@@ -153,8 +155,41 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         }),
         budget: Budget::Complexity(budget),
         offenders: Offenders::Complexity(offenders),
-        delta_vs_previous: None,
     })
 }
 
-use std::path::Path;
+fn complexity_target(context: &RunContext) -> String {
+    context.scope.file.as_ref().map_or_else(
+        || String::from("."),
+        |file| {
+            ayni_adapters_common::paths::resolve_repo_path(&context.repo_root, file)
+                .to_string_lossy()
+                .into_owned()
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::complexity_target;
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    use std::path::PathBuf;
+
+    #[test]
+    fn file_scope_is_the_eslint_target() {
+        let context = RunContext {
+            repo_root: PathBuf::from("/repo"),
+            target_root: PathBuf::from("/repo"),
+            workdir: PathBuf::from("/repo"),
+            policy: AyniPolicy::default(),
+            scope: Scope {
+                file: Some(String::from("src/handler.ts")),
+                ..Scope::default()
+            },
+            execution: ExecutionResolution::direct("npm", PathBuf::from("/repo"), "lock", 100),
+            debug: false,
+        };
+
+        assert_eq!(complexity_target(&context), "/repo/src/handler.ts");
+    }
+}

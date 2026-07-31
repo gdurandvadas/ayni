@@ -15,6 +15,14 @@ fn display(config: &Path) -> Output {
         .expect("launch ayni binary")
 }
 
+fn display_json(config: &Path) -> Output {
+    ayni()
+        .args(["contract", "display", "--output", "json", "--config"])
+        .arg(config)
+        .output()
+        .expect("launch ayni binary")
+}
+
 #[test]
 fn displays_deterministic_complete_configured_contract_without_execution() {
     let tempdir = TempDir::new().expect("tempdir");
@@ -112,6 +120,66 @@ args = ["mutation"]
         !stdout.trim_start().starts_with('{'),
         "display must not emit JSON"
     );
+    assert!(stdout.contains("projection version 0.1.0"));
+    assert!(stdout.contains("warnings:"));
+    assert!(stdout.contains("policy.effectiveness.size.no_rules"));
+}
+
+#[test]
+fn json_display_is_a_deterministic_versioned_projection_with_warnings() {
+    let tempdir = TempDir::new().expect("tempdir");
+    let config = tempdir.path().join("policy.toml");
+    fs::write(
+        &config,
+        r#"[checks]
+test = true
+coverage = true
+size = true
+complexity = true
+deps = true
+mutation = false
+
+[languages]
+enabled = ["rust"]
+
+[rust.complexity]
+fn_cognitive = { warn = 10, fail = 20 }
+"#,
+    )
+    .expect("write policy");
+
+    let first = display_json(&config);
+    let second = display_json(&config);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(first.stdout, second.stdout, "output must be byte-stable");
+    assert!(first.stderr.is_empty());
+    assert!(
+        !tempdir.path().join(".ayni").exists(),
+        "display wrote artifacts"
+    );
+
+    let value: serde_json::Value = serde_json::from_slice(&first.stdout).expect("JSON projection");
+    assert_eq!(value["projection_version"], "0.1.0");
+    assert_eq!(value["languages"][0]["language"], "rust");
+    assert_eq!(value["languages"][0]["signals"][0]["kind"], "test");
+    assert_eq!(
+        value["languages"][0]["signals"][1]["detail"]["type"],
+        "coverage"
+    );
+    assert!(
+        value["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .iter()
+            .any(|warning| {
+                warning["code"] == "policy.effectiveness.complexity.missing_required_threshold"
+                    && warning["policy_path"] == "rust.complexity.fn_cyclomatic"
+            })
+    );
 }
 
 #[test]
@@ -177,5 +245,6 @@ fn nested_help_exposes_display_and_config_default() {
     let stdout = String::from_utf8_lossy(&display_help.stdout);
     assert!(stdout.contains("--config <CONFIG>"));
     assert!(stdout.contains("[default: ./.ayni.toml]"));
-    assert!(!stdout.contains("--json"));
+    assert!(stdout.contains("--output <OUTPUT>"));
+    assert!(stdout.contains("json"));
 }

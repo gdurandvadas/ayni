@@ -23,12 +23,26 @@ errors. Existing JaCoCo coverage is retained; otherwise installation adds Kover.
 | `deps` | Gradle `dependencies` project edges | no version enforced |
 | `mutation` | Gradle `pitest` task (opt-in) | PIT plugin 1.19.0 when Ayni adds it |
 
-Focused verification
+## Focused verification
 
-`ayni verify test --language kotlin` supports a Gradle test class/package via
-`--package` and an optional method selector via `--name`; these become a Gradle
-`--tests` pattern. Kotlin source-file selection with `--file` is rejected
-because Gradle test filters operate on test class names.
+`verify` writes requested-scope evidence only to `.ayni/verify/last/signals.json`.
+Every command accepts an optional `--language kotlin`; unscoped verification is
+always valid. The accepted selectors are:
+
+| Signal | `--file` | `--package` | `--name` |
+| --- | --- | --- | --- |
+| `test` | no | yes | yes |
+| `coverage` | no | no | no |
+| `size` | yes | no | no |
+| `complexity` | yes | no | no |
+| `deps` | no | no | no |
+| `mutation` | no | no | no |
+
+For `test`, a Gradle test class/package and optional method become a Gradle
+`--tests` pattern. Kotlin source-file selection is unsupported for tests because
+Gradle filters operate on test class names. `--name` is test-only, and `--file`
+cannot be combined with `--package`; unsupported or ambiguous selectors are
+rejected before Gradle runs.
 
 ## Contract
 

@@ -109,7 +109,6 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         }),
         budget: Budget::Coverage(coverage_budget),
         offenders: Offenders::Coverage(offenders),
-        delta_vs_previous: None,
     })
 }
 
@@ -138,7 +137,6 @@ fn error_row(
         }),
         budget: Budget::Coverage(json!({})),
         offenders: Offenders::Coverage(Vec::new()),
-        delta_vs_previous: None,
     }
 }
 

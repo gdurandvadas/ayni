@@ -30,6 +30,5 @@ target
 .DS_Store
 docs/.vitepress/cache/
 docs/.vitepress/dist/
-docs/projects/
-
+.projects/**
 **/node_modules/

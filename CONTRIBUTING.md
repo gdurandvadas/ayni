@@ -8,6 +8,8 @@ The open-source version currently supports:
 
 - `install` (list required tools; `install --apply` runs catalog installers)
 - `analyze`
+- `verify` (focused evidence for one of the six signals)
+- `contract display` and `artifact compare`
 - `agents sync` (explicitly create or refresh Ayni's marked `AGENTS.md` section)
 
 Out of scope:
@@ -27,11 +29,19 @@ cargo test --workspace --all-features
 cargo check --workspace --all-features
 ```
 
-Run local analysis:
+During an implementation, exercise the checkout binary and use the narrowest
+supported focused verification command. The adapter documentation records the
+honest selector matrix; unsupported selectors fail before tool invocation.
 
 ```sh
-cargo run -p ayni-cli -- analyze --config ./.ayni.toml
+cargo run -p ayni-cli -- verify test --language rust --package ayni-cli
 ```
+
+Do not use focused evidence as repository completion evidence. An unscoped
+`cargo run -p ayni-cli -- analyze --config ./.ayni.toml` is the sole writer of
+`.ayni/last/signals.json` and belongs at the caller's final completion boundary.
+Focused runs write only `.ayni/verify/last/signals.json`. Re-run the exact
+`verification.command` attached to a finding when one is available.
 
 ## Documentation
 
@@ -72,6 +82,8 @@ For language adapter implementation guidance, see
 - Tests added or updated when behavior changes.
 - No managed service dependency introduced.
 - Local artifact behavior preserved.
+- Repository completion uses only unscoped `analyze`; focused verification has
+  not replaced `.ayni/last/signals.json`.
 - README or docs updated if behavior changed.
 - `install` does not modify `AGENTS.md`; `ayni agents sync` is idempotent and preserves user content outside Ayni's marked block.
 - `cargo fmt`, `cargo clippy`, `cargo test`, and `cargo check` pass.

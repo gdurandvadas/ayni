@@ -1,48 +1,210 @@
-use ayni_core::{AyniPolicy, Language, SignalKind, ThresholdFloat, ToolCommandOverride};
+use ayni_core::{
+    AyniPolicy, Language, PolicyEffectivenessFacts, PolicyEffectivenessWarning, SignalKind,
+    ThresholdFloat, ToolCommandOverride,
+};
+use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 
-const SIGNALS: [(SignalKind, &str); 6] = [
-    (SignalKind::Test, "test"),
-    (SignalKind::Coverage, "coverage"),
-    (SignalKind::Size, "size"),
-    (SignalKind::Complexity, "complexity"),
-    (SignalKind::Deps, "deps"),
-    (SignalKind::Mutation, "mutation"),
+const CONTRACT_PROJECTION_VERSION: &str = "0.1.0";
+const SIGNALS: [SignalKind; 6] = [
+    SignalKind::Test,
+    SignalKind::Coverage,
+    SignalKind::Size,
+    SignalKind::Complexity,
+    SignalKind::Deps,
+    SignalKind::Mutation,
 ];
 
-pub(crate) fn display(config_path: &Path) -> Result<String, String> {
-    let policy = AyniPolicy::load_from_path(config_path)?;
-    render(&policy)
+#[derive(Debug, Serialize)]
+struct ContractProjection {
+    projection_version: &'static str,
+    languages: Vec<LanguageProjection>,
+    warnings: Vec<PolicyEffectivenessWarning>,
 }
 
-fn render(policy: &AyniPolicy) -> Result<String, String> {
+#[derive(Debug, Serialize)]
+struct LanguageProjection {
+    language: Language,
+    roots: Vec<String>,
+    signals: Vec<SignalProjection>,
+}
+
+#[derive(Debug, Serialize)]
+struct SignalProjection {
+    kind: SignalKind,
+    enabled: bool,
+    detail: SignalDetail,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SignalDetail {
+    Tool {
+        tool_override: Option<ToolOverrideProjection>,
+    },
+    Coverage {
+        line_percent: Option<ThresholdProjection>,
+        branch_percent: Option<ThresholdProjection>,
+        tool_override: Option<ToolOverrideProjection>,
+    },
+    Size {
+        rules: Vec<SizeRuleProjection>,
+    },
+    Complexity {
+        fn_cyclomatic: Option<ThresholdProjection>,
+        fn_cognitive: Option<ThresholdProjection>,
+    },
+    Deps {
+        forbidden: Vec<ForbiddenDependencyProjection>,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct ThresholdProjection {
+    warn: f64,
+    fail: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct ToolOverrideProjection {
+    command: String,
+    args: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SizeRuleProjection {
+    pattern: String,
+    warn: u64,
+    fail: u64,
+    exclude: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ForbiddenDependencyProjection {
+    from: String,
+    targets: Vec<String>,
+}
+
+pub(crate) fn display(
+    config_path: &Path,
+    adapter_facts: &[PolicyEffectivenessFacts],
+    json: bool,
+) -> Result<String, String> {
+    let policy = AyniPolicy::load_from_path(config_path)?;
+    let projection = project(&policy, adapter_facts)?;
+    if json {
+        serde_json::to_string_pretty(&projection)
+            .map(|output| format!("{output}\n"))
+            .map_err(|error| format!("failed to serialize contract projection: {error}"))
+    } else {
+        Ok(render_human(&projection))
+    }
+}
+
+fn project(
+    policy: &AyniPolicy,
+    adapter_facts: &[PolicyEffectivenessFacts],
+) -> Result<ContractProjection, String> {
     let languages = policy
         .enabled_languages()?
         .into_iter()
-        .collect::<BTreeSet<_>>();
-    let mut output = String::from("Configured signal contract\n");
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|language| LanguageProjection {
+            language,
+            roots: policy.roots_for(language).to_vec(),
+            signals: SIGNALS
+                .into_iter()
+                .map(|kind| SignalProjection {
+                    kind,
+                    enabled: signal_enabled(policy, kind),
+                    detail: project_signal(policy, language, kind),
+                })
+                .collect(),
+        })
+        .collect();
+    Ok(ContractProjection {
+        projection_version: CONTRACT_PROJECTION_VERSION,
+        languages,
+        warnings: policy.effectiveness_warnings(adapter_facts),
+    })
+}
 
-    for language in languages {
-        writeln!(output, "\nlanguage: {language}").expect("writing to String cannot fail");
-        writeln!(output, "  roots:").expect("writing to String cannot fail");
-        for root in policy.roots_for(language) {
-            writeln!(output, "    - {root}").expect("writing to String cannot fail");
-        }
-        writeln!(output, "  signals:").expect("writing to String cannot fail");
-        for (kind, name) in SIGNALS {
-            let state = if signal_enabled(policy, kind) {
-                "enabled"
-            } else {
-                "disabled"
-            };
-            writeln!(output, "    {name}: {state}").expect("writing to String cannot fail");
-            render_signal_policy(&mut output, policy, language, kind);
-        }
+fn project_signal(policy: &AyniPolicy, language: Language, kind: SignalKind) -> SignalDetail {
+    let tooling = policy.language_tooling(language);
+    match kind {
+        SignalKind::Test | SignalKind::Mutation => SignalDetail::Tool {
+            tool_override: project_tool_override(policy.tool_override_for(language, kind)),
+        },
+        SignalKind::Coverage => SignalDetail::Coverage {
+            line_percent: tooling
+                .coverage
+                .as_ref()
+                .and_then(|value| value.line_percent)
+                .map(project_threshold),
+            branch_percent: tooling
+                .coverage
+                .as_ref()
+                .and_then(|value| value.branch_percent)
+                .map(project_threshold),
+            tool_override: project_tool_override(policy.tool_override_for(language, kind)),
+        },
+        SignalKind::Size => SignalDetail::Size {
+            rules: tooling
+                .size
+                .iter()
+                .map(|(pattern, rule)| SizeRuleProjection {
+                    pattern: pattern.clone(),
+                    warn: rule.warn,
+                    fail: rule.fail,
+                    exclude: rule.exclude.clone(),
+                })
+                .collect(),
+        },
+        SignalKind::Complexity => SignalDetail::Complexity {
+            fn_cyclomatic: tooling
+                .complexity
+                .as_ref()
+                .and_then(|value| value.fn_cyclomatic)
+                .map(project_threshold),
+            fn_cognitive: tooling
+                .complexity
+                .as_ref()
+                .and_then(|value| value.fn_cognitive)
+                .map(project_threshold),
+        },
+        SignalKind::Deps => SignalDetail::Deps {
+            forbidden: tooling
+                .deps
+                .as_ref()
+                .map(|deps| {
+                    deps.forbidden
+                        .iter()
+                        .map(|(from, targets)| ForbiddenDependencyProjection {
+                            from: from.clone(),
+                            targets: targets.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        },
     }
+}
 
-    Ok(output)
+fn project_threshold(threshold: ThresholdFloat) -> ThresholdProjection {
+    ThresholdProjection {
+        warn: threshold.warn,
+        fail: threshold.fail,
+    }
+}
+
+fn project_tool_override(value: Option<&ToolCommandOverride>) -> Option<ToolOverrideProjection> {
+    value.map(|value| ToolOverrideProjection {
+        command: value.command.clone(),
+        args: value.args.clone(),
+    })
 }
 
 fn signal_enabled(policy: &AyniPolicy, kind: SignalKind) -> bool {
@@ -56,100 +218,120 @@ fn signal_enabled(policy: &AyniPolicy, kind: SignalKind) -> bool {
     }
 }
 
-fn render_signal_policy(
-    output: &mut String,
-    policy: &AyniPolicy,
-    language: Language,
-    kind: SignalKind,
-) {
-    let tooling = policy.language_tooling(language);
-    match kind {
-        SignalKind::Test | SignalKind::Mutation => {
-            render_tool_override(output, policy.tool_override_for(language, kind));
+fn render_human(projection: &ContractProjection) -> String {
+    let mut output = format!(
+        "Configured signal contract (projection version {})\n",
+        projection.projection_version
+    );
+    for language in &projection.languages {
+        writeln!(output, "\nlanguage: {}", language.language)
+            .expect("writing to String cannot fail");
+        writeln!(output, "  roots:").expect("writing to String cannot fail");
+        for root in &language.roots {
+            writeln!(output, "    - {root}").expect("writing to String cannot fail");
         }
-        SignalKind::Coverage => {
+        writeln!(output, "  signals:").expect("writing to String cannot fail");
+        for signal in &language.signals {
+            writeln!(
+                output,
+                "    {}: {}",
+                signal_name(signal.kind),
+                if signal.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            )
+            .expect("writing to String cannot fail");
+            render_signal_detail(&mut output, &signal.detail);
+        }
+    }
+    writeln!(output, "\nwarnings:").expect("writing to String cannot fail");
+    if projection.warnings.is_empty() {
+        writeln!(output, "  none").expect("writing to String cannot fail");
+    } else {
+        for warning in &projection.warnings {
+            writeln!(
+                output,
+                "  - [{}] {}: {}",
+                warning.code, warning.policy_path, warning.message
+            )
+            .expect("writing to String cannot fail");
+        }
+    }
+    output
+}
+
+fn render_signal_detail(output: &mut String, detail: &SignalDetail) {
+    match detail {
+        SignalDetail::Tool { tool_override } => {
+            render_tool_override(output, tool_override.as_ref())
+        }
+        SignalDetail::Coverage {
+            line_percent,
+            branch_percent,
+            tool_override,
+        } => {
             writeln!(output, "      thresholds:").expect("writing to String cannot fail");
-            render_threshold(
-                output,
-                "line_percent (minimum)",
-                tooling
-                    .coverage
-                    .as_ref()
-                    .and_then(|value| value.line_percent),
-            );
-            render_threshold(
-                output,
-                "branch_percent (minimum)",
-                tooling
-                    .coverage
-                    .as_ref()
-                    .and_then(|value| value.branch_percent),
-            );
-            render_tool_override(output, policy.tool_override_for(language, kind));
+            render_threshold(output, "line_percent (minimum)", line_percent.as_ref());
+            render_threshold(output, "branch_percent (minimum)", branch_percent.as_ref());
+            render_tool_override(output, tool_override.as_ref());
         }
-        SignalKind::Size => {
-            if tooling.size.is_empty() {
+        SignalDetail::Size { rules } => {
+            if rules.is_empty() {
                 writeln!(output, "      rules: not configured")
                     .expect("writing to String cannot fail");
             } else {
                 writeln!(output, "      rules:").expect("writing to String cannot fail");
-                for (pattern, rule) in &tooling.size {
+                for rule in rules {
                     writeln!(
                         output,
                         "        - pattern: {} | warn: {} | fail: {}",
-                        quoted(pattern),
+                        quoted(&rule.pattern),
                         rule.warn,
                         rule.fail
                     )
                     .expect("writing to String cannot fail");
-                    if rule.exclude.is_empty() {
-                        writeln!(output, "          exclusions: none")
-                            .expect("writing to String cannot fail");
-                    } else {
-                        writeln!(
-                            output,
-                            "          exclusions: {}",
+                    writeln!(
+                        output,
+                        "          exclusions: {}",
+                        if rule.exclude.is_empty() {
+                            String::from("none")
+                        } else {
                             quoted_list(&rule.exclude)
-                        )
-                        .expect("writing to String cannot fail");
-                    }
+                        }
+                    )
+                    .expect("writing to String cannot fail");
                 }
             }
         }
-        SignalKind::Complexity => {
+        SignalDetail::Complexity {
+            fn_cyclomatic,
+            fn_cognitive,
+        } => {
             writeln!(output, "      thresholds:").expect("writing to String cannot fail");
-            render_threshold(
-                output,
-                "fn_cyclomatic (maximum)",
-                tooling
-                    .complexity
-                    .as_ref()
-                    .and_then(|value| value.fn_cyclomatic),
-            );
-            render_threshold(
-                output,
-                "fn_cognitive (maximum)",
-                tooling
-                    .complexity
-                    .as_ref()
-                    .and_then(|value| value.fn_cognitive),
-            );
+            render_threshold(output, "fn_cyclomatic (maximum)", fn_cyclomatic.as_ref());
+            render_threshold(output, "fn_cognitive (maximum)", fn_cognitive.as_ref());
         }
-        SignalKind::Deps => {
-            let restrictions = tooling.deps.as_ref().map(|value| &value.forbidden);
-            if restrictions.is_none_or(|value| value.is_empty()) {
+        SignalDetail::Deps { forbidden } => {
+            if forbidden.is_empty() {
                 writeln!(output, "      restrictions: not configured")
                     .expect("writing to String cannot fail");
-            } else if let Some(restrictions) = restrictions {
+            } else {
                 writeln!(output, "      restrictions:").expect("writing to String cannot fail");
-                for (from, targets) in restrictions {
-                    if targets.is_empty() {
-                        writeln!(output, "        - {} -> none", quoted(from))
+                for rule in forbidden {
+                    if rule.targets.is_empty() {
+                        writeln!(output, "        - {} -> none", quoted(&rule.from))
                             .expect("writing to String cannot fail");
                     } else {
-                        for target in targets {
-                            writeln!(output, "        - {} -> {}", quoted(from), quoted(target))
-                                .expect("writing to String cannot fail");
+                        for target in &rule.targets {
+                            writeln!(
+                                output,
+                                "        - {} -> {}",
+                                quoted(&rule.from),
+                                quoted(target)
+                            )
+                            .expect("writing to String cannot fail");
                         }
                     }
                 }
@@ -158,7 +340,18 @@ fn render_signal_policy(
     }
 }
 
-fn render_threshold(output: &mut String, name: &str, threshold: Option<ThresholdFloat>) {
+fn signal_name(kind: SignalKind) -> &'static str {
+    match kind {
+        SignalKind::Test => "test",
+        SignalKind::Coverage => "coverage",
+        SignalKind::Size => "size",
+        SignalKind::Complexity => "complexity",
+        SignalKind::Deps => "deps",
+        SignalKind::Mutation => "mutation",
+    }
+}
+
+fn render_threshold(output: &mut String, name: &str, threshold: Option<&ThresholdProjection>) {
     if let Some(threshold) = threshold {
         writeln!(
             output,
@@ -171,7 +364,7 @@ fn render_threshold(output: &mut String, name: &str, threshold: Option<Threshold
     }
 }
 
-fn render_tool_override(output: &mut String, value: Option<&ToolCommandOverride>) {
+fn render_tool_override(output: &mut String, value: Option<&ToolOverrideProjection>) {
     if let Some(value) = value {
         writeln!(
             output,
@@ -187,14 +380,15 @@ fn render_tool_override(output: &mut String, value: Option<&ToolCommandOverride>
 }
 
 fn quoted_list(values: &[String]) -> String {
-    let values = values
-        .iter()
-        .map(|value| quoted(value))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{values}]")
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| quoted(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
-
 fn quoted(value: &str) -> String {
     format!("{value:?}")
 }
