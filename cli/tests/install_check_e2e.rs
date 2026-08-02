@@ -26,6 +26,32 @@ fn check(root: &Path, json: bool) -> Output {
     command.output().expect("launch ayni")
 }
 
+fn check_with_path(root: &Path, checks: &str) -> Value {
+    fs::write(root.join(".ayni.toml"), format!(
+        "[checks]\ntest = {}\ncoverage = {}\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n\n[languages]\nenabled = [\"node\", \"python\"]\n\n[node]\nroots = [\".\"]\n\n[python]\nroots = [\".\"]\n", checks == "test", checks == "coverage"
+    )).expect("policy");
+    fs::write(root.join("package.json"), "{}\n").expect("node manifest");
+    fs::write(
+        root.join("pyproject.toml"),
+        "[project]\nname = \"fixture\"\n",
+    )
+    .expect("python manifest");
+    let empty_path = root.join("empty-path");
+    if !empty_path.exists() {
+        fs::create_dir(&empty_path).expect("empty PATH");
+    }
+    let mut command = ayni();
+    let output = command
+        .env("PATH", &empty_path)
+        .args(["install", "--check", "--repo-root", ".", "--output", "json"])
+        .current_dir(root)
+        .output()
+        .expect("launch ayni");
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    serde_json::from_slice(&output.stdout).expect("readiness JSON")
+}
+
 fn snapshot(root: &Path) -> BTreeMap<PathBuf, SnapshotEntry> {
     fn visit(root: &Path, current: &Path, out: &mut BTreeMap<PathBuf, SnapshotEntry>) {
         let mut entries = fs::read_dir(current)
@@ -133,6 +159,101 @@ fn ready_check_uses_human_output_and_returns_zero_without_writes() {
 }
 
 #[test]
+fn shared_requirements_follow_any_enabled_signal() {
+    let tempdir = TempDir::new().expect("tempdir");
+    for checks in ["test", "coverage"] {
+        let value = check_with_path(tempdir.path(), checks);
+        assert_eq!(value["state"], "not_ready");
+        assert_eq!(value["targets"].as_array().unwrap().len(), 2);
+        assert_eq!(value["targets"][0]["language"], "node");
+        assert_eq!(value["targets"][1]["language"], "python");
+        assert!(value["targets"][0]["execution"]["runner"].is_string());
+        assert!(value["targets"][1]["execution"]["runner"].is_string());
+        let node: Vec<_> = value["targets"][0]["requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["name"].as_str().unwrap())
+            .collect();
+        let python: Vec<_> = value["targets"][1]["requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["name"].as_str().unwrap())
+            .collect();
+        let expected_node = if checks == "test" {
+            vec!["node", "vitest"]
+        } else {
+            vec!["node", "vitest", "@vitest/coverage-v8"]
+        };
+        let expected_python = if checks == "test" {
+            vec!["python", "pytest", "pytest-json-report"]
+        } else {
+            vec!["python", "pytest", "pytest-cov", "coverage"]
+        };
+        assert_eq!(node, expected_node);
+        assert_eq!(python, expected_python);
+        assert!(node.contains(&"vitest"));
+        assert!(python.contains(&"pytest"));
+    }
+}
+
+#[test]
+fn spawn_errors_are_requirement_issues_not_absence_or_success() {
+    let tempdir = TempDir::new().expect("tempdir");
+    let value = check_with_path(tempdir.path(), "test");
+
+    assert_eq!(value["state"], "not_ready");
+    let issues = value["issues"].as_array().expect("issues");
+    assert!(issues.iter().any(|issue| {
+        issue["stage"] == "requirement"
+            && issue["requirement"] == "node"
+            && issue["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("kind=spawn"))
+    }));
+    assert_eq!(value["targets"][0]["requirements"][0]["status"], "missing");
+    assert_ne!(value["targets"][0]["requirements"][0]["status"], "current");
+}
+
+#[cfg(unix)]
+#[test]
+fn configured_root_escape_is_rejected_by_install_listing_apply_and_check() {
+    use std::os::unix::fs::symlink;
+
+    let tempdir = TempDir::new().expect("tempdir");
+    let root = tempdir.path().join("repository");
+    let outside = tempdir.path().join("outside");
+    fs::create_dir(&root).expect("repository");
+    fs::create_dir(&outside).expect("outside");
+    fs::write(
+        outside.join("Cargo.toml"),
+        "[package]\nname = \"outside\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("outside manifest");
+    symlink(&outside, root.join("escape-link")).expect("escape link");
+    fs::write(root.join(".gitignore"), ".ayni/\n").expect("gitignore");
+    fs::write(
+        root.join(".ayni.toml"),
+        "[checks]\ntest = true\ncoverage = false\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n\n[languages]\nenabled = [\"rust\"]\n\n[rust]\nroots = [\"escape-link\"]\n",
+    )
+    .expect("policy");
+
+    for extra in [&[][..], &["--apply"][..], &["--check"][..]] {
+        let output = ayni()
+            .args(["install", "--repo-root", "."])
+            .args(extra)
+            .current_dir(&root)
+            .output()
+            .expect("launch ayni");
+        assert!(!output.status.success(), "{extra:?} unexpectedly succeeded");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("configured root 'escape-link'"), "{stderr}");
+        assert!(stderr.contains("repository containment"), "{stderr}");
+    }
+}
+
+#[test]
 fn check_requires_an_existing_valid_policy_and_rejects_invalid_modes() {
     let tempdir = TempDir::new().expect("tempdir");
     let missing = check(tempdir.path(), true);
@@ -158,4 +279,54 @@ fn check_requires_an_existing_valid_policy_and_rejects_invalid_modes() {
     let stderr = String::from_utf8_lossy(&output_without_check.stderr);
     assert!(stderr.contains("required arguments"));
     assert!(stderr.contains("--check"));
+}
+
+#[cfg(unix)]
+#[test]
+fn timeout_is_not_ready() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tempdir = TempDir::new().expect("tempdir");
+    fs::write(
+        tempdir.path().join(".ayni.toml"),
+        "[checks]\ntest = true\ncoverage = false\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n\n[languages]\nenabled = [\"rust\"]\n\n[rust]\nroots = [\".\"]\n\n[execution]\ntool_timeout_seconds = 1\n",
+    )
+    .expect("policy");
+    fs::write(
+        tempdir.path().join("Cargo.toml"),
+        "[package]\nname='fixture'\nversion='0.1.0'\n",
+    )
+    .expect("manifest");
+    let bin = tempdir.path().join("bin");
+    fs::create_dir(&bin).expect("bin");
+    let cargo = bin.join("cargo");
+    fs::write(&cargo, "#!/bin/sh\nsleep 5\n").expect("fake cargo");
+    let mut permissions = fs::metadata(&cargo).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&cargo, permissions).expect("chmod");
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&inherited)))
+            .expect("PATH");
+
+    let output = ayni()
+        .env("PATH", path)
+        .args(["install", "--check", "--repo-root", ".", "--output", "json"])
+        .current_dir(tempdir.path())
+        .output()
+        .expect("launch ayni");
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("readiness JSON");
+    assert_eq!(value["state"], "not_ready");
+    assert_eq!(value["targets"][0]["requirements"][0]["name"], "cargo");
+    assert_eq!(value["targets"][0]["requirements"][0]["status"], "missing");
+    assert_eq!(value["issues"][0]["stage"], "requirement");
+    assert!(
+        value["issues"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("kind=timeout")
+    );
 }

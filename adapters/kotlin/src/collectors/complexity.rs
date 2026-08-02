@@ -1,5 +1,6 @@
 use super::util::{find_reports, gradle_command};
-use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
 use ayni_adapters_common::paths::{
     canonicalize_relative_posix, resolve_repo_path, to_repo_relative_path,
@@ -7,26 +8,23 @@ use ayni_adapters_common::paths::{
 use ayni_adapters_common::xml::{attr_string, attr_u64};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use regex::Regex;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let config = context
-        .policy
-        .kotlin
-        .complexity
-        .as_ref()
-        .ok_or_else(|| String::from("missing [kotlin.complexity] policy"))?;
-    let cyclomatic = config
-        .fn_cyclomatic
-        .ok_or_else(|| String::from("missing kotlin.complexity.fn_cyclomatic"))?;
+pub fn collect(context: &RunContext) -> CollectorResult {
+    let config = context.policy.kotlin.complexity.as_ref().ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing [kotlin.complexity] policy"))
+    })?;
+    let cyclomatic = config.fn_cyclomatic.ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing kotlin.complexity.fn_cyclomatic"))
+    })?;
     let (program, args) = gradle_command(context, SignalKind::Complexity, "detekt");
     let engine = format_command(&program, &args);
-    let output = run_command_for_context(context, &program, &args)?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
     if !output.status.success() {
         return Ok(error_row(
             context,
@@ -48,26 +46,28 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
     let mut offenders = Vec::new();
     for report_path in &report_paths {
-        offenders.extend(parse_checkstyle_xml(
-            report_path,
-            context,
-            cyclomatic.fail + 1.0,
-        )?);
+        offenders.extend(
+            parse_checkstyle_xml(report_path, context, cyclomatic.fail + 1.0)
+                .map_err(CollectorError::Adapter)?,
+        );
     }
     let mut max_fn_cyclomatic = 0.0_f64;
     let mut warn_count = 0_u64;
     let mut fail_count = 0_u64;
-    for offender in &mut offenders {
+    offenders.retain_mut(|offender| {
         max_fn_cyclomatic = max_fn_cyclomatic.max(offender.cyclomatic);
-        if offender.cyclomatic > cyclomatic.fail {
-            offender.level = Level::Fail;
-            fail_count += 1;
-        } else if offender.cyclomatic > cyclomatic.warn {
-            offender.level = Level::Warn;
-            warn_count += 1;
-        }
-    }
-    offenders.retain(|offender| offender.cyclomatic > cyclomatic.warn);
+        let Some(level) = classify_complexity(
+            offender.cyclomatic,
+            cyclomatic.warn,
+            cyclomatic.fail,
+            &mut warn_count,
+            &mut fail_count,
+        ) else {
+            return false;
+        };
+        offender.level = level;
+        true
+    });
     offenders.sort_by(|left, right| {
         right
             .level
@@ -101,6 +101,22 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         })),
         offenders: Offenders::Complexity(offenders),
     })
+}
+
+fn classify_complexity(
+    value: f64,
+    warn: f64,
+    fail: f64,
+    warn_count: &mut u64,
+    fail_count: &mut u64,
+) -> Option<Level> {
+    let level = classify_maximum(value, warn, fail);
+    match level {
+        Some(Level::Warn) => *warn_count += 1,
+        Some(Level::Fail) => *fail_count += 1,
+        None => {}
+    }
+    level
 }
 
 fn error_row(
@@ -208,8 +224,8 @@ fn selected_file(context: &RunContext) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_checkstyle_content;
-    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    use super::{classify_complexity, parse_checkstyle_content};
+    use ayni_core::{AyniPolicy, ExecutionResolution, Level, RunContext, Scope};
     use std::path::PathBuf;
 
     #[test]
@@ -262,5 +278,24 @@ mod tests {
         assert_eq!(offenders.len(), 1);
         assert_eq!(offenders[0].file, "src/Selected.kt");
         assert_eq!(offenders[0].cyclomatic, 12.0);
+    }
+
+    #[test]
+    fn maximum_threshold_equality() {
+        let mut warn_count = 0;
+        let mut fail_count = 0;
+        assert_eq!(
+            classify_complexity(9.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            None
+        );
+        assert_eq!(
+            classify_complexity(10.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Warn)
+        );
+        assert_eq!(
+            classify_complexity(15.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Fail)
+        );
+        assert_eq!((warn_count, fail_count), (1, 1));
     }
 }

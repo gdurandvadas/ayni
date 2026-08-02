@@ -2,7 +2,7 @@ FROM rust:1-slim-bookworm AS ayni-builder
 
 WORKDIR /repo
 COPY . .
-RUN cargo build -p ayni-cli --release
+RUN cargo build --locked -p ayni-cli --release
 
 FROM rust:1-slim-bookworm
 

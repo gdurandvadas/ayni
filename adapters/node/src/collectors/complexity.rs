@@ -1,25 +1,24 @@
 use super::util::run_tool;
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::failure::setup_failure;
 use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use regex::Regex;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::path::Path;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let config = context
-        .policy
-        .node
-        .complexity
-        .as_ref()
-        .ok_or_else(|| String::from("missing [node.complexity] policy"))?;
-    let cyclomatic = config
-        .fn_cyclomatic
-        .ok_or_else(|| String::from("missing node.complexity.fn_cyclomatic"))?;
+pub fn collect(context: &RunContext) -> CollectorResult {
+    let config =
+        context.policy.node.complexity.as_ref().ok_or_else(|| {
+            CollectorError::Adapter(String::from("missing [node.complexity] policy"))
+        })?;
+    let cyclomatic = config.fn_cyclomatic.ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing node.complexity.fn_cyclomatic"))
+    })?;
 
     let target = complexity_target(context);
     let output = run_tool(
@@ -43,7 +42,8 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .cloned()
         .unwrap_or_default();
 
-    let re_complexity = Regex::new(r"complexity of (\d+)").map_err(|e| e.to_string())?;
+    let re_complexity =
+        Regex::new(r"complexity of (\d+)").map_err(|e| CollectorError::Adapter(e.to_string()))?;
     let mut offenders = Vec::<ComplexityOffender>::new();
     let mut measured_functions = 0_u64;
     let mut max_fn_cyclomatic = 0.0_f64;
@@ -80,13 +80,13 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             measured_functions += 1;
             max_fn_cyclomatic = max_fn_cyclomatic.max(complexity_value);
 
-            let level = if complexity_value > cyclomatic.fail {
-                fail_count += 1;
-                Level::Fail
-            } else if complexity_value > cyclomatic.warn {
-                warn_count += 1;
-                Level::Warn
-            } else {
+            let Some(level) = classify_complexity(
+                complexity_value,
+                cyclomatic.warn,
+                cyclomatic.fail,
+                &mut warn_count,
+                &mut fail_count,
+            ) else {
                 continue;
             };
 
@@ -158,6 +158,22 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     })
 }
 
+fn classify_complexity(
+    value: f64,
+    warn: f64,
+    fail: f64,
+    warn_count: &mut u64,
+    fail_count: &mut u64,
+) -> Option<Level> {
+    let level = classify_maximum(value, warn, fail);
+    match level {
+        Some(Level::Warn) => *warn_count += 1,
+        Some(Level::Fail) => *fail_count += 1,
+        None => {}
+    }
+    level
+}
+
 fn complexity_target(context: &RunContext) -> String {
     context.scope.file.as_ref().map_or_else(
         || String::from("."),
@@ -171,8 +187,8 @@ fn complexity_target(context: &RunContext) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::complexity_target;
-    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    use super::{classify_complexity, complexity_target};
+    use ayni_core::{AyniPolicy, ExecutionResolution, Level, RunContext, Scope};
     use std::path::PathBuf;
 
     #[test]
@@ -191,5 +207,24 @@ mod tests {
         };
 
         assert_eq!(complexity_target(&context), "/repo/src/handler.ts");
+    }
+
+    #[test]
+    fn maximum_threshold_equality() {
+        let mut warn_count = 0;
+        let mut fail_count = 0;
+        assert_eq!(
+            classify_complexity(9.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            None
+        );
+        assert_eq!(
+            classify_complexity(10.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Warn)
+        );
+        assert_eq!(
+            classify_complexity(15.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Fail)
+        );
+        assert_eq!((warn_count, fail_count), (1, 1));
     }
 }

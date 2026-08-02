@@ -12,7 +12,10 @@ Runner resolution prefers direct `uv.lock`, `poetry.lock`, `pdm.lock`,
 `pyproject.toml` or `requirements.txt` using `python -m`. Python and its
 resolved package manager are user-owned prerequisites. Applied installation
 uses the resolved manager for local development packages and `uv tool` for
-`complexipy`.
+`complexipy`. Catalog status inspection during listing and `ayni install
+--check` is read-only for that manager; it does not prepare a manager or modify
+dependencies. Applied setup performs only the adapter-owned manager operations
+required for enabled requirements.
 
 ## Signal Coverage
 
@@ -45,6 +48,11 @@ test command when one exists. `--name` is test-only, and `--file` cannot be
 combined with `--package`. Unsupported or ambiguous selectors are rejected
 before a tool runs.
 
+Verification commands carry their originating contract and target, for example:
+`ayni verify test --config './.ayni.toml' --language python --root '.' --file
+'tests/test_api.py' --name 'test_create'`. Use only the selectors marked above;
+copy the exact command in an artifact finding rather than synthesizing one.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure roots in `[python].roots`
@@ -59,6 +67,13 @@ Size requires a budget entry and complexity requires `fn_cognitive`; either
 missing value produces a clear collector error. Coverage thresholds and
 dependency rules are optional: without `line_percent`, coverage has no policy
 threshold, and without `python.deps.forbidden`, no edges are forbidden.
+
+Maximum size and complexity boundaries are inclusive (`warn` and `fail` trigger
+at equality); coverage is an exclusive minimum boundary (equality passes that
+threshold). The default coverage collection requests branch evidence with
+`--cov-branch`. Line and branch coverage are independently enforced, and a
+configured metric with missing or unparseable evidence fails the row; overrides
+must preserve evidence for every configured metric.
 
 ## Configuration Example
 

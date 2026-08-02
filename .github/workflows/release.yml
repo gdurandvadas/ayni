@@ -66,7 +66,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build ayni
-        run: cargo build -p ayni-cli --release --target ${{ matrix.target }}
+        run: cargo build --locked -p ayni-cli --release --target ${{ matrix.target }}
 
       - name: Package binary
         env:

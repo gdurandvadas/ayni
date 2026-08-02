@@ -9,6 +9,10 @@ Ayni is an open-source code-quality signal tool for AI agents.
 - Use focused `verify` during implementation.
 - Run the full repository contract only at the final milestone gate.
 
+## Pull Requests
+
+- Use PR titles in the format `<change-type>(<scope>): <description>`.
+
 ## Documentation
 
 Read these before implementing anything. They are the source of truth for

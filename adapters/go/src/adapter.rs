@@ -1,11 +1,13 @@
 use crate::catalog::GO_CATALOG;
 use crate::collectors::GoCollector;
 use crate::discovery;
+use ayni_adapters_common::catalog::GENERIC_CATALOG_RUNTIME;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
-    CatalogEntry, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
-    LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts, ProjectDiscovery,
-    Scope, SignalCollector, SignalKind, VerificationSelectorSupport, VerificationTarget,
+    CatalogEntry, CatalogRuntime, ComplexityThresholdKind, DetectResult, ExecutionResolution,
+    Language, LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts,
+    ProjectDiscovery, Scope, SignalCollector, SignalKind, VerificationSelectorSupport,
+    VerificationTarget,
 };
 use std::path::Path;
 
@@ -82,6 +84,10 @@ impl LanguageAdapter for GoAdapter {
 
     fn catalog(&self) -> &'static [CatalogEntry] {
         GO_CATALOG
+    }
+
+    fn catalog_runtime(&self) -> &dyn CatalogRuntime {
+        &GENERIC_CATALOG_RUNTIME
     }
 
     fn collector(&self) -> &dyn SignalCollector {

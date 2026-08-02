@@ -1,12 +1,13 @@
-use crate::catalog::PYTHON_CATALOG;
+use crate::catalog::{PYTHON_CATALOG, PYTHON_CATALOG_RUNTIME};
 use crate::collectors::PythonCollector;
 use crate::discovery;
+use crate::package_manager;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
-    CatalogEntry, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
-    LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts, ProjectDiscovery,
-    Scope, SignalCollector, SignalKind, VerificationSelectorSupport, VerificationTarget,
-    detect_python_package_manager, resolve_python_package_manager,
+    CatalogEntry, CatalogRuntime, ComplexityThresholdKind, DetectResult, ExecutionResolution,
+    Language, LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts,
+    ProjectDiscovery, Scope, SignalCollector, SignalKind, VerificationSelectorSupport,
+    VerificationTarget,
 };
 use std::path::Path;
 
@@ -44,7 +45,7 @@ impl LanguageAdapter for PythonAdapter {
             };
         }
 
-        let pm = detect_python_package_manager(root);
+        let pm = package_manager::detect(root);
         let confidence = if pm.is_some() { 100 } else { 60 };
         let reason = if let Some(pm) = pm {
             format!(
@@ -67,24 +68,7 @@ impl LanguageAdapter for PythonAdapter {
     }
 
     fn resolve_execution(&self, repo_root: &Path, root: &Path) -> Option<ExecutionResolution> {
-        let resolution = resolve_python_package_manager(repo_root, root)?;
-        let kind = resolution.kind_label().to_string();
-        let runner = resolution.manager_label().to_string();
-        let resolved_from = resolution.resolved_from;
-        let install_cwd = match kind.as_str() {
-            "workspace_ancestor" => resolved_from.clone(),
-            _ => root.to_path_buf(),
-        };
-        Some(ExecutionResolution {
-            runner,
-            resolved_from,
-            kind,
-            source: String::from("python package manager"),
-            confidence: if resolution.ambiguous { 80 } else { 100 },
-            ambiguous: resolution.ambiguous,
-            install_cwd,
-            exec_cwd: root.to_path_buf(),
-        })
+        package_manager::resolve(repo_root, root)
     }
 
     fn discover_roots(&self, repo_root: &Path) -> Vec<String> {
@@ -104,6 +88,10 @@ impl LanguageAdapter for PythonAdapter {
 
     fn catalog(&self) -> &'static [CatalogEntry] {
         PYTHON_CATALOG
+    }
+
+    fn catalog_runtime(&self) -> &dyn CatalogRuntime {
+        &PYTHON_CATALOG_RUNTIME
     }
 
     fn collector(&self) -> &dyn SignalCollector {
@@ -153,7 +141,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn resolves_uv_workspace_ancestor() {
+    fn package_manager_resolution_matrix() {
         let dir = TempDir::new().expect("tempdir");
         fs::write(
             dir.path().join("pyproject.toml"),
@@ -175,6 +163,44 @@ members = ["libs/*"]
         assert_eq!(resolution.kind, "workspace_ancestor");
         assert_eq!(resolution.install_cwd, dir.path());
         assert_eq!(resolution.exec_cwd, dir.path().join("libs/math"));
+        assert!(resolution.ambiguous);
+
+        for (marker, manager) in [
+            ("uv.lock", "uv"),
+            ("poetry.lock", "poetry"),
+            ("pdm.lock", "pdm"),
+            ("Pipfile.lock", "pipenv"),
+            ("hatch.toml", "hatch"),
+            ("requirements.txt", "python"),
+        ] {
+            let direct = TempDir::new().expect("direct tempdir");
+            fs::write(direct.path().join(marker), "").expect("manager marker");
+            let resolution = adapter
+                .resolve_execution(direct.path(), direct.path())
+                .expect("direct resolution");
+            assert_eq!(resolution.runner, manager);
+            assert_eq!(resolution.kind, "direct_root");
+            assert_eq!(resolution.install_cwd, direct.path());
+            assert_eq!(resolution.exec_cwd, direct.path());
+        }
+
+        fs::write(dir.path().join("libs/math/poetry.lock"), "").expect("direct poetry");
+        let ambiguous = adapter
+            .resolve_execution(dir.path(), &dir.path().join("libs/math"))
+            .expect("ambiguous direct resolution");
+        assert_eq!(ambiguous.runner, "poetry");
+        assert_eq!(ambiguous.kind, "direct_root");
+        assert!(ambiguous.ambiguous);
+        assert_eq!(ambiguous.install_cwd, dir.path().join("libs/math"));
+
+        let fallback = TempDir::new().expect("fallback tempdir");
+        fs::write(fallback.path().join("Pipfile"), "").expect("pipfile");
+        let resolution = adapter
+            .resolve_execution(fallback.path(), fallback.path())
+            .expect("fallback resolution");
+        assert_eq!(resolution.runner, "python");
+        assert_eq!(resolution.kind, "fallback");
+        assert!(!resolution.ambiguous);
     }
 
     #[test]

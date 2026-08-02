@@ -1,6 +1,8 @@
-use super::util::{command_failure_from_output, package_manager_for_context, run_tool};
+use super::util::{command_failure_from_output, run_tool, tool_command};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{
-    format_command, run_command_for_context, run_command_for_context_streaming,
+    format_command, run_command_for_context_streaming_structured,
+    run_command_for_context_structured,
 };
 use ayni_adapters_common::failure::setup_failure;
 use ayni_core::{
@@ -10,17 +12,27 @@ use ayni_core::{
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let (output, runner) = if let Some((program, args, runner)) = test_override_command(context) {
-        (run_command_for_context(context, &program, &args)?, runner)
+        (
+            run_command_for_context_structured(context, &program, &args)?,
+            runner,
+        )
     } else {
-        let output = run_tool(
+        let (program, args) = tool_command(
             context,
             "vitest",
             &["run", "--reporter=json", "--passWithNoTests"],
-        )?;
-        let manager = package_manager_for_context(context);
-        (output, format!("{} exec vitest", manager.executable()))
+        );
+        let runner = format_command(&program, &args);
+        (
+            run_tool(
+                context,
+                "vitest",
+                &["run", "--reporter=json", "--passWithNoTests"],
+            )?,
+            runner,
+        )
     };
     let status_ok = output.status.success();
     let stdout_text = String::from_utf8_lossy(&output.stdout);
@@ -121,8 +133,8 @@ pub fn collect_selected(
     context: &RunContext,
     selection: &VerificationSelection,
     on_line: &mut dyn FnMut(&str),
-) -> Result<SignalRow, String> {
-    let (program, mut args) = selected_test_command(context)?;
+) -> CollectorResult {
+    let (program, mut args) = selected_test_command(context).map_err(CollectorError::Adapter)?;
     if let Some(file) = &context.scope.file {
         args.push(selected_file_argument(context, file));
     }
@@ -131,7 +143,7 @@ pub fn collect_selected(
         args.push(name.clone());
     }
     let runner = format_command(&program, &args);
-    let output = run_command_for_context_streaming(context, &program, &args, on_line)?;
+    let output = run_command_for_context_streaming_structured(context, &program, &args, on_line)?;
     build_row_from_output(context, output, runner)
 }
 
@@ -152,9 +164,11 @@ fn selected_file_argument(context: &RunContext, file: &str) -> String {
 
 fn selected_test_command(context: &RunContext) -> Result<(String, Vec<String>), String> {
     let (program, mut args, _) = test_override_command(context).unwrap_or_else(|| {
-        let manager = package_manager_for_context(context);
-        let (program, args) =
-            manager.exec_command("vitest", &["run", "--reporter=json", "--passWithNoTests"]);
+        let (program, args) = tool_command(
+            context,
+            "vitest",
+            &["run", "--reporter=json", "--passWithNoTests"],
+        );
         let runner = format_command(&program, &args);
         (program, args, runner)
     });
@@ -177,7 +191,7 @@ fn build_row_from_output(
     context: &RunContext,
     output: std::process::Output,
     runner: String,
-) -> Result<SignalRow, String> {
+) -> CollectorResult {
     let status_ok = output.status.success();
     let stdout_text = String::from_utf8_lossy(&output.stdout);
     let stderr_text = String::from_utf8_lossy(&output.stderr);

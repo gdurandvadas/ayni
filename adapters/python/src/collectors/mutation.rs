@@ -1,7 +1,8 @@
 use super::util::{
     command_failure_from_output, command_for_override_or_default, format_command,
-    prepare_report_path, run_command_for_context,
+    prepare_report_path, run_command_for_context_structured,
 };
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::xml;
 use ayni_core::{
     Budget, Language, Level, MutationOffender, MutationResult, Offenders, RunContext, Scope,
@@ -12,7 +13,7 @@ use serde_json::json;
 use std::fs;
 use std::path::Path;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     if !context.policy.checks.mutation {
         return Ok(SignalRow {
             kind: SignalKind::Mutation,
@@ -39,7 +40,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
 
     let (program, args) =
         command_for_override_or_default(context, SignalKind::Mutation, "mutmut", &["run"]);
-    let run_output = run_command_for_context(context, &program, &args)?;
+    let run_output = run_command_for_context_structured(context, &program, &args)?;
     if !run_output.status.success() {
         return Ok(error_row(
             context,
@@ -54,12 +55,13 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         ));
     }
 
-    let junit_path = prepare_report_path(context, "mutmut-junit.xml")?;
+    let junit_path =
+        prepare_report_path(context, "mutmut-junit.xml").map_err(CollectorError::Adapter)?;
     let (junit_program, mut junit_args) =
         command_for_override_or_default(context, SignalKind::Mutation, "mutmut", &["junitxml"]);
     junit_args.push(String::from("--suspicious-policy=failure"));
     junit_args.push(String::from("--untested-policy=failure"));
-    let junit_output = run_command_for_context(context, &junit_program, &junit_args)?;
+    let junit_output = run_command_for_context_structured(context, &junit_program, &junit_args)?;
     if !junit_output.status.success() {
         return Ok(error_row(
             context,
@@ -73,9 +75,10 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             ),
         ));
     }
-    fs::write(&junit_path, &junit_output.stdout)
-        .map_err(|error| format!("failed to write {}: {error}", junit_path.display()))?;
-    let report = parse_junit_report(&junit_path)?;
+    fs::write(&junit_path, &junit_output.stdout).map_err(|error| {
+        CollectorError::Adapter(format!("failed to write {}: {error}", junit_path.display()))
+    })?;
+    let report = parse_junit_report(&junit_path).map_err(CollectorError::Adapter)?;
     let survived = report.failures + report.errors;
     let killed = report
         .tests

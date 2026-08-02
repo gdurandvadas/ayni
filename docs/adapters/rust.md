@@ -42,6 +42,11 @@ test-name filters for `test`. `--name` is test-only, and `--file` cannot be
 combined with `--package`. Unsupported or ambiguous selectors are rejected
 before Cargo or another tool runs.
 
+Verification commands carry their originating contract and target, for example:
+`ayni verify test --config './.ayni.toml' --language rust --root '.' --package
+'my-crate' --name 'my_test'`. Use only the selectors marked above; copy the
+exact command in an artifact finding rather than synthesizing one.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure Rust roots in `[rust].roots`
@@ -56,6 +61,11 @@ Size requires at least one budget entry and complexity requires
 Coverage thresholds and dependency rules are optional: without `line_percent`,
 coverage has no policy threshold, and without `rust.deps.forbidden`, no edges
 are forbidden.
+
+Maximum size and complexity boundaries are inclusive (`warn` and `fail` trigger
+at equality); coverage is an exclusive minimum boundary (equality passes that
+threshold). Line and branch coverage are independent: every configured metric
+must have finite, parseable evidence or the coverage row fails closed.
 
 ## Configuration Example
 

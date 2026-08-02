@@ -1,4 +1,5 @@
-use ayni_adapters_common::exec::{DEFAULT_TOOL_TIMEOUT, run_command};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_core::{
     Budget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope, SignalKind,
     SignalResult, SignalRow,
@@ -8,7 +9,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let rules = context
         .policy
         .rust
@@ -17,14 +18,15 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .map(|value| value.forbidden.clone())
         .unwrap_or_default();
 
-    let metadata = load_metadata(&context.execution.exec_cwd)?;
+    let metadata = load_metadata(context)?;
     let analysis = analyze_deps(
         &metadata,
         &context.repo_root,
         &context.scope,
         &context.target_root,
         &rules,
-    )?;
+    )
+    .map_err(CollectorError::Adapter)?;
 
     Ok(SignalRow {
         kind: SignalKind::Deps,
@@ -85,22 +87,28 @@ struct DepsAnalysis {
     offenders: Vec<DepsOffender>,
 }
 
-fn load_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
+struct MemberGraph {
+    crate_count: u64,
+    edges: BTreeSet<(String, String)>,
+}
+
+fn load_metadata(context: &RunContext) -> Result<CargoMetadata, CollectorError> {
     let args = vec![
         String::from("metadata"),
         String::from("--format-version"),
         String::from("1"),
     ];
-    let output = run_command(repo_root, "cargo", &args, DEFAULT_TOOL_TIMEOUT)?;
+    let output = run_command_for_context_structured(context, "cargo", &args)?;
     if !output.status.success() {
-        return Err(format!(
+        return Err(CollectorError::Adapter(format!(
             "cargo metadata failed (exit {}): {}",
             output.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        )));
     }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("failed to parse cargo metadata output: {error}"))
+    serde_json::from_slice(&output.stdout).map_err(|error| {
+        CollectorError::Adapter(format!("failed to parse cargo metadata output: {error}"))
+    })
 }
 
 fn analyze_deps(
@@ -110,6 +118,27 @@ fn analyze_deps(
     workdir: &Path,
     forbidden: &BTreeMap<String, Vec<String>>,
 ) -> Result<DepsAnalysis, String> {
+    let graph = scoped_member_graph(metadata, repo_root, scope, workdir)?;
+    let compiled_rules = compile_rules(forbidden)?;
+    let offenders = matching_offenders(&graph.edges, &compiled_rules);
+
+    Ok(DepsAnalysis {
+        result: DepsResult {
+            crate_count: graph.crate_count,
+            edge_count: graph.edges.len() as u64,
+            violation_count: offenders.len() as u64,
+            failure: None,
+        },
+        offenders,
+    })
+}
+
+fn scoped_member_graph(
+    metadata: &CargoMetadata,
+    repo_root: &Path,
+    scope: &Scope,
+    workdir: &Path,
+) -> Result<MemberGraph, String> {
     let canonical_repo_root = repo_root.canonicalize().map_err(|error| {
         format!(
             "failed to canonicalize repo root {}: {error}",
@@ -147,21 +176,34 @@ fn analyze_deps(
         .map(|member| (member.id.as_str(), member))
         .collect();
 
-    // Scope behavior is deterministic:
-    // - root scope: all workspace members are visible
-    // - package scope: only that member is visible
-    // - file/path scope: members that contain the selected path, or live under the selected
-    //   directory, are visible
-    //
-    // Deps scoping intentionally keeps all outgoing workspace-member edges from visible
-    // sources, even when the destination member is outside the visible set. This prevents
-    // scoped runs from hiding forbidden edges that cross the visibility boundary.
-    //
-    // Invariants:
-    // - crate_count: number of visible source members
-    // - edge_count: unique workspace-member edges considered from visible sources
-    // - offenders: violations among considered edges
-    let mut edges = BTreeSet::<(String, String)>::new();
+    let edges = workspace_member_edges(metadata, &visible_ids, &root_member_ids, &member_by_id);
+    Ok(MemberGraph {
+        crate_count: visible_members.len() as u64,
+        edges,
+    })
+}
+
+// Scope behavior is deterministic:
+// - root scope: all workspace members are visible
+// - package scope: only that member is visible
+// - file/path scope: members that contain the selected path, or live under the selected
+//   directory, are visible
+//
+// Deps scoping intentionally keeps all outgoing workspace-member edges from visible
+// sources, even when the destination member is outside the visible set. This prevents
+// scoped runs from hiding forbidden edges that cross the visibility boundary.
+//
+// Invariants:
+// - crate_count: number of visible source members
+// - edge_count: unique workspace-member edges considered from visible sources
+// - offenders: violations among considered edges
+fn workspace_member_edges(
+    metadata: &CargoMetadata,
+    visible_ids: &BTreeSet<&str>,
+    root_member_ids: &BTreeSet<&str>,
+    member_by_id: &BTreeMap<&str, &MemberInfo>,
+) -> BTreeSet<(String, String)> {
+    let mut edges = BTreeSet::new();
     if let Some(resolve) = &metadata.resolve {
         for node in &resolve.nodes {
             if !visible_ids.contains(node.id.as_str()) {
@@ -183,11 +225,16 @@ fn analyze_deps(
             }
         }
     }
+    edges
+}
 
-    let compiled_rules = compile_rules(forbidden)?;
+fn matching_offenders(
+    edges: &BTreeSet<(String, String)>,
+    compiled_rules: &[CompiledRule],
+) -> Vec<DepsOffender> {
     let mut offenders = Vec::new();
-    for (from, to) in &edges {
-        for rule in &compiled_rules {
+    for (from, to) in edges {
+        for rule in compiled_rules {
             if rule.from.matches(from) && rule.to.matches(to) {
                 offenders.push(DepsOffender {
                     from: from.clone(),
@@ -206,15 +253,7 @@ fn analyze_deps(
             .then_with(|| left.rule.cmp(&right.rule))
     });
 
-    Ok(DepsAnalysis {
-        result: DepsResult {
-            crate_count: visible_members.len() as u64,
-            edge_count: edges.len() as u64,
-            violation_count: offenders.len() as u64,
-            failure: None,
-        },
-        offenders,
-    })
+    offenders
 }
 
 fn workspace_members(

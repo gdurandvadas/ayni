@@ -12,6 +12,8 @@ fn verify_test_cli_parses_focused_node_selectors() {
         "test",
         "--language",
         "node",
+        "--root",
+        "frontend",
         "--package",
         "@guita/web",
         "--file",
@@ -28,6 +30,7 @@ fn verify_test_cli_parses_focused_node_selectors() {
         panic!("verify test command");
     };
     assert_eq!(options.package.as_deref(), Some("@guita/web"));
+    assert_eq!(options.common.root.as_deref(), Some("frontend"));
     assert_eq!(
         options.file.as_deref(),
         Some("frontend/apps/web/src/lib/money.test.ts")
@@ -458,8 +461,7 @@ fn install_bootstraps_policy_for_every_selected_language() {
         .expect("package manifest");
     let selected = BTreeSet::from([Language::Rust, Language::Node]);
 
-    install_impl(&dir.path().to_string_lossy(), &selected, false).expect("install");
-    let policy = AyniPolicy::load(dir.path()).expect("policy");
+    let policy = crate::install::prepare_install_policy(dir.path(), &selected).expect("policy");
 
     assert_eq!(
         policy.enabled_languages().expect("languages"),
@@ -645,6 +647,54 @@ enabled = ["rust"]
     };
 
     assert!(!catalog_entry_enabled_for_policy(&policy, &entry));
+}
+
+#[test]
+fn catalog_entry_is_eligible_for_any_enabled_signal() {
+    let cases = [
+        ("test-only", &[SignalKind::Test][..], true, false, true),
+        (
+            "coverage-only",
+            &[SignalKind::Coverage][..],
+            false,
+            true,
+            true,
+        ),
+        (
+            "test-and-coverage-test-enabled",
+            &[SignalKind::Test, SignalKind::Coverage][..],
+            true,
+            false,
+            true,
+        ),
+        (
+            "test-and-coverage-both-disabled",
+            &[SignalKind::Test, SignalKind::Coverage][..],
+            false,
+            false,
+            false,
+        ),
+        ("unassociated", &[][..], false, false, true),
+    ];
+
+    for (name, signals, test, coverage, expected) in cases {
+        let policy: ayni_core::AyniPolicy = toml::from_str(&format!(
+            "[checks]\ntest = {test}\ncoverage = {coverage}\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n"
+        ))
+        .expect("policy");
+        let entry = CatalogEntry {
+            name,
+            check: None,
+            installer: Installer::Bundled,
+            for_signals: signals,
+            opt_in: false,
+        };
+        assert_eq!(
+            catalog_entry_enabled_for_policy(&policy, &entry),
+            expected,
+            "{name}"
+        );
+    }
 }
 
 #[test]

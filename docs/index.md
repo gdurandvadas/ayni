@@ -8,6 +8,9 @@ locally, and turn results into signals that humans and agents can act on.
 
 ## Start here
 
+- Run `ayni install` to bootstrap the Rust policy template. For non-Rust or
+  polyglot repositories, select every intended template explicitly with
+  repeatable `--language` values, then run `ayni agents sync` and `ayni analyze`.
 - [CLI reference](/cli)
 - [Configuration reference](/product/config)
 - [Signal contract index](/product/signals)

@@ -41,6 +41,11 @@ For `test`, pass a Go package and optional name; the name becomes an exact
 combined with `--package`. Unsupported or ambiguous selectors are rejected
 before `go` runs.
 
+Verification commands carry their originating contract and target, for example:
+`ayni verify test --config './.ayni.toml' --language go --root 'services/api'
+--package './internal/api' --name 'TestCreate'`. Use only the selectors marked
+above; copy the exact command in an artifact finding rather than synthesizing one.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure Go roots in `[go].roots`
@@ -54,6 +59,13 @@ Size requires a budget entry and complexity requires `fn_cyclomatic`; either
 missing value produces a clear collector error. Coverage thresholds and
 dependency rules are optional: without `line_percent`, coverage has no policy
 threshold, and without `go.deps.forbidden`, no edges are forbidden.
+
+Maximum size and complexity boundaries are inclusive (`warn` and `fail` trigger
+at equality); coverage is an exclusive minimum boundary (equality passes that
+threshold). Line and branch coverage are independent and configured evidence
+fails closed when it is missing or unparseable. Standard Go coverage profiles
+provide statement coverage only: configuring `branch_percent` therefore fails
+the coverage row rather than reinterpreting statement coverage as branches.
 
 ## Configuration Example
 

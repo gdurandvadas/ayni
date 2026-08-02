@@ -147,6 +147,31 @@ fn completion_counts_failed_rows_as_completed_targets() {
 }
 
 #[test]
+fn missing_expected_signal_row() {
+    let fixture = Fixture::new(&["good"], true);
+    fixture.add_rust_root("good");
+
+    let output = fixture.run(&["analyze", "--json"]);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let mut artifact = fixture.artifact(".ayni/last/signals.json");
+    artifact["rows"] = serde_json::json!([]);
+    artifact["applied_thresholds"] = serde_json::json!([]);
+    artifact["offender_summaries"] = serde_json::json!([]);
+    artifact["aggregate"] = serde_json::json!({
+        "status": "fail",
+        "total_rows": 0,
+        "passing_rows": 0,
+        "failing_rows": 0,
+        "warning_offenders": 0,
+        "failing_offenders": 0
+    });
+
+    let error = serde_json::from_value::<ayni_core::RunArtifact>(artifact)
+        .expect_err("complete evidence cannot omit its expected signal row");
+    assert!(error.to_string().contains("must contain rows"), "{error}");
+}
+
+#[test]
 fn completion_verify_failure_replaces_only_requested_scope_artifact() {
     let fixture = Fixture::new(&["missing"], true);
     let analyze_path = fixture.root.join(".ayni/last/signals.json");
@@ -169,4 +194,27 @@ fn completion_verify_failure_replaces_only_requested_scope_artifact() {
         fs::read_to_string(analyze_path).expect("analyze evidence"),
         "repository-evidence\n"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn configured_root_escape_is_rejected_by_analyze_before_artifact_writes() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new(&["escape-link"], true);
+    let outside_dir = TempDir::new().expect("outside tempdir");
+    let outside = outside_dir.path();
+    fs::write(
+        outside.join("Cargo.toml"),
+        "[package]\nname = \"outside\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("outside manifest");
+    symlink(outside, fixture.root.join("escape-link")).expect("escape link");
+
+    let output = fixture.run(&["analyze", "--json"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("configured root 'escape-link'"), "{stderr}");
+    assert!(stderr.contains("repository containment"), "{stderr}");
+    assert!(!fixture.root.join(".ayni/last/signals.json").exists());
 }

@@ -1,209 +1,237 @@
 //! Catalog execution engine: checks tool status and runs installers.
 //!
 //! `ayni-core` owns the catalog *contract* (`CatalogEntry`, `Installer`,
-//! `VersionCheck`, `ToolStatus`, `InstallContext`); this module owns the
+//! `VersionCheck`, `ToolStatus`, `CatalogRuntime`); this module owns the
 //! process execution behind it, keeping tool invocation out of core.
 
-use ayni_core::{CatalogEntry, InstallContext, Installer, PythonPackageManager, ToolStatus};
-use std::fs;
+use crate::exec::{run_command_streaming_structured, run_command_structured};
+use crate::failure::{catalog_error_from_execution_error, concise_failure_message};
+use ayni_core::{
+    CatalogEntry, CatalogOperation, CatalogOperationError, CatalogOperationErrorKind,
+    CatalogRuntime, ExecutionResolution, Installer, ToolStatus,
+};
 use std::path::Path;
-use std::process::Command;
+use std::time::Duration;
 
-/// Determines whether a catalog tool is missing, outdated, or current in the
-/// given install context.
-pub fn tool_status(entry: &CatalogEntry, ctx: InstallContext<'_>) -> ToolStatus {
-    let Some(check) = &entry.check else {
-        return match entry.installer {
-            Installer::NodePackage {
-                package, version, ..
-            } => node_package_status(ctx.cwd, package, version),
-            Installer::Rustup { component } => rustup_component_status(component),
-            Installer::PythonPackage {
-                import_name,
-                version,
-                ..
-            } => python_package_status(ctx, import_name, version),
-            Installer::UvTool { package, version } => uv_tool_status(package, version),
-            Installer::GradleTask { task } => gradle_task_status(ctx, task),
-            Installer::GradleTaskAny { tasks } => gradle_task_any_status(ctx, tasks),
-            Installer::PythonRuntime => python_runtime_status(),
-            _ => ToolStatus::Missing,
+/// Shared runtime for catalog entries whose complete behavior is declarative.
+pub struct GenericCatalogRuntime;
+
+pub static GENERIC_CATALOG_RUNTIME: GenericCatalogRuntime = GenericCatalogRuntime;
+
+impl CatalogRuntime for GenericCatalogRuntime {
+    fn status(
+        &self,
+        entry: &CatalogEntry,
+        execution: &ExecutionResolution,
+        timeout: Duration,
+    ) -> Result<ToolStatus, CatalogOperationError> {
+        if let Installer::AdapterManaged { key, .. } = &entry.installer {
+            return Err(CatalogOperationError::contract(
+                CatalogOperation::Status,
+                format!("adapter-managed catalog key `{key}` was passed to the generic runtime"),
+            ));
+        }
+        if let Some(check) = &entry.check {
+            return probe(
+                check.command,
+                check.args,
+                check.contains,
+                &execution.install_cwd,
+                timeout,
+                matches!(
+                    entry.installer,
+                    Installer::Cargo { .. } | Installer::GoInstall { .. }
+                ),
+            );
+        }
+        match &entry.installer {
+            Installer::Rustup { component } => {
+                let output = run_status(
+                    "rustup",
+                    &["component", "list", "--installed"],
+                    &execution.install_cwd,
+                    timeout,
+                )
+                .map_err(|error| {
+                    catalog_error_from_execution_error(CatalogOperation::Status, &error)
+                })?;
+                if !output.status.success() {
+                    return Ok(ToolStatus::Missing);
+                }
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                Ok(
+                    if rustup_installed_lines_contain_component(&stdout, component) {
+                        ToolStatus::Current
+                    } else {
+                        ToolStatus::Missing
+                    },
+                )
+            }
+            Installer::GradleTask { task } => gradle_status(execution, &[*task], timeout),
+            Installer::GradleTaskAny { tasks } => gradle_status(execution, tasks, timeout),
+            Installer::AdapterManaged { .. } => unreachable!("rejected before status dispatch"),
+            Installer::Cargo { .. }
+            | Installer::GoInstall { .. }
+            | Installer::Bundled
+            | Installer::Custom { .. } => Ok(ToolStatus::Missing),
+        }
+    }
+
+    fn install(
+        &self,
+        entry: &CatalogEntry,
+        execution: &ExecutionResolution,
+        timeout: Duration,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<(), CatalogOperationError> {
+        let (program, args) = generic_install_command(entry)?;
+        let Some((program, args)) = program.zip(args) else {
+            return Ok(());
         };
-    };
-    let mut command = Command::new(check.command);
-    command
-        .args(check.args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    if let Some(cwd) = ctx.cwd {
-        command.current_dir(cwd);
+        let output = run_command_streaming_structured(
+            &execution.install_cwd,
+            program,
+            &args,
+            timeout,
+            |line| on_line(line),
+        )
+        .map_err(|error| catalog_error_from_execution_error(CatalogOperation::Install, &error))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(CatalogOperationError::new(
+                CatalogOperation::Install,
+                CatalogOperationErrorKind::NonZeroExit,
+                Some(crate::exec::format_command(program, &args)),
+                Some(execution.install_cwd.clone()),
+                output.status.code(),
+                format!(
+                    "installer for `{}` exited unsuccessfully: {}",
+                    entry.name,
+                    concise_failure_message(&output)
+                ),
+            ))
+        }
     }
-    let Ok(output) = command.output() else {
-        return ToolStatus::Missing;
-    };
+}
 
+fn probe(
+    program: &str,
+    args: &[&str],
+    contains: Option<&str>,
+    cwd: &Path,
+    timeout: Duration,
+    missing_when_unavailable: bool,
+) -> Result<ToolStatus, CatalogOperationError> {
+    let output = match run_status(program, args, cwd, timeout) {
+        Ok(output) => output,
+        Err(error) if missing_when_unavailable && executable_not_found(&error) => {
+            return Ok(ToolStatus::Missing);
+        }
+        Err(error) => {
+            return Err(catalog_error_from_execution_error(
+                CatalogOperation::Status,
+                &error,
+            ));
+        }
+    };
     if !output.status.success() {
-        return ToolStatus::Missing;
+        return Ok(ToolStatus::Missing);
     }
+    Ok(match contains {
+        Some(required) if !String::from_utf8_lossy(&output.stdout).contains(required) => {
+            ToolStatus::Outdated
+        }
+        _ => ToolStatus::Current,
+    })
+}
 
-    let Some(required) = check.contains else {
-        return ToolStatus::Current;
-    };
+fn executable_not_found(error: &crate::exec::ExecutionError) -> bool {
+    error.kind == crate::exec::ExecutionErrorKind::Spawn
+        && error.detail.contains("No such file or directory")
+}
+
+fn run_status(
+    program: &str,
+    args: &[&str],
+    cwd: &Path,
+    timeout: Duration,
+) -> crate::exec::ExecutionResult {
+    let args = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
+    run_command_structured(cwd, program, &args, timeout)
+}
+
+fn gradle_status(
+    execution: &ExecutionResolution,
+    tasks: &[&str],
+    timeout: Duration,
+) -> Result<ToolStatus, CatalogOperationError> {
+    let output = run_status(
+        &execution.runner,
+        &["tasks", "--all", "--quiet"],
+        &execution.install_cwd,
+        timeout,
+    )
+    .map_err(|error| catalog_error_from_execution_error(CatalogOperation::Status, &error))?;
+    if !output.status.success() {
+        return Ok(ToolStatus::Missing);
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.contains(required) {
-        ToolStatus::Current
-    } else {
-        ToolStatus::Outdated
-    }
-}
-
-/// Installs a catalog tool with its declared installer.
-pub fn install_tool(entry: &CatalogEntry, ctx: InstallContext<'_>) -> Result<(), String> {
-    install_with(&entry.installer, entry.name, ctx)
-}
-
-fn install_with(
-    installer: &Installer,
-    tool_name: &str,
-    ctx: InstallContext<'_>,
-) -> Result<(), String> {
-    match installer {
-        Installer::Bundled | Installer::PythonRuntime => Ok(()),
-        Installer::Cargo {
-            crate_name,
-            version,
-        } => install_cargo(crate_name, *version, tool_name),
-        Installer::Rustup { component } => {
-            run_cmd("rustup", &["component", "add", component], tool_name)
-        }
-        Installer::GoInstall { module, version } => install_go(module, *version, tool_name),
-        Installer::NpmGlobal { package, version } => {
-            install_npm_global(package, *version, tool_name)
-        }
-        Installer::NodePackage {
-            package,
-            version,
-            dev,
-        } => install_node_package(ctx, package, *version, *dev, tool_name),
-        Installer::PythonPackage {
-            package,
-            version,
-            dev,
-            ..
-        } => install_python_package(ctx, package, *version, *dev, tool_name),
-        Installer::UvTool { package, version } => install_uv_tool(package, *version, tool_name),
-        Installer::GradleTask { .. } | Installer::GradleTaskAny { .. } => Ok(()),
-        Installer::Custom { program, args } => run_cmd_in(program, args, tool_name, ctx.cwd),
-    }
-}
-
-fn install_cargo(crate_name: &str, version: Option<&str>, tool_name: &str) -> Result<(), String> {
-    let mut args = vec!["install", "--locked", crate_name];
-    if let Some(version) = version {
-        args.push("--version");
-        args.push(version);
-    }
-    run_cmd("cargo", &args, tool_name)
-}
-
-fn install_go(module: &str, version: Option<&str>, tool_name: &str) -> Result<(), String> {
-    let target = format!("{}@{}", module, version.unwrap_or("latest"));
-    run_cmd("go", &["install", target.as_str()], tool_name)
-}
-
-fn install_npm_global(package: &str, version: Option<&str>, tool_name: &str) -> Result<(), String> {
-    let target = version.map_or_else(
-        || package.to_owned(),
-        |version| format!("{package}@{version}"),
-    );
-    run_cmd("npm", &["install", "-g", target.as_str()], tool_name)
-}
-
-fn install_node_package(
-    ctx: InstallContext<'_>,
-    package: &str,
-    version: Option<&str>,
-    dev: bool,
-    tool_name: &str,
-) -> Result<(), String> {
-    let cwd = ctx
-        .cwd
-        .ok_or_else(|| format!("missing install root for local node package {tool_name}"))?;
-    let manager = ctx
-        .node_package_manager
-        .ok_or_else(|| format!("missing package manager for local node package {tool_name}"))?;
-    let target = version.map_or_else(
-        || package.to_string(),
-        |version| format!("{package}@{version}"),
-    );
-    let args = manager.add_dependency_args(&target, dev);
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_cmd_in(manager.executable(), &arg_refs, tool_name, Some(cwd))
-}
-
-fn install_python_package(
-    ctx: InstallContext<'_>,
-    package: &str,
-    version: Option<&str>,
-    dev: bool,
-    tool_name: &str,
-) -> Result<(), String> {
-    let cwd = ctx
-        .cwd
-        .ok_or_else(|| format!("missing install root for local python package {tool_name}"))?;
-    let manager = ctx
-        .python_package_manager
-        .unwrap_or(PythonPackageManager::Pip);
-    let target = version.map_or_else(
-        || package.to_string(),
-        |version| format!("{package}=={version}"),
-    );
-    let args = manager.add_dependency_args(&target, dev);
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    run_cmd_in(manager.executable(), &arg_refs, tool_name, Some(cwd))
-}
-
-fn install_uv_tool(package: &str, version: Option<&str>, tool_name: &str) -> Result<(), String> {
-    let target = version.map_or_else(
-        || package.to_string(),
-        |version| format!("{package}=={version}"),
-    );
-    run_cmd(
-        "uv",
-        &["tool", "install", "--force", "--upgrade", target.as_str()],
-        tool_name,
+    Ok(
+        if tasks
+            .iter()
+            .any(|task| gradle_task_list_contains(&stdout, task))
+        {
+            ToolStatus::Current
+        } else {
+            ToolStatus::Missing
+        },
     )
 }
 
-fn run_cmd(program: &str, args: &[&str], tool_name: &str) -> Result<(), String> {
-    run_cmd_in(program, args, tool_name, None)
-}
+type InstallCommand = (Option<&'static str>, Option<Vec<String>>);
 
-fn run_cmd_in(
-    program: &str,
-    args: &[&str],
-    tool_name: &str,
-    cwd: Option<&Path>,
-) -> Result<(), String> {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit());
-    if let Some(cwd) = cwd {
-        command.current_dir(cwd);
-    }
-    let status = command
-        .status()
-        .map_err(|error| format!("failed to run {program} for {tool_name}: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "{program} failed for {tool_name} (exit {})",
-            status.code().unwrap_or(-1)
-        ))
-    }
+fn generic_install_command(entry: &CatalogEntry) -> Result<InstallCommand, CatalogOperationError> {
+    let command = match &entry.installer {
+        Installer::Bundled | Installer::GradleTask { .. } | Installer::GradleTaskAny { .. } => {
+            (None, None)
+        }
+        Installer::Cargo {
+            crate_name,
+            version,
+        } => {
+            let mut args = vec!["install".into(), "--locked".into(), (*crate_name).into()];
+            if let Some(version) = version {
+                args.extend(["--version".into(), (*version).into()]);
+            }
+            (Some("cargo"), Some(args))
+        }
+        Installer::Rustup { component } => (
+            Some("rustup"),
+            Some(vec!["component".into(), "add".into(), (*component).into()]),
+        ),
+        Installer::GoInstall { module, version } => (
+            Some("go"),
+            Some(vec![
+                "install".into(),
+                format!("{}@{}", module, version.unwrap_or("latest")),
+            ]),
+        ),
+        Installer::Custom { program, args } => (
+            Some(*program),
+            Some(args.iter().map(|arg| (*arg).to_string()).collect()),
+        ),
+        Installer::AdapterManaged { key, .. } => {
+            return Err(CatalogOperationError::contract(
+                CatalogOperation::Install,
+                format!("adapter-managed catalog key `{key}` was passed to the generic runtime"),
+            ));
+        }
+    };
+    Ok(command)
 }
 
 /// Whether `rustup component list --installed` contains this component.
@@ -212,25 +240,6 @@ fn run_cmd_in(
 /// `llvm-tools-preview`); the installed list uses shorter names such as
 /// `llvm-tools-aarch64-apple-darwin`, so we match on stable prefixes and strip
 /// the common `-preview` suffix when needed.
-fn rustup_component_status(component: &str) -> ToolStatus {
-    let mut command = Command::new("rustup");
-    command
-        .args(["component", "list", "--installed"])
-        .stdout(std::process::Stdio::piped());
-    let Ok(output) = command.output() else {
-        return ToolStatus::Missing;
-    };
-    if !output.status.success() {
-        return ToolStatus::Missing;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if rustup_installed_lines_contain_component(&stdout, component) {
-        ToolStatus::Current
-    } else {
-        ToolStatus::Missing
-    }
-}
-
 fn rustup_installed_lines_contain_component(list_stdout: &str, component: &str) -> bool {
     let prefixes = rustup_component_list_prefixes(component);
     for line in list_stdout.lines() {
@@ -255,130 +264,6 @@ fn rustup_component_list_prefixes(component: &str) -> Vec<&str> {
     out
 }
 
-fn python_runtime_status() -> ToolStatus {
-    for program in ["python3", "python"] {
-        let Ok(output) = Command::new(program)
-            .arg("--version")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
-        else {
-            continue;
-        };
-        if output.status.success() {
-            return ToolStatus::Current;
-        }
-    }
-    ToolStatus::Missing
-}
-
-fn python_package_status(
-    ctx: InstallContext<'_>,
-    import_name: &str,
-    _version: Option<&str>,
-) -> ToolStatus {
-    let manager = ctx
-        .python_package_manager
-        .unwrap_or(PythonPackageManager::Pip);
-    let script = format!(
-        "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('{import_name}') else 1)"
-    );
-    let (program, args) = if manager == PythonPackageManager::Pip {
-        (String::from("python"), vec![String::from("-c"), script])
-    } else {
-        let script_ref = script.as_str();
-        manager.run_command("python", &["-c", script_ref])
-    };
-    let mut command = Command::new(program);
-    command
-        .args(args.iter().map(String::as_str))
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    if let Some(cwd) = ctx.cwd {
-        command.current_dir(cwd);
-    }
-    let Ok(output) = command.output() else {
-        return ToolStatus::Missing;
-    };
-    if output.status.success() {
-        ToolStatus::Current
-    } else {
-        ToolStatus::Missing
-    }
-}
-
-fn uv_tool_status(package: &str, version: Option<&str>) -> ToolStatus {
-    let output = Command::new("uv")
-        .args(["tool", "list"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output();
-    let Ok(output) = output else {
-        return ToolStatus::Missing;
-    };
-    if !output.status.success() {
-        return ToolStatus::Missing;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let Some(line) = stdout
-        .lines()
-        .find(|line| line.split_whitespace().next() == Some(package))
-    else {
-        return ToolStatus::Missing;
-    };
-    if let Some(required) = version
-        && !line.contains(required)
-    {
-        return ToolStatus::Outdated;
-    }
-    if uv_tool_command_runs(package) {
-        ToolStatus::Current
-    } else {
-        ToolStatus::Missing
-    }
-}
-
-fn uv_tool_command_runs(package: &str) -> bool {
-    Command::new("uv")
-        .args(["tool", "run", package, "--help"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-fn gradle_task_status(ctx: InstallContext<'_>, task: &str) -> ToolStatus {
-    gradle_task_any_status(ctx, &[task])
-}
-
-fn gradle_task_any_status(ctx: InstallContext<'_>, tasks: &[&str]) -> ToolStatus {
-    let Some(cwd) = ctx.cwd else {
-        return ToolStatus::Missing;
-    };
-    let runner = ctx.gradle_runner.unwrap_or("gradle");
-    let output = Command::new(runner)
-        .args(["tasks", "--all", "--quiet"])
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output();
-    let Ok(output) = output else {
-        return ToolStatus::Missing;
-    };
-    if !output.status.success() {
-        return ToolStatus::Missing;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if tasks
-        .iter()
-        .any(|task| gradle_task_list_contains(&stdout, task))
-    {
-        ToolStatus::Current
-    } else {
-        ToolStatus::Missing
-    }
-}
-
 fn gradle_task_list_contains(stdout: &str, task: &str) -> bool {
     let suffix = format!(":{task}");
     stdout.lines().any(|line| {
@@ -387,59 +272,139 @@ fn gradle_task_list_contains(stdout: &str, task: &str) -> bool {
     })
 }
 
-fn node_package_status(cwd: Option<&Path>, package: &str, version: Option<&str>) -> ToolStatus {
-    let Some(cwd) = cwd else {
-        return ToolStatus::Missing;
-    };
-    let manifest_path = cwd.join("package.json");
-    let Ok(content) = fs::read_to_string(&manifest_path) else {
-        return ToolStatus::Missing;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return ToolStatus::Missing;
-    };
-    let found = [
-        "dependencies",
-        "devDependencies",
-        "optionalDependencies",
-        "peerDependencies",
-    ]
-    .iter()
-    .find_map(|section| {
-        value
-            .get(*section)
-            .and_then(serde_json::Value::as_object)
-            .and_then(|deps| deps.get(package))
-            .and_then(serde_json::Value::as_str)
-    });
-    let Some(found) = found else {
-        return ToolStatus::Missing;
-    };
-    if !node_dependency_installed(cwd, package) {
-        return ToolStatus::Missing;
-    }
-    match version {
-        Some(required) if !found.contains(required) => ToolStatus::Outdated,
-        _ => ToolStatus::Current,
-    }
-}
-
-fn node_dependency_installed(cwd: &Path, package: &str) -> bool {
-    let mut path = cwd.join("node_modules");
-    for part in package.split('/') {
-        path.push(part);
-    }
-    path.join("package.json").is_file()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{node_package_status, rustup_installed_lines_contain_component, tool_status};
-    use ayni_core::{CatalogEntry, InstallContext, Installer, ToolStatus};
+    use super::{GENERIC_CATALOG_RUNTIME, rustup_installed_lines_contain_component};
+    use ayni_core::{
+        CatalogEntry, CatalogOperation, CatalogOperationErrorKind, CatalogRuntime,
+        ExecutionResolution, Installer, ToolStatus, VersionCheck,
+    };
     use std::fs;
+    use std::io::{self, Write};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::time::Duration;
     use tempfile::TempDir;
+
+    fn test_child(test_name: &str, extra: &[String]) -> (&'static str, &'static [&'static str]) {
+        let executable = std::env::current_exe().expect("test executable path");
+        let mut args = vec![
+            String::from("--ignored"),
+            String::from("--exact"),
+            format!("catalog::tests::{test_name}"),
+            String::from("--nocapture"),
+        ];
+        args.extend_from_slice(extra);
+        let program = Box::leak(executable.to_string_lossy().into_owned().into_boxed_str());
+        let args = args
+            .into_iter()
+            .map(|arg| &*Box::leak(arg.into_boxed_str()))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        (program, Box::leak(args))
+    }
+
+    fn execution(cwd: &Path) -> ExecutionResolution {
+        ExecutionResolution::direct("runner", cwd.to_path_buf(), "test", 100)
+    }
+
+    #[test]
+    fn status_probe_times_out() {
+        let dir = TempDir::new().expect("tempdir");
+        let (program, args) = test_child("fixture_never_exits", &[]);
+        let entry = CatalogEntry {
+            name: "timeout-probe",
+            check: Some(VersionCheck {
+                command: program,
+                args,
+                contains: None,
+            }),
+            installer: Installer::Bundled,
+            for_signals: &[],
+            opt_in: false,
+        };
+        let error = GENERIC_CATALOG_RUNTIME
+            .status(&entry, &execution(dir.path()), Duration::from_millis(100))
+            .expect_err("status probe must time out");
+        assert_eq!(error.operation, CatalogOperation::Status);
+        assert_eq!(error.kind, CatalogOperationErrorKind::Timeout);
+        assert!(error.command.is_some());
+        assert_eq!(error.cwd.as_deref(), Some(dir.path()));
+    }
+
+    #[test]
+    fn installer_managed_tool_missing_from_path_is_installable() {
+        let dir = TempDir::new().expect("tempdir");
+        let entry = CatalogEntry {
+            name: "missing-tool",
+            check: Some(VersionCheck {
+                command: "ayni-test-command-that-does-not-exist",
+                args: &[],
+                contains: None,
+            }),
+            installer: Installer::GoInstall {
+                module: "example.invalid/tool",
+                version: None,
+            },
+            for_signals: &[],
+            opt_in: false,
+        };
+
+        assert_eq!(
+            GENERIC_CATALOG_RUNTIME
+                .status(&entry, &execution(dir.path()), Duration::from_secs(1))
+                .expect("a missing installable tool is a normal status result"),
+            ToolStatus::Missing
+        );
+    }
+
+    #[test]
+    fn installer_streams_and_times_out() {
+        let dir = TempDir::new().expect("tempdir");
+        let release = dir.path().join("never-release");
+        let (program, args) = test_child(
+            "fixture_streams_then_waits",
+            &[release.to_string_lossy().into_owned()],
+        );
+        let entry = CatalogEntry {
+            name: "streaming-installer",
+            check: None,
+            installer: Installer::Custom { program, args },
+            for_signals: &[],
+            opt_in: false,
+        };
+        let mut lines = Vec::new();
+        let error = GENERIC_CATALOG_RUNTIME
+            .install(
+                &entry,
+                &execution(dir.path()),
+                Duration::from_millis(100),
+                &mut |line| lines.push(line.to_string()),
+            )
+            .expect_err("installer must time out");
+        assert!(lines.iter().any(|line| line == "installer-ready"));
+        assert_eq!(error.operation, CatalogOperation::Install);
+        assert_eq!(error.kind, CatalogOperationErrorKind::Timeout);
+    }
+
+    #[test]
+    #[ignore]
+    fn fixture_never_exits() {
+        loop {
+            std::thread::park();
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn fixture_streams_then_waits() {
+        println!("installer-ready");
+        io::stdout().flush().expect("flush fixture stdout");
+        loop {
+            std::thread::park();
+        }
+    }
 
     #[test]
     fn rustup_list_matches_preview_component_names() {
@@ -449,34 +414,6 @@ mod tests {
             "llvm-tools-preview"
         ));
         assert!(!rustup_installed_lines_contain_component(list, "rustc-dev"));
-    }
-
-    #[test]
-    fn node_package_status_requires_installed_dependency() {
-        let dir = TempDir::new().expect("tempdir");
-        fs::write(
-            dir.path().join("package.json"),
-            r#"{"name":"fixture","devDependencies":{"vitest":"^2.1.8"}}"#,
-        )
-        .expect("package json");
-        assert_eq!(
-            node_package_status(Some(dir.path()), "vitest", None),
-            ToolStatus::Missing
-        );
-
-        fs::create_dir_all(dir.path().join("node_modules").join("vitest")).expect("node_modules");
-        fs::write(
-            dir.path()
-                .join("node_modules")
-                .join("vitest")
-                .join("package.json"),
-            r#"{"name":"vitest","version":"2.1.8"}"#,
-        )
-        .expect("vitest package");
-        assert_eq!(
-            node_package_status(Some(dir.path()), "vitest", Some("2.1.8")),
-            ToolStatus::Current
-        );
     }
 
     #[test]
@@ -504,15 +441,18 @@ mod tests {
         };
 
         assert_eq!(
-            tool_status(
-                &entry,
-                InstallContext {
-                    cwd: Some(dir.path()),
-                    node_package_manager: None,
-                    python_package_manager: None,
-                    gradle_runner: Some("./gradlew"),
-                }
-            ),
+            GENERIC_CATALOG_RUNTIME
+                .status(
+                    &entry,
+                    &ExecutionResolution::direct(
+                        "./gradlew",
+                        dir.path().to_path_buf(),
+                        "test",
+                        100,
+                    ),
+                    Duration::from_secs(2)
+                )
+                .expect("status"),
             ToolStatus::Current
         );
     }

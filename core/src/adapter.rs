@@ -1,4 +1,4 @@
-use crate::catalog::CatalogEntry;
+use crate::catalog::{CatalogEntry, CatalogRuntime};
 use crate::language::Language;
 use crate::runtime::Scope;
 use crate::runtime::{AdapterError, ExecutionResolution, RunContext};
@@ -271,6 +271,8 @@ pub trait LanguageAdapter: Send + Sync {
     }
     fn profile(&self) -> LanguageProfile;
     fn catalog(&self) -> &'static [CatalogEntry];
+    /// Runtime behavior for the ordered declarative catalog.
+    fn catalog_runtime(&self) -> &dyn CatalogRuntime;
     fn collector(&self) -> &dyn SignalCollector;
 
     /// Return static policy requirements for this adapter. Implementations
@@ -351,15 +353,6 @@ pub trait LanguageAdapter: Send + Sync {
     /// example Cargo's target-directory lock) should return `Some(1)`.
     fn max_target_concurrency(&self) -> Option<usize> {
         None
-    }
-
-    /// Language-specific environment preparation run during
-    /// `ayni install --apply`, before catalog tools are checked or installed
-    /// (for example installing package-manager dependencies or wiring build
-    /// plugins). The default does nothing.
-    fn prepare_install(&self, execution: &ExecutionResolution) -> Result<(), String> {
-        let _ = execution;
-        Ok(())
     }
 }
 

@@ -1,11 +1,12 @@
-use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::collector::CollectorResult;
+use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
     Budget, MutationResult, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
 };
 use serde_json::json;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let enabled = context.policy.checks.mutation;
     if !enabled {
         return Ok(SignalRow {
@@ -32,7 +33,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
 
     let (program, args, engine_label) = mutation_command(context);
-    let output = run_command_for_context(context, &program, &args)?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
 
     let status_ok = output.status.success();
     Ok(SignalRow {

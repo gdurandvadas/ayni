@@ -1,5 +1,6 @@
 use crate::SizeThreshold;
 use crate::signal::{Level, SizeOffender, SizeResult};
+use crate::threshold::classify_maximum;
 use glob::Pattern;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -116,14 +117,11 @@ fn collect_size_inner(
         let line_count = content.lines().count() as u64;
         max_lines = max_lines.max(line_count);
 
-        if line_count > threshold.warn {
-            let level = if line_count > threshold.fail {
-                fail_count += 1;
-                Level::Fail
-            } else {
-                warn_count += 1;
-                Level::Warn
-            };
+        if let Some(level) = classify_maximum(line_count, threshold.warn, threshold.fail) {
+            match level {
+                Level::Warn => warn_count += 1,
+                Level::Fail => fail_count += 1,
+            }
             offenders.push(SizeOffender {
                 file: rel,
                 value: line_count,
@@ -267,6 +265,47 @@ mod tests {
             .find(|offender| offender.file == "fail.rs")
             .expect("fail offender");
         assert_eq!(fail.level, Level::Fail);
+    }
+
+    #[test]
+    fn maximum_threshold_equality_classifies_offenders_and_counts() {
+        let dir = TempDir::new().expect("tempdir");
+        for (name, line_count) in [
+            ("below_warn.rs", 9),
+            ("at_warn.rs", 10),
+            ("above_warn.rs", 11),
+            ("below_fail.rs", 19),
+            ("at_fail.rs", 20),
+            ("above_fail.rs", 21),
+        ] {
+            fs::write(dir.path().join(name), lines(line_count)).expect("source file");
+        }
+
+        let collection = collect_size(
+            dir.path(),
+            dir.path(),
+            &size_map("*.rs", 10, 20, Vec::new()),
+            &[],
+        )
+        .expect("collect");
+
+        assert_eq!(collection.result.total_files, 6);
+        assert_eq!(collection.result.max_lines, 21);
+        assert_eq!(collection.result.warn_count, 3);
+        assert_eq!(collection.result.fail_count, 2);
+        assert_eq!(collection.offenders.len(), 5);
+
+        let levels = collection
+            .offenders
+            .iter()
+            .map(|offender| (offender.file.as_str(), offender.level))
+            .collect::<BTreeMap<_, _>>();
+        assert!(!levels.contains_key("below_warn.rs"));
+        assert_eq!(levels["at_warn.rs"], Level::Warn);
+        assert_eq!(levels["above_warn.rs"], Level::Warn);
+        assert_eq!(levels["below_fail.rs"], Level::Warn);
+        assert_eq!(levels["at_fail.rs"], Level::Fail);
+        assert_eq!(levels["above_fail.rs"], Level::Fail);
     }
 
     #[test]

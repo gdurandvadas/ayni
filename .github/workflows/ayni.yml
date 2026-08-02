@@ -8,6 +8,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-ayni:
+    name: build ayni
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: install rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cache rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: build ayni cli
+        run: cargo build --locked -p ayni-cli
+
+      - name: upload ayni cli
+        uses: actions/upload-artifact@v4
+        with:
+          name: ayni-cli-linux-x64
+          path: target/debug/ayni
+          if-no-files-found: error
+          retention-days: 1
+
   quality:
     runs-on: ubuntu-latest
     permissions:
@@ -28,13 +54,112 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Test
-        run: cargo test --workspace --all-features
+        run: cargo test --locked --workspace --all-features
 
       - name: Check
-        run: cargo check --workspace --all-features
+        run: cargo check --locked --workspace --all-features
+
+  real-tool-validation:
+    name: real tool validation (${{ matrix.language }})
+    needs: build-ayni
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            fixture: examples/go/mono
+            validator_args: --expected-root .
+          - language: node
+            fixture: examples/node/mono
+            validator_args: --expected-root .
+          - language: python
+            fixture: examples/python/mono
+            validator_args: --expected-root libs/greeting --expected-root libs/math --expected-root services/greeting_service
+          - language: kotlin
+            fixture: examples/kotlin/mono
+            validator_args: --expected-root .
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: download ayni cli
+        uses: actions/download-artifact@v4
+        with:
+          name: ayni-cli-linux-x64
+          path: .ci-bin
+
+      - name: make ayni cli executable
+        run: chmod +x .ci-bin/ayni
+
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+
+      - name: Set up Node
+        if: matrix.language == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Enable Node package managers
+        if: matrix.language == 'node'
+        run: corepack enable
+
+      - name: Set up Python
+        if: matrix.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python catalog installer
+        if: matrix.language == 'python'
+        run: python -m pip install --disable-pip-version-check uv
+
+      - name: Set up Java
+        if: matrix.language == 'kotlin'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        if: matrix.language == 'kotlin'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: apply and check adapter catalog
+        run: |
+          ./.ci-bin/ayni install --repo-root "${{ matrix.fixture }}" --apply
+          ./.ci-bin/ayni install --repo-root "${{ matrix.fixture }}" --check
+
+      - name: analyze fixture and validate typed artifact
+        shell: bash
+        run: |
+          fixture="${{ matrix.fixture }}"
+          rm -rf "$fixture/.ayni"
+          set +e
+          ./.ci-bin/ayni analyze --config "$fixture/.ayni.toml"
+          analyze_code=$?
+          set -e
+          echo "Ayni analyze exit code: $analyze_code (policy failures are permitted)"
+          python3 scripts/ci/validate_example_artifact.py \
+            --artifact "$fixture/.ayni/last/signals.json" \
+            --language "${{ matrix.language }}" \
+            --repository-root "$fixture" \
+            ${{ matrix.validator_args }}
+
+      - name: remove ephemeral analysis artifacts
+        if: always()
+        run: rm -rf "${{ matrix.fixture }}/.ayni"
 
   run:
     runs-on: ubuntu-latest
@@ -59,7 +184,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Cargo build ayni-cli
-        run: cargo build -p ayni-cli
+        run: cargo build --locked -p ayni-cli
 
       - name: Install ayni scaffolding and tools
         id: install
@@ -76,8 +201,15 @@ jobs:
         shell: bash
         run: |
           set +e
-          summary="$(./target/debug/ayni analyze --config ./.ayni.toml --output md)"
-          code=$?
+          summary_file="$RUNNER_TEMP/ayni-summary.md"
+          ./target/debug/ayni analyze --config ./.ayni.toml --output md | tee "$summary_file"
+          code="${PIPESTATUS[0]}"
+          summary="$(<"$summary_file")"
+          if [[ "$code" != "0" ]]; then
+            echo "::group::full rust test diagnostics"
+            cargo test --locked --workspace --all-features || true
+            echo "::endgroup::"
+          fi
           {
             echo "summary<<EOF"
             printf '%s\n' "$summary"

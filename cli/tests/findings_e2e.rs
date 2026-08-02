@@ -134,10 +134,65 @@ fn assert_public_finding(finding: &Value, command: &str) {
     assert!(finding.get("offender").is_none());
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[test]
+fn preserves_non_default_config_and_root() {
+    let tempdir = TempDir::new().expect("tempdir");
+    let root = tempdir.path();
+    let configured_root = "crates/hostile root's $(safe)";
+    let target = root.join(configured_root);
+    fs::create_dir_all(&target).expect("target root");
+    fs::write(
+        target.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("manifest");
+    fs::write(target.join("oversized.rs"), "one\ntwo\nthree\n").expect("source");
+    let config = root.join("policy it's $(safe).toml");
+    fs::write(
+        &config,
+        format!(
+            "[checks]\ntest = false\ncoverage = false\nsize = true\ncomplexity = false\ndeps = false\nmutation = false\n\n[languages]\nenabled = [\"rust\"]\n\n[rust]\nroots = [{}]\n\n[rust.size]\n\"*.rs\" = {{ warn = 1, fail = 2 }}\n",
+            toml::Value::String(configured_root.to_string())
+        ),
+    )
+    .expect("policy");
+
+    let output = ayni()
+        .args([
+            "analyze",
+            "--config",
+            config.to_str().expect("config"),
+            "--json",
+        ])
+        .output()
+        .expect("analyze");
+    assert!(!output.status.success(), "size finding must fail");
+    let artifact: Value = serde_json::from_slice(&output.stdout).expect("artifact");
+    let command = artifact["rows"][0]["offenders"]["items"][0]["verification"]["command"]
+        .as_str()
+        .expect("command");
+    assert_eq!(
+        command,
+        format!(
+            "ayni verify size --config {} --language rust --root {} --file {}",
+            shell_quote(&config.to_string_lossy()),
+            shell_quote(configured_root),
+            shell_quote(&format!("{configured_root}/oversized.rs")),
+        )
+    );
+}
+
 #[test]
 fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
     let fixture = Fixture::size();
-    let command = "ayni verify size --language rust --file 'oversized.rs'";
+    let command = format!(
+        "ayni verify size --config '{}' --language rust --root '.' --file 'oversized.rs'",
+        fixture.config.display()
+    );
 
     let json = fixture.analyze(&["--json"]);
     assert!(!json.status.success(), "size finding must fail the run");
@@ -145,11 +200,11 @@ fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
     assert_eq!(stdout, fixture.persisted());
     let artifact: Value = serde_json::from_str(&stdout).expect("schema-v3 JSON");
     let finding = &artifact["rows"][0]["offenders"]["items"][0];
-    assert_public_finding(finding, command);
+    assert_public_finding(finding, &command);
 
     let terminal = fixture.analyze(&[]);
     assert!(!terminal.status.success());
-    assert!(String::from_utf8_lossy(&terminal.stdout).contains(command));
+    assert!(String::from_utf8_lossy(&terminal.stdout).contains(&command));
 
     let markdown = fixture.analyze(&["--output", "md"]);
     assert!(!markdown.status.success());
@@ -159,12 +214,15 @@ fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
 #[test]
 fn synthetic_zero_test_finding_has_an_actionable_public_command() {
     let fixture = Fixture::zero_tests();
-    let command = "ayni verify test --language rust";
+    let command = format!(
+        "ayni verify test --config '{}' --language rust --root '.'",
+        fixture.config.display()
+    );
     let output = fixture.analyze(&["--json"]);
     assert!(!output.status.success(), "zero tests must fail the run");
     let stdout = String::from_utf8(output.stdout).expect("JSON stdout");
     assert_eq!(stdout, fixture.persisted());
     let artifact: Value = serde_json::from_str(&stdout).expect("schema-v3 JSON");
     assert_eq!(artifact["rows"][0]["result"]["total_tests"], 0);
-    assert_public_finding(&artifact["rows"][0]["offenders"]["items"][0], command);
+    assert_public_finding(&artifact["rows"][0]["offenders"]["items"][0], &command);
 }

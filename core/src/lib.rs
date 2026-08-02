@@ -10,6 +10,7 @@ pub mod registry;
 pub mod runtime;
 pub mod signal;
 pub mod size;
+pub mod threshold;
 
 pub use adapter::{
     ComplexityThresholdKind, DetectResult, DiscoveredRoot, LanguageAdapter, LanguageProfile,
@@ -17,9 +18,8 @@ pub use adapter::{
     VerificationSelection, VerificationSelectorSupport,
 };
 pub use catalog::{
-    CatalogEntry, InstallContext, Installer, NodePackageManager, PythonPackageManager,
-    PythonPackageManagerResolution, PythonResolutionKind, ToolStatus, VersionCheck,
-    detect_node_package_manager, detect_python_package_manager, resolve_python_package_manager,
+    CatalogEntry, CatalogOperation, CatalogOperationError, CatalogOperationErrorKind,
+    CatalogRuntime, Installer, ToolStatus, VersionCheck,
 };
 pub use comparison::{
     ARTIFACT_COMPARISON_SCHEMA_VERSION, ArtifactComparison, ArtifactComparisonError,
@@ -44,4 +44,7 @@ pub use signal::{
     Offenders, OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion, SignalKind,
     SignalResult, SignalRow, SizeOffender, SizeResult, TestFailure, TestResult,
     VerificationMetadata, VerificationTarget,
+};
+pub use threshold::{
+    ConfiguredMetricEvaluation, classify_maximum, classify_minimum, evaluate_configured_metric,
 };

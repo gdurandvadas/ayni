@@ -849,7 +849,7 @@ mod tests {
         let artifact = RunArtifact {
             schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
             metadata: Default::default(),
-            completion: Default::default(),
+            completion: RunCompletion::complete(CompletionScope::Repository, 1),
             findings: Vec::new(),
             rows: vec![SignalRow {
                 kind: SignalKind::Deps,

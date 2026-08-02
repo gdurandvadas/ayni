@@ -1,26 +1,28 @@
-use ayni_adapters_common::exec::run_command_for_context;
+use crate::package_manager::PackageManager;
+use ayni_adapters_common::collector::CollectorError;
+use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_adapters_common::failure::command_failure_with_classification;
-use ayni_core::{CommandFailure, NodePackageManager, RunContext, SignalKind};
+use ayni_core::{CommandFailure, RunContext, SignalKind};
 
-pub fn package_manager_for_context(context: &RunContext) -> NodePackageManager {
-    NodePackageManager::from_executable(&context.execution.runner)
-        .unwrap_or(NodePackageManager::Npm)
+pub(crate) fn package_manager_for_context(context: &RunContext) -> PackageManager {
+    PackageManager::from_runner(&context.execution.runner).unwrap_or(PackageManager::Npm)
+}
+
+pub fn tool_command(context: &RunContext, tool: &str, args: &[&str]) -> (String, Vec<String>) {
+    let manager = package_manager_for_context(context);
+    let (_, argv) = manager.exec_command(tool, args);
+    (context.execution.runner.clone(), argv)
 }
 
 pub fn run_tool(
     context: &RunContext,
     tool: &str,
     args: &[&str],
-) -> Result<std::process::Output, String> {
-    let manager = package_manager_for_context(context);
-    let (program, argv) = manager.exec_command(tool, args);
-    run_command_for_context(context, program.as_str(), &argv).map_err(|error| {
-        format!(
-            "failed to execute {} {}: {error}",
-            manager.executable(),
-            tool
-        )
-    })
+) -> Result<std::process::Output, CollectorError> {
+    let (program, argv) = tool_command(context, tool, args);
+    Ok(run_command_for_context_structured(
+        context, &program, &argv,
+    )?)
 }
 
 pub fn command_failure_from_output(

@@ -1,27 +1,26 @@
 use super::util::{
-    command_failure_from_output, format_command, prepare_report_path, run_command_for_context,
-    to_repo_relative_path,
+    command_failure_from_output, format_command, prepare_report_path,
+    run_command_for_context_structured, to_repo_relative_path,
 };
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let config = context
-        .policy
-        .python
-        .complexity
-        .as_ref()
-        .ok_or_else(|| String::from("missing [python.complexity] policy"))?;
-    let cognitive = config
-        .fn_cognitive
-        .ok_or_else(|| String::from("missing python.complexity.fn_cognitive"))?;
+pub fn collect(context: &RunContext) -> CollectorResult {
+    let config = context.policy.python.complexity.as_ref().ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing [python.complexity] policy"))
+    })?;
+    let cognitive = config.fn_cognitive.ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing python.complexity.fn_cognitive"))
+    })?;
 
-    let report_path = prepare_report_path(context, "complexipy.json")?;
+    let report_path =
+        prepare_report_path(context, "complexipy.json").map_err(CollectorError::Adapter)?;
     let threshold = cognitive.fail.to_string();
     let output_path = report_path.to_string_lossy().to_string();
     let args = vec![
@@ -41,7 +40,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     ];
     command_args.extend(args);
     let engine = format_command("uv", &command_args);
-    let output = run_command_for_context(context, "uv", &command_args)?;
+    let output = run_command_for_context_structured(context, "uv", &command_args)?;
     if !output.status.success() {
         return Ok(error_row(
             context,
@@ -56,7 +55,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         ));
     }
 
-    let value = read_report(&report_path)?;
+    let value = read_report(&report_path).map_err(CollectorError::Adapter)?;
     let mut entries = Vec::new();
     collect_function_entries(&value, None, &mut entries);
 
@@ -69,15 +68,13 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     for entry in entries {
         measured_functions += 1;
         max_fn_cognitive = max_fn_cognitive.max(entry.complexity);
-        let level = if entry.complexity > cognitive.fail {
-            fail_count += 1;
-            Some(Level::Fail)
-        } else if entry.complexity > cognitive.warn {
-            warn_count += 1;
-            Some(Level::Warn)
-        } else {
-            None
-        };
+        let level = classify_complexity(
+            entry.complexity,
+            cognitive.warn,
+            cognitive.fail,
+            &mut warn_count,
+            &mut fail_count,
+        );
         if let Some(level) = level {
             offenders.push(ComplexityOffender {
                 file: to_repo_relative_path(
@@ -132,6 +129,22 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         })),
         offenders: Offenders::Complexity(offenders),
     })
+}
+
+fn classify_complexity(
+    value: f64,
+    warn: f64,
+    fail: f64,
+    warn_count: &mut u64,
+    fail_count: &mut u64,
+) -> Option<Level> {
+    let level = classify_maximum(value, warn, fail);
+    match level {
+        Some(Level::Warn) => *warn_count += 1,
+        Some(Level::Fail) => *fail_count += 1,
+        None => {}
+    }
+    level
 }
 
 fn error_row(
@@ -255,8 +268,8 @@ fn complexity_target(context: &RunContext) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FunctionEntry, collect_function_entries, complexity_target};
-    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    use super::{FunctionEntry, classify_complexity, collect_function_entries, complexity_target};
+    use ayni_core::{AyniPolicy, ExecutionResolution, Level, RunContext, Scope};
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -295,5 +308,24 @@ mod tests {
         };
 
         assert_eq!(complexity_target(&context), "/repo/src/handler.py");
+    }
+
+    #[test]
+    fn maximum_threshold_equality() {
+        let mut warn_count = 0;
+        let mut fail_count = 0;
+        assert_eq!(
+            classify_complexity(9.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            None
+        );
+        assert_eq!(
+            classify_complexity(10.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Warn)
+        );
+        assert_eq!(
+            classify_complexity(15.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Fail)
+        );
+        assert_eq!((warn_count, fail_count), (1, 1));
     }
 }

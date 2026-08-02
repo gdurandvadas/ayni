@@ -1,3 +1,6 @@
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::exec::run_command_for_context_structured;
+use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_adapters_common::paths::{resolve_repo_path, to_repo_relative_path};
 use ayni_core::{
     Budget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope, SignalKind,
@@ -8,7 +11,6 @@ use serde::Deserialize;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Debug, Clone, Deserialize)]
 struct GoPackage {
@@ -26,7 +28,7 @@ struct GoMember {
     dir: String,
 }
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let rules = context
         .policy
         .go
@@ -35,18 +37,16 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .map(|value| value.forbidden.clone())
         .unwrap_or_default();
 
-    let output = Command::new("go")
-        .arg("list")
-        .arg("-json")
-        .arg("./...")
-        .current_dir(&context.workdir)
-        .output()
-        .map_err(|error| format!("failed to execute go list -json ./...: {error}"))?;
+    let args = vec![
+        String::from("list"),
+        String::from("-json"),
+        String::from("./..."),
+    ];
+    let output = run_command_for_context_structured(context, "go", &args)?;
     if !output.status.success() {
-        return Err(format!(
-            "go list failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stderr).trim()
+        return Ok(error_row(
+            context,
+            command_failure_from_output(context, SignalKind::Deps, "go", &args, &output),
         ));
     }
 
@@ -54,7 +54,9 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let packages: Vec<GoPackage> = serde_json::Deserializer::from_reader(reader)
         .into_iter::<GoPackage>()
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("failed to parse go list output: {error}"))?;
+        .map_err(|error| {
+            CollectorError::Adapter(format!("failed to parse go list output: {error}"))
+        })?;
 
     let members = packages
         .iter()
@@ -64,7 +66,8 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         })
         .collect::<Vec<_>>();
 
-    let visible = visible_members(&members, &context.scope, &context.repo_root)?;
+    let visible = visible_members(&members, &context.scope, &context.repo_root)
+        .map_err(CollectorError::Adapter)?;
     let visible_paths: BTreeSet<&str> = visible
         .iter()
         .map(|member| member.import_path.as_str())
@@ -90,7 +93,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         }
     }
 
-    let compiled_rules = compile_rules(&rules)?;
+    let compiled_rules = compile_rules(&rules).map_err(CollectorError::Adapter)?;
     let mut offenders = Vec::new();
     for (from, to) in &edges {
         for rule in &compiled_rules {
@@ -131,6 +134,30 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Deps(json!({ "forbidden": rules })),
         offenders: Offenders::Deps(offenders),
     })
+}
+
+fn error_row(context: &RunContext, failure: ayni_core::CommandFailure) -> SignalRow {
+    SignalRow {
+        kind: SignalKind::Deps,
+        language: Language::Go,
+        scope: Scope {
+            workspace_root: context.scope.workspace_root.clone(),
+            path: context.scope.path.clone(),
+            package: context.scope.package.clone(),
+            file: context.scope.file.clone(),
+        },
+        pass: false,
+        result: SignalResult::Deps(DepsResult {
+            crate_count: 0,
+            edge_count: 0,
+            violation_count: 0,
+            failure: Some(failure),
+        }),
+        budget: Budget::Deps(
+            json!({ "forbidden": context.policy.go.deps.as_ref().map(|value| &value.forbidden) }),
+        ),
+        offenders: Offenders::Deps(Vec::new()),
+    }
 }
 
 fn visible_members<'a>(

@@ -1,24 +1,44 @@
-use ayni_adapters_common::exec::{format_command, run_command_for_context};
-use ayni_adapters_common::failure::concise_failure_message;
+use ayni_adapters_common::collector::CollectorResult;
+use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
+use ayni_adapters_common::failure::{concise_failure_message, coverage_metric_failure};
 use ayni_core::{
-    Budget, CommandFailure, CoverageOffender, CoveragePolicy, CoverageResult, Level, Offenders,
-    RunContext, Scope, SignalKind, SignalResult, SignalRow,
+    Budget, CommandFailure, ConfiguredMetricEvaluation, CoverageOffender, CoveragePolicy,
+    CoverageResult, Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
+    evaluate_configured_metric,
 };
 use serde_json::{Value as JsonValue, json};
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let (program, args, engine_label) = coverage_command(context);
-    let output = run_command_for_context(context, &program, &args)?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
 
-    let (status, percent, line_percent, branch_percent) = if output.status.success() {
-        let payload: JsonValue = serde_json::from_slice(&output.stdout)
-            .map_err(|error| format!("failed to parse cargo llvm-cov output: {error}"))?;
-        let (line, branch) = find_coverage_percents(&payload);
-        let percent = line.or(branch);
-        (String::from("ok"), percent, line, branch)
+    let (status, raw_line_percent, raw_branch_percent, report_failure) = if output.status.success()
+    {
+        match serde_json::from_slice::<JsonValue>(&output.stdout) {
+            Ok(payload) => {
+                let (line, branch) = find_coverage_percents(&payload);
+                (String::from("ok"), line, branch, None)
+            }
+            Err(error) => (
+                String::from("error"),
+                Some(f64::NAN),
+                Some(f64::NAN),
+                Some(CommandFailure {
+                    category: String::from("repo_setup_issue"),
+                    classification: String::from("unparseable_coverage_report"),
+                    command: engine_label.clone(),
+                    cwd: context.execution.exec_cwd.display().to_string(),
+                    exit_code: None,
+                    message: format!("failed to parse cargo llvm-cov coverage report: {error}"),
+                }),
+            ),
+        }
     } else {
         (String::from("error"), None, None, None)
     };
+    let line_percent = finite_percent(raw_line_percent);
+    let branch_percent = finite_percent(raw_branch_percent);
+    let percent = line_percent.or(branch_percent);
 
     let coverage_config = context.policy.rust.coverage.as_ref();
     let coverage_budget = coverage_config
@@ -26,18 +46,28 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             json!({
                 "line_percent_warn": config.line_percent.map(|v| v.warn),
                 "line_percent_fail": config.line_percent.map(|v| v.fail),
+                "branch_percent_warn": config.branch_percent.map(|v| v.warn),
+                "branch_percent_fail": config.branch_percent.map(|v| v.fail),
             })
         })
         .unwrap_or_else(|| json!({}));
 
-    // Evaluate pass: tool must succeed AND measured percent must meet fail threshold.
-    let headline = percent.or(line_percent).or(branch_percent);
-    let pass = status == "ok"
-        && coverage_config
-            .and_then(|c| c.line_percent)
-            .is_none_or(|t| headline.is_none_or(|v| v >= t.fail));
-
-    let offenders = build_offenders(headline, coverage_config);
+    let assessment = assess_coverage(raw_line_percent, raw_branch_percent, coverage_config);
+    let metric_failure = coverage_metric_failure(
+        context,
+        engine_label.clone(),
+        "line_percent",
+        assessment.line,
+    )
+    .or_else(|| {
+        coverage_metric_failure(
+            context,
+            engine_label.clone(),
+            "branch_percent",
+            assessment.branch,
+        )
+    });
+    let pass = status == "ok" && metric_failure.is_none() && !assessment.has_fail;
 
     Ok(SignalRow {
         kind: SignalKind::Coverage,
@@ -56,10 +86,12 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             engine: engine_label,
             status,
             failure: (!output.status.success())
-                .then(|| command_failure(context, &program, &args, &output, "repo_code_issue")),
+                .then(|| command_failure(context, &program, &args, &output, "repo_code_issue"))
+                .or(report_failure)
+                .or(metric_failure),
         }),
         budget: Budget::Coverage(coverage_budget),
-        offenders: Offenders::Coverage(offenders),
+        offenders: Offenders::Coverage(assessment.offenders),
     })
 }
 
@@ -110,30 +142,52 @@ fn coverage_command(context: &RunContext) -> (String, Vec<String>, String) {
     )
 }
 
-fn build_offenders(
-    headline: Option<f64>,
+struct CoverageAssessment {
+    line: ConfiguredMetricEvaluation,
+    branch: ConfiguredMetricEvaluation,
+    offenders: Vec<CoverageOffender>,
+    has_fail: bool,
+}
+
+fn assess_coverage(
+    line_percent: Option<f64>,
+    branch_percent: Option<f64>,
     policy: Option<&CoveragePolicy>,
-) -> Vec<CoverageOffender> {
-    let Some(value) = headline else {
-        return Vec::new();
-    };
-    let Some(threshold) = policy.and_then(|p| p.line_percent) else {
-        return Vec::new();
-    };
-    if value >= threshold.warn {
-        return Vec::new();
+) -> CoverageAssessment {
+    let line =
+        evaluate_configured_metric(line_percent, policy.and_then(|policy| policy.line_percent));
+    let branch = evaluate_configured_metric(
+        branch_percent,
+        policy.and_then(|policy| policy.branch_percent),
+    );
+    let mut offenders = Vec::new();
+    for evaluation in [line, branch] {
+        if let ConfiguredMetricEvaluation::Present {
+            value,
+            level: Some(level),
+        } = evaluation
+        {
+            offenders.push(CoverageOffender {
+                file: String::from("<workspace>"),
+                line: None,
+                value,
+                level,
+            });
+        }
     }
-    let level = if value < threshold.fail {
-        Level::Fail
-    } else {
-        Level::Warn
-    };
-    vec![CoverageOffender {
-        file: String::from("<workspace>"),
-        line: None,
-        value,
-        level,
-    }]
+    let has_fail = offenders
+        .iter()
+        .any(|offender| offender.level == Level::Fail);
+    CoverageAssessment {
+        line,
+        branch,
+        offenders,
+        has_fail,
+    }
+}
+
+fn finite_percent(value: Option<f64>) -> Option<f64> {
+    value.filter(|value| value.is_finite())
 }
 
 fn find_coverage_percents(value: &JsonValue) -> (Option<f64>, Option<f64>) {
@@ -161,7 +215,7 @@ fn percent_from_summary_bucket(
     map.get(bucket)
         .and_then(JsonValue::as_object)
         .and_then(|summary| summary.get("percent"))
-        .and_then(JsonValue::as_f64)
+        .map(|percent| percent.as_f64().unwrap_or(f64::NAN))
 }
 
 fn collect_coverage_percents(
@@ -208,14 +262,18 @@ fn read_percent(
     nested_keys: &[&str],
 ) -> Option<f64> {
     for key in direct_keys {
-        if let Some(number) = map.get(*key).and_then(JsonValue::as_f64) {
-            return Some(number);
-        }
-        if let Some(obj) = map.get(*key).and_then(JsonValue::as_object) {
-            for nested in nested_keys {
-                if let Some(number) = obj.get(*nested).and_then(JsonValue::as_f64) {
-                    return Some(number);
+        if let Some(value) = map.get(*key) {
+            if value.is_number() {
+                return Some(value.as_f64().unwrap_or(f64::NAN));
+            }
+            if let Some(obj) = value.as_object() {
+                for nested in nested_keys {
+                    if let Some(value) = obj.get(*nested) {
+                        return Some(value.as_f64().unwrap_or(f64::NAN));
+                    }
                 }
+            } else {
+                return Some(f64::NAN);
             }
         }
     }
@@ -224,9 +282,10 @@ fn read_percent(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_offenders, coverage_command, find_coverage_percents};
+    use super::{assess_coverage, coverage_command, find_coverage_percents};
     use ayni_core::{
-        AyniPolicy, CoveragePolicy, ExecutionResolution, Level, RunContext, Scope, ThresholdFloat,
+        AyniPolicy, ConfiguredMetricEvaluation, CoveragePolicy, ExecutionResolution, Level,
+        RunContext, Scope, ThresholdFloat,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -274,28 +333,54 @@ mod tests {
     }
 
     #[test]
-    fn pass_when_above_warn() {
-        assert!(build_offenders(Some(80.0), Some(&policy(70.0, 50.0))).is_empty());
+    fn enforces_line_and_branch_threshold_boundaries() {
+        let policy = CoveragePolicy {
+            line_percent: Some(ThresholdFloat {
+                warn: 80.0,
+                fail: 70.0,
+            }),
+            branch_percent: Some(ThresholdFloat {
+                warn: 60.0,
+                fail: 50.0,
+            }),
+        };
+        let equal_warn = assess_coverage(Some(80.0), Some(60.0), Some(&policy));
+        assert!(equal_warn.offenders.is_empty());
+        assert!(!equal_warn.has_fail);
+
+        let equal_fail = assess_coverage(Some(70.0), Some(50.0), Some(&policy));
+        assert_eq!(equal_fail.offenders.len(), 2);
+        assert!(
+            equal_fail
+                .offenders
+                .iter()
+                .all(|offender| offender.level == Level::Warn)
+        );
+
+        let below_fail = assess_coverage(Some(69.0), Some(49.0), Some(&policy));
+        assert!(below_fail.has_fail);
+        assert!(
+            below_fail
+                .offenders
+                .iter()
+                .all(|offender| offender.level == Level::Fail)
+        );
     }
 
     #[test]
-    fn warn_offender_when_between_warn_and_fail() {
-        let offenders = build_offenders(Some(60.0), Some(&policy(70.0, 50.0)));
-        assert_eq!(offenders.len(), 1);
-        assert_eq!(offenders[0].level, Level::Warn);
-    }
-
-    #[test]
-    fn fail_offender_when_below_fail() {
-        let offenders = build_offenders(Some(28.9), Some(&policy(70.0, 50.0)));
-        assert_eq!(offenders.len(), 1);
-        assert_eq!(offenders[0].level, Level::Fail);
-        assert!((offenders[0].value - 28.9).abs() < 0.01);
-    }
-
-    #[test]
-    fn pass_when_no_policy() {
-        assert!(build_offenders(Some(1.0), None).is_empty());
+    fn preserves_zero_and_rejects_missing_or_non_finite_configured_evidence() {
+        let configured = policy(70.0, 50.0);
+        let zero = assess_coverage(Some(0.0), None, Some(&configured));
+        assert_eq!(zero.offenders[0].value, 0.0);
+        assert!(zero.has_fail);
+        assert!(matches!(
+            assess_coverage(None, None, Some(&configured)).line,
+            ConfiguredMetricEvaluation::Missing
+        ));
+        assert!(matches!(
+            assess_coverage(Some(f64::NAN), None, Some(&configured)).line,
+            ConfiguredMetricEvaluation::Unparseable
+        ));
     }
 
     #[test]

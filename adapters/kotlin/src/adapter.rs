@@ -1,13 +1,60 @@
 use crate::catalog::KOTLIN_CATALOG;
 use crate::collectors::KotlinCollector;
 use crate::discovery;
+use ayni_adapters_common::catalog::GENERIC_CATALOG_RUNTIME;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
-    CatalogEntry, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
+    CatalogEntry, CatalogOperation, CatalogOperationError, CatalogOperationErrorKind,
+    CatalogRuntime, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
     LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts, ProjectDiscovery,
-    Scope, SignalCollector, SignalKind, VerificationSelectorSupport, VerificationTarget,
+    Scope, SignalCollector, SignalKind, ToolStatus, VerificationSelectorSupport,
+    VerificationTarget,
 };
 use std::path::Path;
+use std::time::Duration;
+
+struct KotlinCatalogRuntime;
+
+static KOTLIN_CATALOG_RUNTIME: KotlinCatalogRuntime = KotlinCatalogRuntime;
+
+impl CatalogRuntime for KotlinCatalogRuntime {
+    fn status(
+        &self,
+        entry: &CatalogEntry,
+        execution: &ExecutionResolution,
+        timeout: Duration,
+    ) -> Result<ToolStatus, CatalogOperationError> {
+        GENERIC_CATALOG_RUNTIME.status(entry, execution, timeout)
+    }
+
+    fn prepare(
+        &self,
+        execution: &ExecutionResolution,
+        _timeout: Duration,
+        _on_line: &mut dyn FnMut(&str),
+    ) -> Result<(), CatalogOperationError> {
+        crate::install::ensure_gradle_plugins(&execution.install_cwd).map_err(|message| {
+            CatalogOperationError::new(
+                CatalogOperation::Prepare,
+                CatalogOperationErrorKind::Contract,
+                None,
+                Some(execution.install_cwd.clone()),
+                None,
+                message,
+            )
+        })
+    }
+
+    fn install(
+        &self,
+        entry: &CatalogEntry,
+        execution: &ExecutionResolution,
+        timeout: Duration,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<(), CatalogOperationError> {
+        GENERIC_CATALOG_RUNTIME.install(entry, execution, timeout, on_line)
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct KotlinAdapter {
@@ -77,6 +124,10 @@ impl LanguageAdapter for KotlinAdapter {
         KOTLIN_CATALOG
     }
 
+    fn catalog_runtime(&self) -> &dyn CatalogRuntime {
+        &KOTLIN_CATALOG_RUNTIME
+    }
+
     fn collector(&self) -> &dyn SignalCollector {
         &self.collector
     }
@@ -113,10 +164,6 @@ impl LanguageAdapter for KotlinAdapter {
             offender,
             DependencySource::Unscoped,
         )
-    }
-
-    fn prepare_install(&self, execution: &ExecutionResolution) -> Result<(), String> {
-        crate::install::ensure_gradle_plugins(&execution.install_cwd)
     }
 }
 

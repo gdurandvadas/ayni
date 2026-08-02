@@ -1,9 +1,10 @@
 use super::{
     AnalyzePlanning, OutputArg, VERIFY_ARTIFACTS_DIR, VERIFY_SIGNALS_ARTIFACT,
     build_analyze_targets, build_artifact_metadata_for_command, build_registry,
-    emit_analyze_outputs, failed_signal_row, materialize_finding_commands, persist_artifact_at,
-    serialize_artifact, signal_kind_slug, workspace_root_from_config_path,
+    emit_analyze_outputs, failed_signal_row, persist_artifact_at, serialize_artifact,
+    signal_kind_slug, verification_command, workspace_root_from_config_path,
 };
+use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
     AdapterRegistry, AyniPolicy, CompletionScope, CompletionState, Language, RunArtifact,
     SignalKind, SignalRow, VerificationSelection,
@@ -19,6 +20,7 @@ pub(crate) struct Request {
     pub package: Option<String>,
     pub name: Option<String>,
     pub language: Option<Language>,
+    pub root: Option<String>,
     pub output_mode: OutputArg,
     pub debug: bool,
 }
@@ -39,6 +41,7 @@ pub(crate) fn run(mut request: Request) -> Result<bool, String> {
 fn prepare_request(request: &mut Request) -> Result<(PathBuf, AyniPolicy), String> {
     let workspace_root = workspace_root_from_config_path(&request.config_path);
     let policy = AyniPolicy::load_from_path(&request.config_path)?;
+    validate_configured_root_containment(&workspace_root, &policy)?;
     validate_signal_enabled(&policy, request.kind)?;
     validate_selector_shape(request)?;
 
@@ -83,6 +86,12 @@ fn build_verification_artifact(
     request: &Request,
 ) -> Result<RunArtifact, String> {
     let rows = collect_rows(planning, registry, request);
+    let (completion, rows) = super::completion::reconcile(
+        planning,
+        CompletionScope::Requested,
+        Some(request.kind),
+        rows,
+    );
     Ok(RunArtifact::new(
         build_artifact_metadata_for_command(
             &request.config_path,
@@ -91,11 +100,7 @@ fn build_verification_artifact(
             request.output_mode,
             &format!("verify_{}", signal_kind_slug(request.kind)),
         )?,
-        planning.completion(
-            CompletionScope::Requested,
-            planning.targets.len() as u64,
-            Vec::new(),
-        ),
+        completion,
         rows,
     ))
 }
@@ -107,7 +112,7 @@ fn persist_and_emit_verification(
     registry: &AdapterRegistry,
     request: &Request,
 ) -> Result<bool, String> {
-    materialize_finding_commands(&mut artifact, registry)?;
+    verification_command::materialize_finding_commands(&mut artifact, registry)?;
     let serialized = serialize_artifact(&artifact)?;
     persist_artifact_at(workspace_root, VERIFY_SIGNALS_ARTIFACT, &serialized)?;
     emit_analyze_outputs(request.output_mode, policy, &artifact, &serialized)?;
@@ -148,6 +153,11 @@ fn validate_selector_shape(request: &Request) -> Result<(), String> {
 }
 
 fn validate_file_selector(repo_root: &Path, value: &str) -> Result<String, String> {
+    let normalized = normalize_file_selector(value)?;
+    canonical_repository_file(repo_root, &normalized)
+}
+
+fn normalize_file_selector(value: &str) -> Result<PathBuf, String> {
     let portable = value.trim().replace('\\', "/");
     let path = Path::new(&portable);
     let has_windows_prefix = portable.as_bytes().get(1) == Some(&b':')
@@ -176,18 +186,19 @@ fn validate_file_selector(repo_root: &Path, value: &str) -> Result<String, Strin
         return Err(String::from("--file must identify a repository file"));
     }
 
+    Ok(normalized)
+}
+
+fn canonical_repository_file(repo_root: &Path, normalized: &Path) -> Result<String, String> {
     let canonical_root = repo_root
         .canonicalize()
         .map_err(|error| format!("failed to resolve repository root: {error}"))?;
-    let canonical_file = repo_root
-        .join(&normalized)
-        .canonicalize()
-        .map_err(|error| {
-            format!(
-                "--file {} does not resolve to a configured repository file: {error}",
-                normalized.display()
-            )
-        })?;
+    let canonical_file = repo_root.join(normalized).canonicalize().map_err(|error| {
+        format!(
+            "--file {} does not resolve to a configured repository file: {error}",
+            normalized.display()
+        )
+    })?;
     if !canonical_file.is_file() || !canonical_file.starts_with(&canonical_root) {
         return Err(format!(
             "--file {} must resolve to a file inside the repository",
@@ -208,6 +219,7 @@ fn select_configured_targets(
 ) -> Result<Vec<ConfiguredTarget>, String> {
     let enabled = policy.enabled_languages()?;
     validate_requested_language(&enabled, request.language)?;
+    validate_requested_root(policy, request, &enabled)?;
 
     let selected = if let Some(file) = request.file.as_deref() {
         select_file_targets(
@@ -215,6 +227,7 @@ fn select_configured_targets(
             policy,
             registry,
             request.language,
+            request.root.as_deref(),
             &enabled,
             file,
         )?
@@ -245,11 +258,33 @@ fn validate_requested_language(
     Ok(())
 }
 
+fn validate_requested_root(
+    policy: &AyniPolicy,
+    request: &Request,
+    enabled: &[Language],
+) -> Result<(), String> {
+    let Some(root) = request.root.as_deref() else {
+        return Ok(());
+    };
+    let matches = enabled.iter().copied().any(|language| {
+        request.language.is_none_or(|selected| selected == language)
+            && policy.roots_for(language).iter().any(|value| value == root)
+    });
+    if matches {
+        Ok(())
+    } else {
+        Err(format!(
+            "--root {root:?} is not a normalized configured root for the selected language"
+        ))
+    }
+}
+
 fn select_file_targets(
     repo_root: &Path,
     policy: &AyniPolicy,
     registry: &AdapterRegistry,
     requested_language: Option<Language>,
+    requested_root: Option<&str>,
     enabled: &[Language],
     file: &str,
 ) -> Result<Vec<ConfiguredTarget>, String> {
@@ -267,6 +302,9 @@ fn select_file_targets(
             continue;
         }
         for root in policy.roots_for(language) {
+            if request_root_mismatch(root, requested_root) {
+                continue;
+            }
             if file_belongs_to_root(repo_root, file, root)? {
                 selected.insert(ConfiguredTarget {
                     language,
@@ -277,7 +315,7 @@ fn select_file_targets(
     }
     if selected.len() > 1 {
         return Err(format!(
-            "--file {file} is ambiguous across configured language/root targets; pass --language or configure a unique root"
+            "--file {file} is ambiguous across configured language/root targets; pass --language and --root"
         ));
     }
     Ok(selected.into_iter().collect())
@@ -292,16 +330,21 @@ fn select_non_file_targets(
     let selected = policy
         .roots_for(language)
         .iter()
+        .filter(|root| !request_root_mismatch(root, request.root.as_deref()))
         .cloned()
         .map(|root| ConfiguredTarget { language, root })
         .collect::<BTreeSet<_>>();
     let has_narrow_selector = request.package.is_some() || request.name.is_some();
     if has_narrow_selector && selected.len() > 1 {
         return Err(String::from(
-            "package or name verification is ambiguous across configured roots; select a unique language/root with --file or adjust the configured roots",
+            "package or name verification is ambiguous across configured roots; pass --root",
         ));
     }
     Ok(selected.into_iter().collect())
+}
+
+fn request_root_mismatch(configured: &str, requested: Option<&str>) -> bool {
+    requested.is_some_and(|requested| requested != configured)
 }
 
 fn resolve_non_file_language(
