@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.8.0...ayni-v0.8.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* **0.8.0:** eliminate false-green quality gates ([#39](https://github.com/gdurandvadas/ayni/issues/39)) ([76b0aed](https://github.com/gdurandvadas/ayni/commit/76b0aedeaebab6522c164da499509229e046b6ef))
+
 ## [0.8.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.7.0...ayni-v0.8.0) (2026-07-31)
 
 
