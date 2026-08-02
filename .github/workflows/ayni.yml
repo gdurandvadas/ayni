@@ -8,6 +8,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-ayni:
+    name: build ayni
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: install rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cache rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: build ayni cli
+        run: cargo build --locked -p ayni-cli
+
+      - name: upload ayni cli
+        uses: actions/upload-artifact@v4
+        with:
+          name: ayni-cli-linux-x64
+          path: target/debug/ayni
+          if-no-files-found: error
+          retention-days: 1
+
   quality:
     runs-on: ubuntu-latest
     permissions:
@@ -36,8 +62,9 @@ jobs:
       - name: Check
         run: cargo check --locked --workspace --all-features
 
-  examples:
-    name: Real tools (${{ matrix.language }})
+  real-tool-validation:
+    name: real tool validation (${{ matrix.language }})
+    needs: build-ayni
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -58,14 +85,17 @@ jobs:
             fixture: examples/kotlin/mono
             validator_args: --expected-root .
     steps:
-      - name: Checkout
+      - name: checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: download ayni cli
+        uses: actions/download-artifact@v4
+        with:
+          name: ayni-cli-linux-x64
+          path: .ci-bin
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      - name: make ayni cli executable
+        run: chmod +x .ci-bin/ayni
 
       - name: Set up Go
         if: matrix.language == 'go'
@@ -106,21 +136,18 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Build checkout Ayni CLI
-        run: cargo build --locked -p ayni-cli
-
-      - name: Apply and check adapter catalog
+      - name: apply and check adapter catalog
         run: |
-          ./target/debug/ayni install --repo-root "${{ matrix.fixture }}" --apply
-          ./target/debug/ayni install --repo-root "${{ matrix.fixture }}" --check
+          ./.ci-bin/ayni install --repo-root "${{ matrix.fixture }}" --apply
+          ./.ci-bin/ayni install --repo-root "${{ matrix.fixture }}" --check
 
-      - name: Analyze fixture and validate typed artifact
+      - name: analyze fixture and validate typed artifact
         shell: bash
         run: |
           fixture="${{ matrix.fixture }}"
           rm -rf "$fixture/.ayni"
           set +e
-          ./target/debug/ayni analyze --config "$fixture/.ayni.toml"
+          ./.ci-bin/ayni analyze --config "$fixture/.ayni.toml"
           analyze_code=$?
           set -e
           echo "Ayni analyze exit code: $analyze_code (policy failures are permitted)"
@@ -130,7 +157,7 @@ jobs:
             --repository-root "$fixture" \
             ${{ matrix.validator_args }}
 
-      - name: Remove ephemeral analysis artifacts
+      - name: remove ephemeral analysis artifacts
         if: always()
         run: rm -rf "${{ matrix.fixture }}/.ayni"
 

@@ -38,6 +38,10 @@ impl CatalogRuntime for GenericCatalogRuntime {
                 check.contains,
                 &execution.install_cwd,
                 timeout,
+                matches!(
+                    entry.installer,
+                    Installer::Cargo { .. } | Installer::GoInstall { .. }
+                ),
             );
         }
         match &entry.installer {
@@ -47,7 +51,10 @@ impl CatalogRuntime for GenericCatalogRuntime {
                     &["component", "list", "--installed"],
                     &execution.install_cwd,
                     timeout,
-                )?;
+                )
+                .map_err(|error| {
+                    catalog_error_from_execution_error(CatalogOperation::Status, &error)
+                })?;
                 if !output.status.success() {
                     return Ok(ToolStatus::Missing);
                 }
@@ -114,8 +121,20 @@ fn probe(
     contains: Option<&str>,
     cwd: &Path,
     timeout: Duration,
+    missing_when_unavailable: bool,
 ) -> Result<ToolStatus, CatalogOperationError> {
-    let output = run_status(program, args, cwd, timeout)?;
+    let output = match run_status(program, args, cwd, timeout) {
+        Ok(output) => output,
+        Err(error) if missing_when_unavailable && executable_not_found(&error) => {
+            return Ok(ToolStatus::Missing);
+        }
+        Err(error) => {
+            return Err(catalog_error_from_execution_error(
+                CatalogOperation::Status,
+                &error,
+            ));
+        }
+    };
     if !output.status.success() {
         return Ok(ToolStatus::Missing);
     }
@@ -127,18 +146,22 @@ fn probe(
     })
 }
 
+fn executable_not_found(error: &crate::exec::ExecutionError) -> bool {
+    error.kind == crate::exec::ExecutionErrorKind::Spawn
+        && error.detail.contains("No such file or directory")
+}
+
 fn run_status(
     program: &str,
     args: &[&str],
     cwd: &Path,
     timeout: Duration,
-) -> Result<std::process::Output, CatalogOperationError> {
+) -> crate::exec::ExecutionResult {
     let args = args
         .iter()
         .map(|arg| (*arg).to_string())
         .collect::<Vec<_>>();
     run_command_structured(cwd, program, &args, timeout)
-        .map_err(|error| catalog_error_from_execution_error(CatalogOperation::Status, &error))
 }
 
 fn gradle_status(
@@ -151,7 +174,8 @@ fn gradle_status(
         &["tasks", "--all", "--quiet"],
         &execution.install_cwd,
         timeout,
-    )?;
+    )
+    .map_err(|error| catalog_error_from_execution_error(CatalogOperation::Status, &error))?;
     if !output.status.success() {
         return Ok(ToolStatus::Missing);
     }
@@ -307,6 +331,32 @@ mod tests {
         assert_eq!(error.kind, CatalogOperationErrorKind::Timeout);
         assert!(error.command.is_some());
         assert_eq!(error.cwd.as_deref(), Some(dir.path()));
+    }
+
+    #[test]
+    fn installer_managed_tool_missing_from_path_is_installable() {
+        let dir = TempDir::new().expect("tempdir");
+        let entry = CatalogEntry {
+            name: "missing-tool",
+            check: Some(VersionCheck {
+                command: "ayni-test-command-that-does-not-exist",
+                args: &[],
+                contains: None,
+            }),
+            installer: Installer::GoInstall {
+                module: "example.invalid/tool",
+                version: None,
+            },
+            for_signals: &[],
+            opt_in: false,
+        };
+
+        assert_eq!(
+            GENERIC_CATALOG_RUNTIME
+                .status(&entry, &execution(dir.path()), Duration::from_secs(1))
+                .expect("a missing installable tool is a normal status result"),
+            ToolStatus::Missing
+        );
     }
 
     #[test]

@@ -165,8 +165,8 @@ fn runtime_status(
     let mut last_spawn_error = None;
     for program in RUNTIME_PROGRAMS {
         match status_command(execution, program, &["--version"], timeout) {
-            Ok(output) if output.status.success() => return Ok(ToolStatus::Current),
-            Ok(_) => {}
+            Ok(Some(output)) if output.status.success() => return Ok(ToolStatus::Current),
+            Ok(Some(_)) | Ok(None) => {}
             Err(error) if error.kind == CatalogOperationErrorKind::Spawn => {
                 last_spawn_error = Some(error);
             }
@@ -196,7 +196,9 @@ fn import_status(
         (execution.runner.clone(), args)
     };
     let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let output = status_command(execution, &program, &refs, timeout)?;
+    let Some(output) = status_command(execution, &program, &refs, timeout)? else {
+        return Ok(ToolStatus::Missing);
+    };
     Ok(if output.status.success() {
         ToolStatus::Current
     } else {
@@ -211,7 +213,9 @@ fn uv_tool_status(
     timeout: Duration,
 ) -> Result<ToolStatus, CatalogOperationError> {
     let program = uv_program(execution);
-    let output = status_command(execution, program, &["tool", "list"], timeout)?;
+    let Some(output) = status_command(execution, program, &["tool", "list"], timeout)? else {
+        return Ok(ToolStatus::Missing);
+    };
     if !output.status.success() {
         return Ok(ToolStatus::Missing);
     }
@@ -225,12 +229,15 @@ fn uv_tool_status(
     if version.is_some_and(|version| !line.contains(version)) {
         return Ok(ToolStatus::Outdated);
     }
-    let output = status_command(
+    let Some(output) = status_command(
         execution,
         program,
         &["tool", "run", package, "--help"],
         timeout,
-    )?;
+    )?
+    else {
+        return Ok(ToolStatus::Missing);
+    };
     Ok(if output.status.success() {
         ToolStatus::Current
     } else {
@@ -251,13 +258,24 @@ fn status_command(
     program: &str,
     args: &[&str],
     timeout: Duration,
-) -> Result<Output, CatalogOperationError> {
+) -> Result<Option<Output>, CatalogOperationError> {
     let args = args
         .iter()
         .map(|arg| (*arg).to_string())
         .collect::<Vec<_>>();
-    run_command_structured(&execution.install_cwd, program, &args, timeout)
-        .map_err(|error| catalog_error_from_execution_error(CatalogOperation::Status, &error))
+    match run_command_structured(&execution.install_cwd, program, &args, timeout) {
+        Ok(output) => Ok(Some(output)),
+        Err(error) if executable_not_found(&error) => Ok(None),
+        Err(error) => Err(catalog_error_from_execution_error(
+            CatalogOperation::Status,
+            &error,
+        )),
+    }
+}
+
+fn executable_not_found(error: &ayni_adapters_common::exec::ExecutionError) -> bool {
+    error.kind == ayni_adapters_common::exec::ExecutionErrorKind::Spawn
+        && error.detail.contains("No such file or directory")
 }
 
 fn run_install(
