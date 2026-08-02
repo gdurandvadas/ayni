@@ -28,13 +28,111 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Test
-        run: cargo test --workspace --all-features
+        run: cargo test --locked --workspace --all-features
 
       - name: Check
-        run: cargo check --workspace --all-features
+        run: cargo check --locked --workspace --all-features
+
+  examples:
+    name: Real tools (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            fixture: examples/go/mono
+            validator_args: --expected-root .
+          - language: node
+            fixture: examples/node/mono
+            validator_args: --expected-root .
+          - language: python
+            fixture: examples/python/mono
+            validator_args: --expected-root libs/greeting --expected-root libs/math --expected-root services/greeting_service
+          - language: kotlin
+            fixture: examples/kotlin/mono
+            validator_args: --expected-root .
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+
+      - name: Set up Node
+        if: matrix.language == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Enable Node package managers
+        if: matrix.language == 'node'
+        run: corepack enable
+
+      - name: Set up Python
+        if: matrix.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python catalog installer
+        if: matrix.language == 'python'
+        run: python -m pip install --disable-pip-version-check uv
+
+      - name: Set up Java
+        if: matrix.language == 'kotlin'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        if: matrix.language == 'kotlin'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Build checkout Ayni CLI
+        run: cargo build --locked -p ayni-cli
+
+      - name: Apply and check adapter catalog
+        run: |
+          ./target/debug/ayni install --repo-root "${{ matrix.fixture }}" --apply
+          ./target/debug/ayni install --repo-root "${{ matrix.fixture }}" --check
+
+      - name: Analyze fixture and validate typed artifact
+        shell: bash
+        run: |
+          fixture="${{ matrix.fixture }}"
+          rm -rf "$fixture/.ayni"
+          set +e
+          ./target/debug/ayni analyze --config "$fixture/.ayni.toml"
+          analyze_code=$?
+          set -e
+          echo "Ayni analyze exit code: $analyze_code (policy failures are permitted)"
+          python3 scripts/ci/validate_example_artifact.py \
+            --artifact "$fixture/.ayni/last/signals.json" \
+            --language "${{ matrix.language }}" \
+            --repository-root "$fixture" \
+            ${{ matrix.validator_args }}
+
+      - name: Remove ephemeral analysis artifacts
+        if: always()
+        run: rm -rf "${{ matrix.fixture }}/.ayni"
 
   run:
     runs-on: ubuntu-latest
@@ -59,7 +157,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Cargo build ayni-cli
-        run: cargo build -p ayni-cli
+        run: cargo build --locked -p ayni-cli
 
       - name: Install ayni scaffolding and tools
         id: install

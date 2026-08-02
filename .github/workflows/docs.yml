@@ -43,7 +43,7 @@ jobs:
         run: npm ci
 
       - name: Regenerate CLI docs
-        run: cargo doc-cli > docs/cli.md
+        run: cargo doc-cli --locked > docs/cli.md
 
       - name: Build VitePress
         env:
