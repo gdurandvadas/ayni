@@ -1,9 +1,10 @@
 use super::util::run_tool_for_context;
-use ayni_adapters_common::collector::CollectorResult;
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::format_command;
 use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_adapters_common::failure::{command_failure_from_output, coverage_metric_failure};
 use ayni_adapters_common::paths::to_repo_relative_path;
+use ayni_adapters_common::reports::prepare_report_path;
 use ayni_core::{
     Budget, ConfiguredMetricEvaluation, CoverageOffender, CoveragePolicy, CoverageResult, Language,
     Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
@@ -13,7 +14,8 @@ use serde_json::json;
 use std::fs;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
-    let profile_path = context.workdir.join(".ayni-go-cover.out");
+    let profile_path =
+        prepare_report_path(context, "go", "coverage.out").map_err(CollectorError::Adapter)?;
     let profile_arg = format!("-coverprofile={}", profile_path.display());
     let (test_program, test_args, test_engine) = coverage_test_command(context, &profile_arg);
     let test_output = match run_tool_for_context(context, &test_program, &test_args) {
