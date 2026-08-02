@@ -326,7 +326,7 @@ pub(crate) fn catalog_entry_enabled_for_policy(policy: &AyniPolicy, entry: &Cata
     }) || entry.for_signals.is_empty()
 }
 
-fn prepare_install_policy(
+pub(crate) fn prepare_install_policy(
     root: &Path,
     selected_languages: &BTreeSet<Language>,
 ) -> Result<AyniPolicy, String> {

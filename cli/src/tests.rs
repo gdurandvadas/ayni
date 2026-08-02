@@ -461,8 +461,7 @@ fn install_bootstraps_policy_for_every_selected_language() {
         .expect("package manifest");
     let selected = BTreeSet::from([Language::Rust, Language::Node]);
 
-    install_impl(&dir.path().to_string_lossy(), &selected, false).expect("install");
-    let policy = AyniPolicy::load(dir.path()).expect("policy");
+    let policy = crate::install::prepare_install_policy(dir.path(), &selected).expect("policy");
 
     assert_eq!(
         policy.enabled_languages().expect("languages"),
