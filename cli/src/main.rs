@@ -9,11 +9,13 @@ use std::thread;
 
 mod agents;
 mod artifact_compare;
+mod completion;
 mod contract;
 mod discovery;
 mod install;
 mod install_check;
 mod ui;
+mod verification_command;
 mod verify;
 
 use agents::sync_impl;
@@ -23,10 +25,9 @@ use ayni_adapters_rust::RustAdapter;
 use ayni_core::{
     AYNI_POLICY_FILE, AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, AyniPolicy, Budget,
     CommandFailure, CompletionIssue, CompletionScope, CompletionStage, CompletionState,
-    ComplexityResult, ConcurrencyPolicy, CoverageResult, DepsResult, FindingError,
-    InvocationContext, Language, MutationResult, Offenders, OutputContext, RunArtifact,
-    RunArtifactMetadata, RunCompletion, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    SizeResult, TestResult, VerificationTarget,
+    ComplexityResult, ConcurrencyPolicy, CoverageResult, DepsResult, InvocationContext, Language,
+    MutationResult, Offenders, OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion,
+    RunContext, Scope, SignalKind, SignalResult, SignalRow, SizeResult, TestResult,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use install::{enabled_signal_kinds, install_impl};
@@ -136,6 +137,9 @@ struct VerifyCommonOptions {
     config: String,
     #[arg(long, value_enum)]
     language: Option<LanguageArg>,
+    /// Select exactly one normalized root configured for the selected language.
+    #[arg(long)]
+    root: Option<String>,
     #[arg(long, value_enum)]
     output: Option<OutputArg>,
     #[arg(long)]
@@ -391,6 +395,7 @@ fn run_verify_command(command: VerifyCommands) -> ExitCode {
         package,
         name,
         language: options.language.map(|value| value.as_language()),
+        root: options.root,
         output_mode,
         debug: options.debug,
     };
@@ -580,10 +585,11 @@ fn run_collect_with_ui(
         .map(|target| target.run_context.policy.concurrency.clone())
         .unwrap_or_default();
     let rows = collect_targets_with_ui(ctx, &planning.targets, &concurrency)?;
+    let (completion, rows) = completion::reconcile(planning, scope, None, rows);
     Ok(RunArtifact {
         schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
         metadata: Default::default(),
-        completion: planning.completion(scope, planning.targets.len() as u64, Vec::new()),
+        completion,
         findings: Vec::new(),
         rows,
     })
@@ -1063,8 +1069,8 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<AnalyzeOut
         &metadata,
         artifact_slot,
     )?;
-    materialize_finding_commands(&mut artifact, &build_registry())?;
     artifact.metadata = metadata;
+    verification_command::materialize_finding_commands(&mut artifact, &build_registry())?;
     let serialized = serialize_artifact(&artifact)?;
     persist_artifact_at(&workspace_root, SIGNALS_ARTIFACT, &serialized)?;
     emit_analyze_outputs(output_mode, &policy, &artifact, &serialized)?;
@@ -1304,90 +1310,6 @@ fn serialize_artifact(artifact: &RunArtifact) -> Result<String, String> {
     serde_json::to_string_pretty(artifact)
         .map(|serialized| format!("{serialized}\n"))
         .map_err(|error| format!("failed to serialize artifact: {error}"))
-}
-
-/// Materialize adapter-owned targets only after capability validation and before
-/// any terminal, Markdown, JSON, or persisted artifact presentation.
-fn materialize_finding_commands(
-    artifact: &mut RunArtifact,
-    registry: &AdapterRegistry,
-) -> Result<(), String> {
-    let mut findings = Vec::with_capacity(artifact.rows.len());
-    for row in &artifact.rows {
-        let adapter = registry
-            .adapters()
-            .iter()
-            .find(|adapter| adapter.language() == row.language)
-            .ok_or_else(|| format!("{} adapter unavailable", row.language))?;
-        let mut row_findings = adapter
-            .findings_for(row, &row.scope.workspace_root)
-            .map_err(|error| format!("failed to map {:?} findings: {error}", row.kind))?;
-        row_findings
-            .render_commands(|target| {
-                adapter
-                    .verification_selector_support(row.kind)
-                    .validate_target(row.kind, target)?;
-                Ok(render_verification_command(row.kind, row.language, target))
-            })
-            .map_err(|error: FindingError| error.to_string())?;
-        findings.push(row_findings);
-    }
-    artifact.findings = findings;
-    Ok(())
-}
-
-fn render_verification_command(
-    kind: SignalKind,
-    language: Language,
-    target: &VerificationTarget,
-) -> String {
-    let mut command = format!(
-        "ayni verify {} --language {}",
-        signal_kind_slug(kind),
-        language.as_str()
-    );
-    if let Some(file) = &target.file {
-        command.push_str(&format!(" --file {}", shell_quote(file)));
-    }
-    if let Some(package) = &target.package {
-        command.push_str(&format!(" --package {}", shell_quote(package)));
-    }
-    if let Some(name) = &target.name {
-        command.push_str(&format!(" --name {}", shell_quote(name)));
-    }
-    command
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-#[cfg(test)]
-mod verification_command_tests {
-    use super::{render_verification_command, shell_quote};
-    use ayni_core::{Language, SignalKind, VerificationTarget};
-
-    #[test]
-    fn verification_command_is_exact_and_shell_safe() {
-        assert_eq!(
-            render_verification_command(
-                SignalKind::Test,
-                Language::Node,
-                &VerificationTarget {
-                    file: Some(String::from("tests/a weird;name.test.js")),
-                    package: None,
-                    name: Some(String::from("it's focused $(nope)")),
-                },
-            ),
-            "ayni verify test --language node --file 'tests/a weird;name.test.js' --name 'it'\"'\"'s focused $(nope)'"
-        );
-    }
-
-    #[test]
-    fn shell_quote_always_quotes_empty_and_hostile_values() {
-        assert_eq!(shell_quote(""), "''");
-        assert_eq!(shell_quote("a' b"), "'a'\"'\"' b'");
-    }
 }
 
 fn persist_artifact_at(

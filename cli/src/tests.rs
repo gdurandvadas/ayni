@@ -12,6 +12,8 @@ fn verify_test_cli_parses_focused_node_selectors() {
         "test",
         "--language",
         "node",
+        "--root",
+        "frontend",
         "--package",
         "@guita/web",
         "--file",
@@ -28,6 +30,7 @@ fn verify_test_cli_parses_focused_node_selectors() {
         panic!("verify test command");
     };
     assert_eq!(options.package.as_deref(), Some("@guita/web"));
+    assert_eq!(options.common.root.as_deref(), Some("frontend"));
     assert_eq!(
         options.file.as_deref(),
         Some("frontend/apps/web/src/lib/money.test.ts")

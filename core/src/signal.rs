@@ -1,6 +1,7 @@
 use crate::language::Language;
 use crate::runtime::Scope;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Semantic version of the JSON `RunArtifact` contract (`schema_version` field).
 pub const AYNI_SIGNAL_SCHEMA_VERSION: &str = "0.3.0";
@@ -255,6 +256,7 @@ impl RunArtifact {
             });
         AggregateSummary {
             status: if self.completion.state == CompletionState::Complete
+                && (self.completion.expected_targets == 0 || total_rows > 0)
                 && passing_rows == total_rows
             {
                 AggregateStatus::Pass
@@ -338,6 +340,7 @@ impl Serialize for RunArtifact {
         self.completion
             .validate()
             .map_err(serde::ser::Error::custom)?;
+        validate_row_completion_structure(self).map_err(serde::ser::Error::custom)?;
         RunArtifactSerialization::from(self).serialize(serializer)
     }
 }
@@ -581,6 +584,7 @@ fn validate_deserialized_artifact(
         ));
     }
     artifact.completion.validate().map_err(String::from)?;
+    validate_row_completion_structure(artifact)?;
     if artifact.aggregate() != aggregate
         || artifact.applied_thresholds() != applied_thresholds
         || artifact.offender_summaries() != offender_summaries
@@ -589,6 +593,79 @@ fn validate_deserialized_artifact(
         return Err(String::from("artifact summaries must match canonical rows"));
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CompletionRowKey {
+    language: Language,
+    configured_root: String,
+    kind: SignalKind,
+}
+
+fn validate_row_completion_structure(artifact: &RunArtifact) -> Result<(), String> {
+    if artifact.completion.state == CompletionState::Complete
+        && artifact.completion.expected_targets > 0
+        && artifact.rows.is_empty()
+    {
+        return Err(String::from(
+            "complete artifact with expected targets must contain rows",
+        ));
+    }
+
+    let mut keys = BTreeSet::new();
+    let mut represented = BTreeMap::<(Language, String), BTreeSet<SignalKind>>::new();
+    for row in &artifact.rows {
+        let configured_root = normalize_row_root(row.scope.path.as_deref());
+        let key = CompletionRowKey {
+            language: row.language,
+            configured_root: configured_root.clone(),
+            kind: row.kind,
+        };
+        if !keys.insert(key) {
+            return Err(String::from("artifact row completion keys must be unique"));
+        }
+        represented
+            .entry((row.language, configured_root))
+            .or_default()
+            .insert(row.kind);
+    }
+
+    if (represented.len() as u64) < artifact.completion.completed_targets {
+        return Err(String::from(
+            "artifact rows represent fewer targets than completion reports",
+        ));
+    }
+    if artifact.completion.state == CompletionState::Complete
+        && represented.len() as u64 != artifact.completion.completed_targets
+    {
+        return Err(String::from(
+            "complete artifact represented targets do not reconcile with completion",
+        ));
+    }
+
+    if artifact.completion.state == CompletionState::Complete
+        && artifact.completion.scope == CompletionScope::Repository
+    {
+        let mut kind_sets = represented.values();
+        if let Some(expected) = kind_sets.next()
+            && (expected.is_empty() || kind_sets.any(|kinds| kinds != expected))
+        {
+            return Err(String::from(
+                "completed repository targets must have a consistent non-empty signal-kind set",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_row_root(root: Option<&str>) -> String {
+    let normalized = root.unwrap_or(".").trim().replace('\\', "/");
+    let normalized = normalized.trim_end_matches('/');
+    if normalized.is_empty() || normalized == "." {
+        String::from(".")
+    } else {
+        normalized.to_string()
+    }
 }
 
 impl<'de> Deserialize<'de> for RunArtifact {
@@ -1077,6 +1154,95 @@ mod tests {
 
         let error = serde_json::from_value::<RunArtifact>(value).expect_err("invalid completion");
         assert!(error.to_string().contains("incomplete artifact"));
+    }
+
+    #[test]
+    fn complete_artifact_requires_rows() {
+        let artifact = RunArtifact::new(
+            RunArtifactMetadata::default(),
+            RunCompletion::complete(CompletionScope::Repository, 1),
+            vec![structural_test_row(".", SignalKind::Size)],
+        );
+        let mut value = serde_json::to_value(artifact).expect("valid artifact");
+        value["rows"] = serde_json::json!([]);
+        value["applied_thresholds"] = serde_json::json!([]);
+        value["offender_summaries"] = serde_json::json!([]);
+        value["aggregate"] = serde_json::json!({
+            "status": "fail",
+            "total_rows": 0,
+            "passing_rows": 0,
+            "failing_rows": 0,
+            "warning_offenders": 0,
+            "failing_offenders": 0
+        });
+
+        let error = serde_json::from_value::<RunArtifact>(value).expect_err("missing rows");
+        assert!(error.to_string().contains("must contain rows"), "{error}");
+    }
+
+    #[test]
+    fn complete_artifact_rejects_inconsistent_row_sets() {
+        let artifact = RunArtifact::new(
+            RunArtifactMetadata::default(),
+            RunCompletion::complete(CompletionScope::Repository, 2),
+            vec![
+                structural_test_row(".", SignalKind::Size),
+                structural_test_row("crate", SignalKind::Size),
+            ],
+        );
+        let value = serde_json::to_value(artifact).expect("valid artifact");
+
+        let mut duplicate = value.clone();
+        let row = duplicate["rows"][0].clone();
+        duplicate["rows"].as_array_mut().expect("rows").push(row);
+        let error =
+            serde_json::from_value::<RunArtifact>(duplicate).expect_err("duplicate completion key");
+        assert!(error.to_string().contains("must be unique"), "{error}");
+
+        let mut missing_target = value.clone();
+        missing_target["rows"].as_array_mut().expect("rows").pop();
+        let error = serde_json::from_value::<RunArtifact>(missing_target)
+            .expect_err("represented target mismatch");
+        assert!(
+            error.to_string().contains("fewer targets")
+                || error.to_string().contains("do not reconcile"),
+            "{error}"
+        );
+
+        let mut inconsistent_kinds = value;
+        inconsistent_kinds["rows"][1]["kind"] = serde_json::json!("test");
+        let error = serde_json::from_value::<RunArtifact>(inconsistent_kinds)
+            .expect_err("inconsistent signal kinds");
+        assert!(
+            error
+                .to_string()
+                .contains("consistent non-empty signal-kind set"),
+            "{error}"
+        );
+    }
+
+    fn structural_test_row(root: &str, kind: SignalKind) -> SignalRow {
+        assert_eq!(kind, SignalKind::Size);
+        SignalRow {
+            kind,
+            language: Language::Rust,
+            scope: Scope {
+                workspace_root: String::from("."),
+                path: (root != ".").then(|| root.to_string()),
+                package: None,
+                file: None,
+            },
+            pass: true,
+            result: SignalResult::Size(SizeResult {
+                max_lines: 0,
+                total_files: 0,
+                warn_count: 0,
+                fail_count: 0,
+                failure: None,
+            }),
+            budget: Budget::Size(serde_json::json!({})),
+            offenders: Offenders::Size(Vec::new()),
+        }
     }
 
     #[test]

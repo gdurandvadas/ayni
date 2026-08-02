@@ -369,7 +369,9 @@ repository completion operation and the sole writer of
 `--language` selectors.
 
 For the fast TDD loop, `ayni verify <signal>` runs one of the six canonical
-signals. `--file`, `--package`, and test-only `--name` are adapter- and
+signals. `--root` selects exactly one normalized root configured for the
+selected language and is validated before adapter-owned selectors. `--file`,
+`--package`, and test-only `--name` are adapter- and
 signal-owned capabilities, not generic filters; unsupported, conflicting, or
 ambiguous selections are rejected before a collector invokes a tool. Requested
 schema-v3 evidence is persisted at `.ayni/verify/last/signals.json`. It has

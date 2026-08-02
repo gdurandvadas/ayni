@@ -147,6 +147,31 @@ fn completion_counts_failed_rows_as_completed_targets() {
 }
 
 #[test]
+fn missing_expected_signal_row() {
+    let fixture = Fixture::new(&["good"], true);
+    fixture.add_rust_root("good");
+
+    let output = fixture.run(&["analyze", "--json"]);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let mut artifact = fixture.artifact(".ayni/last/signals.json");
+    artifact["rows"] = serde_json::json!([]);
+    artifact["applied_thresholds"] = serde_json::json!([]);
+    artifact["offender_summaries"] = serde_json::json!([]);
+    artifact["aggregate"] = serde_json::json!({
+        "status": "fail",
+        "total_rows": 0,
+        "passing_rows": 0,
+        "failing_rows": 0,
+        "warning_offenders": 0,
+        "failing_offenders": 0
+    });
+
+    let error = serde_json::from_value::<ayni_core::RunArtifact>(artifact)
+        .expect_err("complete evidence cannot omit its expected signal row");
+    assert!(error.to_string().contains("must contain rows"), "{error}");
+}
+
+#[test]
 fn completion_verify_failure_replaces_only_requested_scope_artifact() {
     let fixture = Fixture::new(&["missing"], true);
     let analyze_path = fixture.root.join(".ayni/last/signals.json");

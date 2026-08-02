@@ -71,6 +71,81 @@ fn all_checks(enabled: &str) -> String {
 }
 
 #[test]
+fn emitted_multi_root_command_is_reproducible() {
+    let tempdir = TempDir::new().expect("tempdir");
+    let root = tempdir.path();
+    for configured_root in ["services/one", "services/two"] {
+        let target = root.join(configured_root);
+        fs::create_dir_all(&target).expect("target root");
+        fs::write(
+            target.join("Cargo.toml"),
+            "[package]\nname = \"same-name\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("manifest");
+        fs::write(target.join("oversized.rs"), "one\ntwo\nthree\n").expect("source");
+    }
+    let config = root.join("focused.toml");
+    fs::write(
+        &config,
+        format!(
+            "[checks]\n{}\n\n[languages]\nenabled = [\"rust\"]\n\n[rust]\nroots = [\"services/one\", \"services/two\"]\n\n[rust.size]\n\"*.rs\" = {{ warn = 1, fail = 2 }}\n",
+            all_checks("size")
+        ),
+    )
+    .expect("policy");
+
+    let analyze = ayni()
+        .args([
+            "analyze",
+            "--config",
+            config.to_str().expect("config"),
+            "--json",
+        ])
+        .output()
+        .expect("analyze");
+    assert!(!analyze.status.success(), "size findings must fail");
+    let artifact: Value = serde_json::from_slice(&analyze.stdout).expect("artifact");
+    let commands = artifact["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|row| {
+            row["offenders"]["items"][0]["verification"]["command"]
+                .as_str()
+                .expect("command")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(commands.len(), 2);
+    assert!(commands[0].contains("--root 'services/one'"));
+    assert!(commands[1].contains("--root 'services/two'"));
+
+    // Execute the first emitted command's exact selector values. A finding is
+    // expected, but requested completion must contain only its originating root.
+    let reproduced = ayni()
+        .args([
+            "verify",
+            "size",
+            "--config",
+            config.to_str().expect("config"),
+            "--language",
+            "rust",
+            "--root",
+            "services/one",
+            "--file",
+            "services/one/oversized.rs",
+            "--json",
+        ])
+        .output()
+        .expect("reproduce finding command");
+    assert!(!reproduced.status.success(), "finding remains reproducible");
+    let reproduced: Value = serde_json::from_slice(&reproduced.stdout).expect("verify artifact");
+    assert_eq!(reproduced["completion"]["expected_targets"], 1);
+    assert_eq!(reproduced["completion"]["completed_targets"], 1);
+    assert_eq!(reproduced["rows"].as_array().expect("rows").len(), 1);
+    assert_eq!(reproduced["rows"][0]["scope"]["path"], "services/one");
+}
+
+#[test]
 fn size_file_verification_is_exact_requested_evidence_and_preserves_analyze_artifact() {
     let fixture = RustFixture::new(
         &all_checks("size"),
@@ -125,6 +200,20 @@ fn policy_and_selector_validation_happen_before_tool_execution() {
         let output = fixture.run(args);
         assert!(!output.status.success(), "{args:?} unexpectedly succeeded");
     }
+    let invalid_root = fixture.run(&[
+        "test",
+        "--language",
+        "rust",
+        "--root",
+        "missing",
+        "--file",
+        "src/lib.rs",
+    ]);
+    assert!(!invalid_root.status.success());
+    assert!(
+        String::from_utf8_lossy(&invalid_root.stderr).contains("not a normalized configured root"),
+        "root validation must precede adapter rejection of test --file"
+    );
     assert!(!marker.exists(), "validation must precede tool invocation");
 }
 

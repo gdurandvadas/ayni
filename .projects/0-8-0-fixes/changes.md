@@ -19,6 +19,16 @@ Append one section per milestone. Before `project_commit`, use this exact marker
 - Ayni: passed | failed | skipped
 - Accepted deviations: none
 
+## Milestone: milestone-4
+
+- Status: validated
+- Changed responsibilities: Internal expected `(language, normalized root, signal)` row planning/reconciliation; missing, duplicate, or unexpected rows make completion incomplete; failed rows remain evidence; schema-v3 structural row validation and zero-row hardening; public optional `verify --root`; all generated commands include shell-safe originating config/language/exact root and supported selectors; multi-root commands execute reproducibly; CLI docs regenerated.
+- Explicit changed paths: `cli/src/completion.rs`, `cli/src/verification_command.rs`, `cli/src/main.rs`, `cli/src/verify.rs`, `cli/src/tests.rs`, `cli/src/ui/report.rs`, `cli/tests/completion_e2e.rs`, `cli/tests/findings_e2e.rs`, `cli/tests/verify_e2e.rs`, `core/src/signal.rs`, `docs/cli.md`, `docs/product/config.md`, `docs/product/signals/v3.md`.
+- Focused commands and outcomes: Focused validation passed as supplied by the orchestrator.
+- Promotion commands and outcomes: `cargo fmt --all -- --check` passed; `cargo test -p ayni-core --all-features` passed; `cargo test -p ayni-cli --test completion_e2e --test findings_e2e --test verify_e2e --all-features` passed.
+- Ayni status and evidence: passed. Canonical Ayni ran once and passed: complete 1/1, 5/5 rows, 289 tests, coverage 67.58260283209711%, zero failing offenders.
+- Accepted deviations: Comparison required no direct edit because its loading/validation already traverses strengthened `RunArtifact` validation.
+
 ## Milestone: milestone-3
 
 - Status: validated

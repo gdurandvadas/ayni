@@ -98,6 +98,7 @@ Run only the test signal with adapter-owned selectors
 
   Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
+* `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
   Possible values:
@@ -131,6 +132,7 @@ Run only the coverage signal with adapter-owned selectors
 
   Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
+* `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
   Possible values:
@@ -161,6 +163,7 @@ Run only the size signal with adapter-owned selectors
 
   Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
+* `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
   Possible values:
@@ -192,6 +195,7 @@ Run only the complexity signal with adapter-owned selectors
 
   Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
+* `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
   Possible values:
@@ -224,6 +228,7 @@ Run only the dependency signal with adapter-owned selectors
 
   Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
+* `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
   Possible values:
@@ -256,6 +261,7 @@ Run only the mutation signal with adapter-owned selectors
 
   Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
+* `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
   Possible values:
