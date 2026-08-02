@@ -15,6 +15,12 @@ Ayni discovers language roots separately from execution context.
 Resolution must be ancestry-aware. A leaf package may execute through a manager
 or workspace defined above it.
 
+Configured roots remain contained in the selected repository: their policy
+spelling is lexically relative, existing paths are canonically checked against
+the canonical repository, and symlinks that escape it are rejected. A safe
+missing root is not made into an error during policy validation; it remains a
+configured target so detection and completion can produce an explicit issue.
+
 Every analyzed root records:
 
 - `runner`
@@ -50,6 +56,18 @@ For every enabled detected language/root it validates:
 
 Set `[<language>.foundation].validate_install = false` only when a repository
 intentionally wants scaffolding or installation without validation.
+
+Catalog execution is neutral shared infrastructure: core defines catalog
+contracts, the common runtime runs declarative entries, and each adapter owns
+language-specific status, preparation, and installation behavior. In
+particular, Node selects its resolved npm/pnpm/Yarn/Bun manager and Python
+selects its resolved manager (with `uv tool` where applicable). Applied install
+may prepare those local environments before installing missing or outdated
+enabled catalog requirements. Catalog status
+inspection during listing and readiness checking is read-only: it does not
+prepare a manager or install a package. Normal `install` may still perform its
+documented policy and `.gitignore` scaffolding; `install --check` writes no
+repository files.
 
 ## Read-only Install Readiness
 
@@ -89,6 +107,11 @@ outdated. `ready` exits zero. Paths in detection and resolution details reflect
 the supplied repository root, so callers that need byte-identical output across
 invocations should supply the same root spelling.
 
+Catalog status, preparation, and installation failures are structured with the
+operation, command, working directory, exit status when available, and concise
+diagnostics. They are reported against the affected language/root/requirement;
+they are not silently converted to a missing tool.
+
 ## Failure Categories
 
 Tool failures should become failed signal rows when a valid row can be emitted.
@@ -104,6 +127,11 @@ Failure categories:
 
 Default output shows a short failure cause and category. `--debug` prints runner
 resolution, cwd, command, exit code, stdout, and stderr for each tool run.
+
+Every adapter command uses the configured wall-clock timeout. The runner
+captures stdout and stderr concurrently, forwards complete output lines while
+the command is still running for live progress, and on timeout kills and reaps
+the child before returning typed timeout diagnostics with captured output.
 
 ## Config Materialization
 

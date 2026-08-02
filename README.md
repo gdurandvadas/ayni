@@ -71,6 +71,10 @@ ayni agents sync
 ayni analyze
 ```
 
+Without `--language`, bare `ayni install` creates the Rust policy template. For
+a non-Rust or polyglot repository, select every intended language explicitly
+with repeatable `--language` values before synchronizing guidance or analyzing.
+
 Use focused verification for the inner TDD loop. `analyze` always evaluates the
 configured repository and is the only completion gate and writer of
 `.ayni/last/signals.json`:
@@ -130,7 +134,8 @@ for command diagnostics. A missing or outdated requirement, undetected target,
 or unresolved target produces `not_ready` and a non-zero exit status. `--check`
 cannot be combined with `--apply`, and `--output` is check-only.
 
-For a polyglot repository, repeat `--language`; duplicate values are ignored:
+For a non-Rust or polyglot repository, repeat `--language`; duplicate values
+are ignored:
 
 ```sh
 ayni install --repo-root . --language rust --language node --language python --apply
@@ -171,69 +176,39 @@ For the full CLI reference, see [`docs/cli.md`](docs/cli.md).
 
 ## Example Report
 
-<!-- ayni:md branch=feat/kotlin -->
+This is an illustrative point-in-time snapshot from a validated repository run,
+not a promised baseline for every repository or release.
+
 # ayni analyze
 
 **5** / **5** checks passing · aggregate **pass** · schema `0.3.0`
 
 **Completion:** scope `repository` · state **complete** · targets **1** / **1** completed · **1** detected · **0** skipped
 
-The five rows shown here reflect a policy with mutation disabled. In schema v3,
-completion separately reconciles expected, detected, completed, and skipped
-targets; an incomplete artifact includes one ordered issue per skipped target
-and always aggregates to failure, even if its emitted rows pass.
+The five rows shown here reflect a policy with mutation disabled. This snapshot
+recorded 310 passing tests, about 70.99% line coverage, and zero failing
+offenders. In schema v3, completion separately reconciles expected, detected,
+completed, and skipped targets; an incomplete artifact includes one ordered
+issue per skipped target and always aggregates to failure, even if its emitted
+rows pass.
 
 ## rust (workspace) — 5/5 passing
 
 | # | Signal | Summary | Status |
 |---|--------|---------|--------|
-| **1** | **test** | `total=112 passed=112 failed=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
-| **2** | **coverage** | `percent=46.0% status=ok` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
-| **3** | **size** | `max_lines=979 files=89 fail_count=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
-| **4** | **complexity** | `functions=1353 max_cyclo=15.0 fail_count=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/warn.svg" alt="warn" width="20" height="20"> warn |
-| **5** | **deps** | `crates=7 edges=11 violations=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
+| **1** | **test** | `total=310 passed=310 failed=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
+| **2** | **coverage** | `percent=70.99% status=ok` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
+| **3** | **size** | `max_lines=1456 files=115 fail_count=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
+| **4** | **complexity** | `functions=1983 max_cyclo=14.0 fail_count=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/warn.svg" alt="warn" width="20" height="20"> warn |
+| **5** | **deps** | `crates=8 edges=18 violations=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
 
 <details>
 <summary>Offenders</summary>
 
 complexity
-- **WARN** `adapters/rust/src/collectors/deps.rs:109` analyze_deps cyclo=15.0
-- **WARN** `adapters/rust/src/tools/signals.rs:560` run_mutation_check cyclo=15.0
-- **WARN** `adapters/go/src/collectors/test.rs:23` collect cyclo=14.0
-- **WARN** `adapters/rust/src/collectors/size.rs:12` collect cyclo=14.0
-- **WARN** `core/src/catalog/python_resolution.rs:8` resolve_python_package_manager cyclo=14.0
-- **WARN** `adapters/go/src/collectors/complexity.rs:10` collect cyclo=13.0
-- **WARN** `adapters/go/src/collectors/deps.rs:29` collect cyclo=13.0
-- **WARN** `adapters/kotlin/src/collectors/test.rs:90` parse_junit_xml cyclo=13.0
-- **WARN** `adapters/node/src/collectors/complexity.rs:10` collect cyclo=13.0
-- **WARN** `adapters/python/src/collectors/mutation.rs:161` parse_junit_xml cyclo=13.0
-- **WARN** `cli/src/delta.rs:106` signal_result_metrics cyclo=13.0
-- **WARN** `cli/src/ui/md_report.rs:148` offender_lines cyclo=13.0
-- **WARN** `cli/src/ui/report.rs:537` row_status cyclo=13.0
-- **WARN** `cli/src/ui/runner.rs:151` run_internal cyclo=13.0
-- **WARN** `adapters/python/src/collectors/coverage.rs:33` collect cyclo=12.0
-- **WARN** `adapters/rust/src/collectors/complexity.rs:9` collect cyclo=12.0
-- **WARN** `adapters/rust/src/collectors/coverage.rs:192` collect_coverage_percents cyclo=12.0
-- **WARN** `cli/src/install.rs:40` print_install_requirements cyclo=12.0
-- **WARN** `cli/src/install.rs:136` installer_summary cyclo=12.0
-- **WARN** `cli/src/main.rs:242` collect_targets_with_ui cyclo=12.0
-- **WARN** `cli/src/ui/report.rs:573` stylize cyclo=12.0
-- **WARN** `adapters/kotlin/src/collectors/complexity.rs:14` collect cyclo=11.0
-- **WARN** `adapters/node/src/collectors/deps.rs:13` collect cyclo=11.0
-- **WARN** `adapters/node/src/discovery.rs:9` discover_project_roots cyclo=11.0
-- **WARN** `adapters/node/src/discovery.rs:155` discover_file_parent_roots cyclo=11.0
-- **WARN** `adapters/python/src/collectors/complexity.rs:13` collect cyclo=11.0
-- **WARN** `adapters/python/src/collectors/deps.rs:14` collect cyclo=11.0
-- **WARN** `adapters/python/src/discovery.rs:117` discover_file_parent_roots cyclo=11.0
-- **WARN** `adapters/rust/src/discovery.rs:45` discover_file_parent_roots cyclo=11.0
-- **WARN** `cli/src/install.rs:385` validate_install_foundation cyclo=11.0
-- **WARN** `cli/src/install.rs:538` update_foundation_settings cyclo=11.0
-- **WARN** `cli/src/main.rs:488` signal_metrics cyclo=11.0
-- **WARN** `cli/src/ui/report.rs:150` summarize cyclo=11.0
-- **WARN** `core/src/catalog.rs:382` status_in cyclo=11.0
-- **WARN** `core/src/catalog.rs:436` install_with cyclo=11.0
-- **WARN** `core/src/policy.rs:192` normalize_and_validate cyclo=11.0
-- **WARN** `core/src/policy.rs:280` normalize_root_entry cyclo=11.0
+- **WARN** `cli/src/completion.rs:33` reconcile cyclo=14.0
+- **WARN** `cli/src/install.rs:45` print_install_requirements cyclo=14.0
+- **WARN** `core/src/policy.rs:252` normalize_and_validate cyclo=14.0
 
 </details>
 

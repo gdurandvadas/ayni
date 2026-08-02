@@ -11,7 +11,10 @@ package manifest; otherwise it uses npm-compatible behavior.
 
 Node and the selected package manager are user-owned prerequisites. When
 installation is applied, Ayni adds catalog packages as root-local development
-dependencies using that resolved manager.
+dependencies using that resolved manager. Catalog status inspection during
+listing and `ayni install --check` is read-only for that manager; normal applied
+setup may run the resolved manager's dependency preparation before adding
+enabled requirements.
 
 ## Signal Coverage
 
@@ -43,6 +46,11 @@ Package selection remains owned by the resolved npm, pnpm, Yarn, or Bun adapter
 path. `--name` is test-only, and `--file` cannot be combined with `--package`.
 Unsupported or ambiguous selectors are rejected before a tool runs.
 
+Verification commands carry their originating contract and target, for example:
+`ayni verify test --config './.ayni.toml' --language node --root 'apps/web'
+--file 'src/example.test.ts' --name 'renders'`. Use only the selectors marked
+above; copy the exact command in an artifact finding rather than synthesizing one.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure roots in `[node].roots`
@@ -56,6 +64,11 @@ Size requires a budget entry and complexity requires `fn_cyclomatic`; either
 missing value produces a clear collector error. Coverage thresholds and
 dependency rules are optional: without `line_percent`, coverage has no policy
 threshold, and without `node.deps.forbidden`, no edges are forbidden.
+
+Maximum size and complexity boundaries are inclusive (`warn` and `fail` trigger
+at equality); coverage is an exclusive minimum boundary (equality passes that
+threshold). Line and branch coverage are independently enforced: a configured
+metric with missing or unparseable evidence fails the coverage row.
 
 ## Configuration Example
 

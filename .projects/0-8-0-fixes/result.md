@@ -1,6 +1,6 @@
 ---
 project_id: "0-8-0-fixes"
-status: in_progress
+status: completed
 ---
 
 # Result: 0.8.0 fixes
@@ -21,7 +21,7 @@ status: in_progress
 - [x] Install listing, `--apply`, post-apply foundation validation, and read-only `--check` all call the same neutral adapter catalog runtime. Node/Python direct and workspace fixtures prove listing and check never prepare/install or write, apply prepares the resolved install cwd and installs only missing/outdated enabled entries, and timeout/spawn failures remain actionable rather than being silently reported as ordinary absence. CLI orchestration contains no Node/Python manager branch.
 - [x] The eight local workspace package entries in `Cargo.lock` are `0.8.0` without unrelated dependency churn, `cargo check --locked --workspace --all-features` succeeds, and dependency-resolving Cargo invocations in CI, documentation builds, example images, and release builds use `--locked`.
 - [x] Pull-request CI runs the checkout binary against Go, Node, Python, and Kotlin example workspaces with real language tools. The gate requires complete expected row sets and no command failures; intentional policy findings in the fixtures may make Ayni exit non-zero but may not be mistaken for tool/setup success.
-- [ ] User documentation describes both coverage metrics and fail-closed evidence, root containment, exact verification commands, timeout/live-progress behavior, and the actual bare-install default. The README example contains no deleted paths, VitePress navigation labels v3 as current and v2 as historical, and generated `docs/cli.md` matches the checkout CLI.
+- [x] User documentation describes both coverage metrics and fail-closed evidence, root containment, exact verification commands, timeout/live-progress behavior, and the actual bare-install default. The README example contains no deleted paths, VitePress navigation labels v3 as current and v2 as historical, and generated `docs/cli.md` matches the checkout CLI.
 - [x] Repository policy is not loosened to accommodate the corrected equality semantics. Any newly exposed fail-at-15 dogfooding offender is reduced in code before promotion.
 - [x] Each milestone passes its listed focused checks and non-Ayni promotion commands. After a milestone is complete, the orchestrator—not an implementation task—runs the one canonical Ayni full gate for that milestone.
 
@@ -35,18 +35,22 @@ Threshold direction is centralized at the core semantic boundary and consumed by
 
 ## Known limitations
 
-- Later milestones and publication remain pending.
+- Standard Go tooling has no compatible branch-percentage metric, so configured Go branch coverage fails closed.
+- Schema v3 serialized artifacts cannot reconstruct policy-specific expected kinds without in-process planning; serialized validation is structural.
+- GitHub-hosted four-language real-tool matrix execution is deferred to draft-PR CI; its workflow, validator, and tests are validated locally.
+- No local package-registry or language-toolchain installation was performed.
 
 ## Technical debt
 
-- Further approved work remains outstanding, including command execution, catalog ownership, release/CI, and documentation changes.
+- Broad mechanical splitting of remaining large modules and policy tightening/mutation enablement remain separate future work.
+- No language-specific package-manager logic remains in core/common.
 
-Milestone 5 adds a structured runner and CollectorError boundary, configured timeout propagation through collectors/catalog/install, structured failed collector rows, opaque CatalogRuntime, neutral install orchestration, private Node/Python package-manager ownership, and preserves readiness 0.1.0 behavior without the old resolver/API. Canonical analysis found one install-check cyclomatic-15 offender; focused remediation passed maximum cyclomatic 7, cognitive 11, and `fail_count 0`, and the full non-Ayni promotion reran successfully. No second analyze was run. An unrelated external `AGENTS.md` change is not Project delivery.
+All approved milestones are complete. Final behavior includes the centralized threshold, coverage, containment, completion, command-runner, neutral catalog, adapter-ownership, locked-build, documentation, and CI changes described above. Architectural impact is confined to those responsibilities: policy semantics and structural accounting are centralized, language-specific package-manager behavior remains in adapters, and command execution preserves live progress, output, and timeout classification.
 
 ## Ayni
 
 - Status: passed
-- Evidence: Milestone 1 canonical analysis exposed the three offenders, then exact focused checkout verification passed at maxima 9/6/10 with `fail_count 0`; Milestone 2 canonical pass completed 1/1 target with 5/5 rows, 274 tests, coverage `66.96238262572729%`, and zero failing offenders; Milestone 3 canonical Ayni pass completed 1/1 target with 5/5 rows, 282 tests, coverage `67.33195687084194%`, and zero failing offenders; Milestone 4 canonical Ayni pass completed 1/1 target with 5/5 rows, 289 tests, coverage `67.58260283209711%`, and zero failing offenders; Milestone 6 canonical Ayni pass completed 1/1 target with 5/5 rows, 310 tests, coverage `70.9894084215965%`, and zero failing offenders.
+- Evidence: Passed generated CLI diff, VitePress build, fmt, workspace Clippy with `-D warnings`, workspace all-feature tests, workspace check, locked workspace check, validator 15 tests, focused/E2E suites, static architecture/process assertions, and final canonical Ayni: complete 1/1, 5/5 rows, 310 tests, coverage `70.9894084215965%`, max cyclomatic 14, max cognitive 27, zero failing offenders. Skipped/deferred: GitHub-hosted four-language real-tool job execution awaits PR CI; no local package-registry/toolchain installation was performed.
 
 ## Publication
 

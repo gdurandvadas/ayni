@@ -219,7 +219,12 @@ Rules:
 - `auto` is not supported in `languages.enabled` in v0.
 - Paths are canonicalized to POSIX style: backslashes become `/`, trailing `/` is removed.
 - Absolute, rooted, Windows drive-prefixed, and any parent-component (`..`) roots are rejected during policy validation.
-- Before operational commands inspect adapters, every existing root is resolved against the canonical repository; a symlink that resolves outside the repository is rejected. Lexically safe missing roots remain valid so detection and completion can report them.
+- Before operational commands inspect adapters, root containment is checked three
+  ways: policy spelling must be lexically repository-relative, existing paths
+  must canonically remain below the canonical repository, and a symlink may not
+  resolve outside it. Lexically safe missing roots remain valid; they are not
+  dereferenced during validation, so adapter detection and schema-v3 completion
+  can report the missing target instead of silently broadening its scope.
 - `.` means workspace root and maps to `scope.path = null` in artifacts.
 
 ---
@@ -285,8 +290,11 @@ because Cargo serializes builds on the target-directory lock.
 ## Execution
 
 Use `[execution]` to bound how long a single tool invocation may run. When a
-command exceeds the timeout, Ayni kills it and reports the signal as a failed
-row with a timeout message instead of hanging the analyze run.
+command exceeds the timeout, Ayni kills and reaps it, preserves any captured
+diagnostics, and reports a typed failed signal row (or structured catalog
+failure) rather than hanging the run. Command output is streamed as it arrives,
+so interactive progress reflects live tool output rather than a post-process
+summary.
 
 ```toml
 [execution]
@@ -306,8 +314,9 @@ These sections do **not** share the same `exclude` mechanism as size today; beha
 ### Threshold semantics
 
 Every threshold has `warn` and `fail` levels. For **maximum** metrics (size and
-complexity), a value at or above `warn` is a warning and a value at or above
-`fail` fails the signal, so `warn` must not exceed `fail`:
+complexity), boundaries are inclusive: a value equal to `warn` warns and a
+value equal to `fail` fails the signal. `fail` takes precedence, so `warn` must
+not exceed `fail`:
 
 ```toml
 [rust.size]
@@ -319,8 +328,9 @@ but does not fail the row, and a 700-line file is a fail-level offender that
 makes the row fail. Complexity uses the same direction: with
 `{ warn = 10, fail = 20 }`, a function at 10 warns and one at 20 fails.
 
-For **minimum** metrics (coverage), a value below `warn` is a warning and a
-value below `fail` fails the signal, so `warn` must be at least `fail`:
+For **minimum** metrics (coverage), boundaries are exclusive: a value equal to
+either threshold meets that threshold, while a value below `warn` warns and one
+below `fail` fails. `fail` takes precedence, so `warn` must be at least `fail`:
 
 ```toml
 [rust.coverage]
@@ -328,9 +338,18 @@ line_percent = { warn = 80, fail = 70 }
 ```
 
 For that coverage rule, 80% passes, 79% is a warning, and 69% is a failing
-offender. Coverage reverses the comparison because more coverage is better.
+offender (70% is only a warning). Coverage reverses the comparison because more coverage is better.
 Warnings are retained in reports and aggregate warning counts, while only
 fail-level offenders make a row and the aggregate run status fail.
+
+Line and branch coverage are independent minimum metrics. When either is
+configured, that metric requires finite, parseable evidence: missing or
+unparseable evidence fails the coverage row instead of being treated as zero or
+ignored. A configured Go `branch_percent` therefore fails closed because the
+standard `go test` profile and `go tool cover` expose statement coverage, not
+branch coverage. Python's default coverage command requests branch collection
+(`--cov-branch`); command overrides must still produce parseable evidence for
+every configured metric.
 
 The effective typed budgets applied to each analyzed row are preserved in the
 current artifact's `applied_thresholds` field; see [schema v3](signals/v3.md).

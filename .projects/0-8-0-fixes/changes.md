@@ -74,3 +74,11 @@ Append one section per milestone. Before `project_commit`, use this exact marker
 - Promotion: locked workspace check passed; 15 Python tests passed; CLI tests passed.
 - Ayni: passed. Canonical Ayni ran once: complete 1/1, 5/5 rows, 310 tests, coverage 70.9894084215965%, zero failing offenders.
 - Accepted deviations: none. Lock metadata sequencing was documented in Milestone 1; no current deviation.
+## Milestone: milestone-7
+- Status: validated
+- Changed responsibilities: aligned documentation across `README.md`, `docs/.vitepress/config.ts`, `docs/index.md`, `examples/README.md`, `docs/product/config.md`, `docs/product/runtime.md`, `docs/product/signals/v3.md`, `docs/contributing/adapters.md`, `docs/adapters/rust.md`, `docs/adapters/go.md`, `docs/adapters/node.md`, `docs/adapters/python.md`, and `docs/adapters/kotlin.md`; `docs/cli.md` was regenerated and verified exact, with no final-task textual diff.
+- Changed paths: `README.md`; `docs/.vitepress/config.ts`; `docs/index.md`; `examples/README.md`; `docs/product/config.md`; `docs/product/runtime.md`; `docs/product/signals/v3.md`; `docs/contributing/adapters.md`; `docs/adapters/rust.md`; `docs/adapters/go.md`; `docs/adapters/node.md`; `docs/adapters/python.md`; `docs/adapters/kotlin.md`; `docs/cli.md` (regenerated/verified, no final-task textual diff).
+- Focused commands and outcomes: documentation recorded threshold/coverage fail-closed semantics, containment, row-aware v3 completion, exact commands, streaming/timeouts, adapter-owned neutral catalogs, Go branch limitation, bare install Rust default, explicit repeatable languages, v3 current navigation, and illustrative current report paths/metrics; all supplied focused documentation evidence passed.
+- Promotion commands and outcomes: generated CLI diff passed; VitePress build passed; `cargo fmt --all -- --check` passed; workspace Clippy with warnings denied passed; workspace tests passed; workspace check passed; locked workspace check passed.
+- Ayni status and evidence: passed — final canonical Ayni ran once and passed with complete 1/1, 5/5 rows, 310 tests, coverage 70.9894084215965%, maximum cyclomatic complexity 14, maximum cognitive complexity 27, and zero failing offenders.
+- Accepted deviations: none.

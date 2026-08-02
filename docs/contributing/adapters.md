@@ -8,9 +8,10 @@ rules](../product/runtime.md).
 
 Keep the dependency flow `core <- adapters/common <- adapters/<lang> <- cli`.
 `core` owns signal and policy contracts; `adapters/common` owns shared command,
-path, discovery, parsing, and catalog infrastructure; a language adapter owns
-local detection, runner resolution, tool invocation, parsing, and normalization;
-and the CLI owns orchestration and presentation.
+path, discovery, parsing, and neutral catalog execution infrastructure; a
+language adapter owns local detection, runner resolution, tool invocation,
+parsing, normalization, and any adapter-managed catalog behavior; and the CLI
+owns orchestration and presentation.
 
 An adapter must detect language presence, declare tool requirements, collect
 enabled existing signal kinds, normalize tool output to core types, and resolve
@@ -63,16 +64,23 @@ src/
 
 Each collector module owns one signal kind. For coverage, populate
 `CoverageResult.percent` with the headline 0–100 percentage when available;
-use `line_percent` and `branch_percent` for available breakdowns. Follow the
+use `line_percent` and `branch_percent` for available breakdowns. Evaluate each
+configured line or branch threshold independently. Configured metrics require
+finite, parseable evidence; never substitute another metric or fabricate zero
+for missing evidence. Follow the
 [signal contract](../product/signals.md) for all typed fields.
 
 ## Catalog conventions
 
 Every external tool invoked for collection is a `CatalogEntry`; the catalog is
 the source of truth for `ayni install`. Include a stable tool name, a typed
-installer (`Cargo`, `GoInstall`, `NpmGlobal`, `Bundled`, `Custom`, or the
+installer (`Cargo`, `GoInstall`, `Bundled`, `Custom`, `AdapterManaged`, or the
 language-appropriate alternative), an optional check command or version probe,
 the `for_signals` mapping, and `opt_in` for expensive checks such as mutation.
+The common catalog runtime is deliberately neutral: an adapter-managed entry
+must be handled by its owning adapter runtime, including its manager selection,
+status, preparation, and apply behavior. List and `install --check` status
+paths must be read-only; preparation belongs only to normal applied setup.
 
 ## Policy conventions
 
@@ -124,7 +132,12 @@ Before merging an adapter:
 5. Paths are relative and stable.
 6. Adapter documentation names the exact tools, version contract, and policy
    controls.
-7. Run `cargo fmt --all -- --check`,
+7. Exercise the adapter with real tool fixtures in local and CI coverage,
+   including collection, configured thresholds, missing/unparseable configured
+   evidence, supported selectors, catalog readiness, and applied installation
+   where its manager can make changes. Do not satisfy the contract only with
+   mocked command output.
+8. Run `cargo fmt --all -- --check`,
    `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
    `cargo test --workspace --all-features`, and
    `cargo check --workspace --all-features`.

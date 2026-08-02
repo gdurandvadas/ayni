@@ -26,7 +26,8 @@ export default defineConfig({
               text: 'Signals',
               link: '/product/signals',
               items: [
-                { text: 'Schema v2', link: '/product/signals/v2' },
+                { text: 'Schema v3 (current)', link: '/product/signals/v3' },
+                { text: 'Schema v2 (historical)', link: '/product/signals/v2' },
                 { text: 'Schema v1 (historical)', link: '/product/signals/v1' },
               ],
             },
@@ -62,7 +63,8 @@ export default defineConfig({
               text: 'Signals',
               link: '/product/signals',
               items: [
-                { text: 'Schema v2', link: '/product/signals/v2' },
+                { text: 'Schema v3 (current)', link: '/product/signals/v3' },
+                { text: 'Schema v2 (historical)', link: '/product/signals/v2' },
                 { text: 'Schema v1 (historical)', link: '/product/signals/v1' },
               ],
             },
