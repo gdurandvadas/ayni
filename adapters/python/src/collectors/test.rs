@@ -1,7 +1,8 @@
 use super::util::{
     command_failure_from_output, command_for_override_or_default, format_command,
-    prepare_report_path, run_command_for_context,
+    prepare_report_path, run_command_for_context_structured,
 };
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
     TestFailure, TestResult, VerificationSelection,
@@ -47,8 +48,9 @@ struct PytestCrash {
     message: Option<String>,
 }
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let report_path = prepare_report_path(context, "pytest-report.json")?;
+pub fn collect(context: &RunContext) -> CollectorResult {
+    let report_path =
+        prepare_report_path(context, "pytest-report.json").map_err(CollectorError::Adapter)?;
     let report_arg = format!("--json-report-file={}", report_path.display());
     let default_args = ["--json-report", report_arg.as_str()];
     let (program, args) =
@@ -60,8 +62,9 @@ pub fn collect_selected(
     context: &RunContext,
     selection: &VerificationSelection,
     _on_line: &mut dyn FnMut(&str),
-) -> Result<SignalRow, String> {
-    let report_path = prepare_report_path(context, "pytest-report.json")?;
+) -> CollectorResult {
+    let report_path =
+        prepare_report_path(context, "pytest-report.json").map_err(CollectorError::Adapter)?;
     let report_arg = format!("--json-report-file={}", report_path.display());
     let default_args = ["--json-report", report_arg.as_str()];
     let (program, mut args) =
@@ -83,9 +86,9 @@ fn collect_with_command(
     program: String,
     args: Vec<String>,
     report_path: std::path::PathBuf,
-) -> Result<SignalRow, String> {
+) -> CollectorResult {
     let runner = format_command(&program, &args);
-    let output = run_command_for_context(context, &program, &args)?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
     let success = output.status.success();
     let failure = if success {
         None
@@ -122,7 +125,7 @@ fn collect_with_command(
             }),
             tests: Some(Vec::new()),
         },
-        Err(error) => return Err(error),
+        Err(error) => return Err(CollectorError::Adapter(error)),
     };
 
     let summary = report.summary.unwrap_or(PytestSummary {

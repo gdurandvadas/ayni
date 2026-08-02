@@ -1,4 +1,5 @@
-use ayni_adapters_common::exec::{DEFAULT_TOOL_TIMEOUT, run_command};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_core::{
     Budget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope, SignalKind,
     SignalResult, SignalRow,
@@ -8,7 +9,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let rules = context
         .policy
         .rust
@@ -17,14 +18,15 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .map(|value| value.forbidden.clone())
         .unwrap_or_default();
 
-    let metadata = load_metadata(&context.execution.exec_cwd)?;
+    let metadata = load_metadata(context)?;
     let analysis = analyze_deps(
         &metadata,
         &context.repo_root,
         &context.scope,
         &context.target_root,
         &rules,
-    )?;
+    )
+    .map_err(CollectorError::Adapter)?;
 
     Ok(SignalRow {
         kind: SignalKind::Deps,
@@ -90,22 +92,23 @@ struct MemberGraph {
     edges: BTreeSet<(String, String)>,
 }
 
-fn load_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
+fn load_metadata(context: &RunContext) -> Result<CargoMetadata, CollectorError> {
     let args = vec![
         String::from("metadata"),
         String::from("--format-version"),
         String::from("1"),
     ];
-    let output = run_command(repo_root, "cargo", &args, DEFAULT_TOOL_TIMEOUT)?;
+    let output = run_command_for_context_structured(context, "cargo", &args)?;
     if !output.status.success() {
-        return Err(format!(
+        return Err(CollectorError::Adapter(format!(
             "cargo metadata failed (exit {}): {}",
             output.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        )));
     }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("failed to parse cargo metadata output: {error}"))
+    serde_json::from_slice(&output.stdout).map_err(|error| {
+        CollectorError::Adapter(format!("failed to parse cargo metadata output: {error}"))
+    })
 }
 
 fn analyze_deps(

@@ -51,8 +51,10 @@ reproducible and exercising the non-Rust adapters with their real tools in CI.
   ambiguity.
 - [ ] The shared command runner invokes callbacks while the child is still running, preserves
   captured stdout/stderr, and kills timed-out commands. Collector, catalog status/install, and
-  adapter install-preparation subprocesses use that runner and the configured timeout; deterministic
-  tests cover live progress and timeout failure classification.
+  adapter install-preparation subprocesses use that runner and the configured timeout. Every
+  collector spawn/wait/timeout error becomes an emitted failed signal row (never an adapter abort),
+  with spawn/wait classified as `command_error` and timeout as `timeout`; deterministic tests cover
+  live progress and non-zero configured-timeout row classification in all five adapters.
 - [ ] `ayni-core` and `ayni-adapters-common` expose only a language-neutral catalog runtime contract:
   neither crate defines, exports, imports, or branches on Node/Python package-manager enums, marker
   files, workspace formats, module-name rules, or manager-specific run/add/install commands.
@@ -242,6 +244,44 @@ The scaffold reported `carried_changes: []`. The inventory is empty, so there ar
   install preparation, and catalog check/install/status probes. Catalog install commands inherit
   output, but have no timeout. This violates `docs/product/config.md:283-297` and the module's own
   “every adapter command” claim.
+- Task 5.2 scope-review research after its partial implementation found that the direct collector
+  bypass inventory is now closed: no production file below an adapter `src/collectors/` directory
+  creates a process directly. The active partial changes route Rust metadata/complexity/deps, Go
+  coverage post-processing/deps, and Kotlin Gradle task probing through the context-aware common
+  runner, and `adapters/common/src/exec.rs` now exposes structured spawn/wait/timeout errors. Those
+  paths are Project work, not scaffold-carried changes, and must be preserved while Task 5.2 is
+  completed.
+- Closing direct bypasses is insufficient for the approved failure contract. The compatibility
+  `run_command_for_context` and `run_command_for_context_streaming` wrappers call the structured
+  runner but immediately stringify its error. Rust still uses those wrappers in test, coverage,
+  complexity, deps, and mutation; Go uses one through `collectors/util.rs` in test, primary coverage,
+  complexity, and mutation; Node uses them in test, coverage, complexity, and mutation; Python uses
+  them in test, coverage, complexity, and both mutation commands; Kotlin uses them in every primary
+  test, coverage, complexity, deps, and mutation command. Node and Python deps are source-native and
+  have no subprocess to migrate. Go deps, Go secondary coverage, and Kotlin coverage task probing
+  already demonstrate the structured mapping, but do so with duplicated signal-local row builders.
+- All five `collectors/mod.rs` implementations currently turn collector `String` errors into
+  `AdapterError`. Analyze and verify then recover at their CLI orchestration boundaries by creating a
+  failed row classified only as `adapter_error`. Thus a compatibility-wrapper timeout does not abort
+  the whole analyze run, but it does cross the adapter boundary as an abort and loses the stable
+  `timeout` classification, exact command, and captured runner context. This contradicts
+  `docs/product/runtime.md:92-117` (tool failures should be rows; adapter aborts are for invalid
+  contracts/internal faults) and `docs/product/config.md:285-298` (timeout is a failed row). The
+  scope-review option to declare row synthesis solely a CLI responsibility is therefore rejected.
+- The bounded solution is an adapter-common internal collector error seam, not a core trait or CLI
+  contract change. A `CollectorError` distinguishes `Execution(Box<ExecutionError>)` from ordinary
+  adapter strings, and a common `finish_collection` helper maps only the execution variant to a
+  typed failed row before `SignalCollector` returns. Ordinary policy, selection, filesystem, and
+  parser errors continue to become `AdapterError` exactly as today. This seam applies equally to
+  normal, streaming, and focused collection, so neither analyze nor verify can misclassify a runner
+  timeout.
+- Structured execution returns normal `Output` for a child that exits non-zero. Consequently the
+  migration must not route non-zero status through `CollectorError`: each collector retains its
+  existing signal/tool-specific logic and classifications (`import_error`, `collection_error`,
+  `no_tests`, `command_error`, missing report/evidence, and existing signal category). Only runner-
+  owned spawn/wait/timeout failures take the new common failed-row path. A source assertion plus one
+  public collector timeout test per adapter closes the inventory without requiring a slow timeout
+  process for every call site.
 - `Cargo.toml` declares workspace version `0.8.0`; the eight local workspace entries in `Cargo.lock`
   remain `0.7.0`. The ninth `0.7.0` match is the unrelated registry package `ratatui-macros` and must
   not be changed. Current quality, docs, release, and example Docker build commands omit `--locked`.
@@ -386,6 +426,26 @@ return structured spawn/wait/timeout diagnostics instead of collapsing execution
 “missing.” Status probes can use a no-op progress callback, while preparation/install commands
 forward live lines to the existing CLI output. No asynchronous runtime or new crate is introduced.
 
+For collector execution, keep the public core `SignalCollector` contract unchanged. Add
+`adapters/common/src/collector.rs` with an internal `CollectorError`, `CollectorResult`, and
+`finish_collection(language, kind, context, result)` boundary. `From<Box<ExecutionError>>` preserves
+the structured runner error; `From<String>` preserves ordinary adapter errors. `finish_collection`
+returns `Ok(failed_row)` only for the structured execution variant, using
+`command_failure_from_execution_error`; it maps the ordinary variant to the existing
+`AdapterError`. The failed row uses the requested language/kind/scope, the existing schema-v3 result
+variant and neutral empty budget/offenders used by orchestration failures, `pass = false`, exact
+runner command/cwd/exit context, and classifications `command_error` for spawn/wait or `timeout` for
+timeout. It does not parse an error string.
+
+Migrate each process-bearing collector and collector utility to
+`run_command_for_context_structured` or `run_command_for_context_streaming_structured` and propagate
+`ExecutionError` through `CollectorError`. Each adapter's `collectors/mod.rs` must call
+`finish_collection` for normal, streaming, and focused paths. Source-only size collectors and
+Node/Python source-native deps collectors may retain string-returning internals and explicitly map
+those strings into `CollectorError`; they do not gain subprocesses. Keep the string compatibility
+runner APIs temporarily for catalog/install callers until Tasks 5.3–5.6 migrate those paths, but no
+collector may call them after Task 5.2e.
+
 ### Adapter-owned package managers and neutral catalog runtime
 
 Replace the manager-bearing `InstallContext` and direct CLI calls into common catalog functions with
@@ -462,9 +522,14 @@ existing foundation status validation. Workspace tests assert preparation/instal
   `0.1.0` fields/statuses, add diagnostic issues through the existing shape, byte-snapshot JSON, and
   snapshot the fixture filesystem before/after list and check.
 - **Overlap with subprocess work:** Migrating catalog APIs before finalizing timeout/streaming would
-  duplicate execution paths. Mitigation: Tasks 5.4/5.5 depend on the neutral contract and unified
-  runner, Task 5.6 deletes legacy bypasses, and Milestone 5 promotes only after workspace check and
-  static boundary assertions.
+  duplicate execution paths. Mitigation: Tasks 5.3–5.5 now follow the complete sequential collector
+  migration, Task 5.6 deletes legacy catalog bypasses, and Milestone 5 promotes only after workspace
+  check and static boundary assertions.
+- **Collector migration breadth:** A partial switch can appear correct because CLI fallback still
+  emits an `adapter_error` row. Mitigation: the common collector boundary is exercised through each
+  adapter's public `SignalCollector`, each adapter has an exact one-second timeout test asserting an
+  `Ok` failed row with classification `timeout`, and a promotion assertion rejects both compatibility
+  runner calls and direct `Command` creation anywhere under adapter collector directories.
 - **Large combined milestone:** The architecture cutover touches core, common, five adapters, and
   CLI. Mitigation: retain stable task boundaries and focused package checks, permit only a temporary
   compile-compatible shim within the milestone, and reserve the one Ayni full gate for completed
@@ -495,9 +560,13 @@ Node's npm, Python's pip/uv, and Go's module downloads are explicit CI-only netw
   a milestone's command list.
 - The final milestone runs the repository's classic checks exactly as documented, plus the explicit
   locked check. A non-zero orchestrator Ayni gate is repaired without changing `.ayni.toml`.
-- Timeout/progress tests use short deterministic fixture processes: one emits a line, signals that
-  the callback observed it, then remains alive; another exceeds a sub-second test timeout. Do not
-  rely on wall-clock races alone.
+- Runner timeout/progress tests use deterministic fixture processes: one emits a line, signals that
+  the callback observed it, then remains alive; the common runner unit uses a sub-second timeout.
+  Adapter collector tests use the valid non-zero configured value
+  `execution.tool_timeout_seconds = 1` and a fixture child that blocks indefinitely, then assert the
+  public collector returns `Ok` with `pass = false`, the requested signal result contains a failure
+  classified `timeout`, and command/cwd are retained. Do not use invalid zero-second policy values,
+  wall-clock sleep as the only synchronization, or assert only an error string.
 - Package-manager tests are table-driven characterization tests. Every Node and Python manager must
   assert marker/executable recognition, collector run argv, requirement status invocation or local
   inspection, add-package argv, and fallback. Separate ancestry fixtures assert direct,
@@ -510,8 +579,9 @@ Node's npm, Python's pip/uv, and Go's module downloads are explicit CI-only netw
   timeout diagnostics. They do not access package registries.
 - Milestone 5 promotion includes a source-boundary assertion over Rust sources in `core/` and
   `adapters/common/` for the removed Node/Python manager identifiers and marker/command vocabulary,
-  in addition to behavioral tests. Temporary compatibility exports are permitted only between that
-  milestone's tasks and fail its promotion check.
+  plus a collector-source assertion rejecting direct process creation and the string compatibility
+  context-runner APIs. Temporary compatibility exports are permitted only between that milestone's
+  tasks and fail its promotion check.
 - Coverage tests exercise equal-warn, equal-fail, below-fail, measured zero, absent metric, and
   malformed native report cases. Each adapter must have a wiring-level test, not only shared-helper
   tests.
@@ -739,6 +809,8 @@ Node's npm, Python's pip/uv, and Go's module downloads are explicit CI-only netw
   - [ ] A callback observes a child line before child exit, and timeout kills/waits deterministically.
   - [ ] No production adapter/catalog subprocess bypasses common execution.
   - [ ] Configured timeout reaches collector secondary commands and install/status/preparation paths.
+  - [ ] Every collector runner spawn/wait/timeout failure is an emitted failed row before the adapter
+    boundary, with exact structured classification; no collector uses a string compatibility runner.
   - [ ] Core/common expose the neutral catalog runtime only; all Node/Python manager types,
     detection/resolution, requirement metadata, and command construction live in the owning adapter.
   - [ ] Node/Python manager and workspace characterization matrices pass, and list/apply/foundation/
@@ -749,6 +821,7 @@ Node's npm, Python's pip/uv, and Go's module downloads are explicit CI-only netw
   - `cargo fmt --all -- --check`
   - `cargo test -p ayni-adapters-common -p ayni-adapters-rust -p ayni-adapters-go -p ayni-adapters-node -p ayni-adapters-python -p ayni-adapters-kotlin -p ayni-cli --all-features`
   - `cargo check --workspace --all-features`
+  - `python3 -c 'import re; from pathlib import Path; banned=(r"\brun_command_for_context\(",r"\brun_command_for_context_streaming\(",r"\bCommand::new\(",r"\bstd::process::Command\b"); hits=[f"{p}:{pattern}" for root in Path("adapters").glob("*/src/collectors") for p in root.rglob("*.rs") for pattern in banned if re.search(pattern,p.read_text())]; assert not hits,hits'`
   - `python3 -c 'from pathlib import Path; banned=("NodePackageManager","PythonPackageManager","detect_node_package_manager","detect_python_package_manager","resolve_python_package_manager","node_package_manager","python_package_manager","NpmGlobal","NodePackage","PythonPackage","PythonRuntime","UvTool","pnpm-lock.yaml","yarn.lock","package-lock.json","bun.lock","packageManager","uv.lock","poetry.lock","pdm.lock","Pipfile.lock","hatch.toml"); hits=[f"{p}:{term}" for root in (Path("core"),Path("adapters/common")) for p in root.rglob("*.rs") for term in banned if term in p.read_text()]; assert not hits, hits; assert not Path("core/src/catalog/python_resolution.rs").exists()'`
 
 #### Task 5.1: Make the common runner concurrently drain, stream, capture, and time out
@@ -766,22 +839,121 @@ Node's npm, Python's pip/uv, and Go's module downloads are explicit CI-only netw
   - `cargo test -p ayni-adapters-common exec::tests::timeout_kills_and_classifies_child --all-features`
   - `cargo test -p ayni-adapters-common exec::tests::captures_partial_stdout_and_stderr --all-features`
 
-#### Task 5.2: Route every collector subprocess through the context runner
+#### Task 5.2: Define the structured collector-failure boundary
 
 - Tier: M
-- Tier rationale: The subprocess inventory is known and each conversion is a mechanical bounded
-  adapter change, though it spans secondary commands in several collectors.
+- Tier rationale: The runner error and schema-v3 row shapes already exist; this adds one bounded
+  adapter-common conversion seam without changing the public core collector trait or CLI contract.
 - Depends on: 5.1
-- Affected responsibilities: Rust metadata/complexity/deps, Go coverage post-processing/deps, Kotlin
-  task probing, and consistent timeout-to-failed-row mapping.
-- Expected paths: `adapters/rust/src/collectors/complexity.rs`,
-  `adapters/rust/src/collectors/deps.rs`, `adapters/go/src/collectors/coverage.rs`,
-  `adapters/go/src/collectors/deps.rs`, `adapters/kotlin/src/collectors/util.rs`, and collector
-  utility modules under `adapters/{rust,go,node,python,kotlin}/src/collectors/`.
+- Affected responsibilities: Internal distinction between runner-owned and ordinary adapter errors;
+  all-signal failed-row synthesis; exact command/cwd/timeout classification before an adapter abort.
+- Expected paths: `adapters/common/src/collector.rs` (new), `adapters/common/src/failure.rs`,
+  `adapters/common/src/lib.rs`.
+- Interface/failure contract:
+  - `CollectorError::Execution(Box<ExecutionError>)` is the only variant converted to an `Ok`
+    failed row; `CollectorError::Adapter(String)` remains an `AdapterError`.
+  - `CollectorResult` is internal adapter plumbing. `finish_collection` accepts language, requested
+    kind, context, and that result; it preserves scope and emits the matching typed result variant.
+  - Spawn/wait map to `command_error`, timeout maps to `timeout`; category continues to use the
+    existing signal-category mapping. A child non-zero exit is not a `CollectorError` and remains in
+    the owning collector's existing classifier.
 - Focused checks:
-  - `cargo test -p ayni-adapters-rust configured_timeout --all-features`
-  - `cargo test -p ayni-adapters-go configured_timeout --all-features`
-  - `cargo test -p ayni-adapters-kotlin configured_timeout --all-features`
+  - `cargo test -p ayni-adapters-common collector::tests::execution_errors_become_typed_failed_rows --all-features`
+  - `cargo test -p ayni-adapters-common failure::tests::execution_error_classification --all-features`
+
+#### Task 5.2a: Migrate every Rust collector command to structured failures
+
+- Tier: M
+- Tier rationale: Five known collector command paths and one dispatch module follow the exact Task
+  5.2 seam; metadata nesting makes this multi-file work, but no new contract is introduced.
+- Depends on: 5.2
+- Affected responsibilities: Normal/focused/streaming Cargo test; llvm-cov; cargo metadata for
+  complexity/deps; rust-code-analysis; mutation; Rust collector dispatch.
+- Expected paths: `adapters/rust/src/collectors/mod.rs`,
+  `adapters/rust/src/collectors/test.rs`, `adapters/rust/src/collectors/coverage.rs`,
+  `adapters/rust/src/collectors/complexity.rs`, `adapters/rust/src/collectors/deps.rs`,
+  `adapters/rust/src/collectors/mutation.rs`.
+- Failure/compatibility contract: Propagate runner errors from both cargo-metadata levels and the
+  selected-test streaming path through `CollectorError`; retain all current policy/selector/parser
+  errors and non-zero tool handling, including the current Rust test and coverage failure categories.
+- Focused checks:
+  - `cargo test -p ayni-adapters-rust collectors::tests::configured_timeout_is_failed_row --all-features`
+  - `cargo test -p ayni-adapters-rust collectors --all-features`
+
+#### Task 5.2b: Migrate every Go collector command to structured failures
+
+- Tier: M
+- Tier rationale: The primary utility has four consumers and the already-structured deps/secondary-
+  coverage paths are consolidated onto the demonstrated common boundary; scope is one adapter.
+- Depends on: 5.2a
+- Affected responsibilities: Go test and focused test, primary and post-processing coverage commands,
+  gocyclo, go-list deps, mutation, and Go collector dispatch.
+- Expected paths: `adapters/go/src/collectors/mod.rs`, `adapters/go/src/collectors/util.rs`,
+  `adapters/go/src/collectors/test.rs`, `adapters/go/src/collectors/coverage.rs`,
+  `adapters/go/src/collectors/complexity.rs`, `adapters/go/src/collectors/deps.rs`,
+  `adapters/go/src/collectors/mutation.rs`.
+- Failure/compatibility contract: Both coverage subprocesses and `go list` use the common execution-
+  error row path; profile cleanup remains best-effort on every exit. Existing non-zero test,
+  coverage, deps, complexity, and mutation behavior is not reclassified.
+- Focused checks:
+  - `cargo test -p ayni-adapters-go collectors::tests::configured_timeout_is_failed_row --all-features`
+  - `cargo test -p ayni-adapters-go collectors --all-features`
+
+#### Task 5.2c: Migrate every Node collector command to structured failures
+
+- Tier: M
+- Tier rationale: One manager-aware utility plus override/streaming call sites cover four bounded
+  process-bearing collectors. The manager ownership migration remains deferred to Task 5.4.
+- Depends on: 5.2b
+- Affected responsibilities: Node normal/focused test, coverage, ESLint complexity, mutation, package-
+  manager execution utility, and Node collector dispatch.
+- Expected paths: `adapters/node/src/collectors/mod.rs`, `adapters/node/src/collectors/util.rs`,
+  `adapters/node/src/collectors/test.rs`, `adapters/node/src/collectors/coverage.rs`,
+  `adapters/node/src/collectors/complexity.rs`, `adapters/node/src/collectors/mutation.rs`.
+- Failure/compatibility contract: Preserve manager-built argv and all non-zero `import_error`,
+  `no_tests`, report, coverage, complexity, and mutation classifications. `deps.rs` remains unchanged
+  because it is source-native and creates no child process.
+- Focused checks:
+  - `cargo test -p ayni-adapters-node collectors::tests::configured_timeout_is_failed_row --all-features`
+  - `cargo test -p ayni-adapters-node collectors --all-features`
+
+#### Task 5.2d: Migrate every Python collector command to structured failures
+
+- Tier: M
+- Tier rationale: One manager-aware utility feeds four process-bearing collectors, with a bounded
+  second mutation invocation. The six-manager ownership cutover remains deferred to Task 5.5.
+- Depends on: 5.2c
+- Affected responsibilities: Python normal/focused test, coverage, complexipy, both mutmut commands,
+  manager execution utility, and Python collector dispatch.
+- Expected paths: `adapters/python/src/collectors/mod.rs`, `adapters/python/src/collectors/util.rs`,
+  `adapters/python/src/collectors/test.rs`, `adapters/python/src/collectors/coverage.rs`,
+  `adapters/python/src/collectors/complexity.rs`, `adapters/python/src/collectors/mutation.rs`.
+- Failure/compatibility contract: Preserve manager-built argv, report preparation, and existing
+  non-zero `import_error`, `collection_error`, `no_tests`, coverage, complexity, and mutation
+  classifications. `deps.rs` remains unchanged because it is source-native.
+- Focused checks:
+  - `cargo test -p ayni-adapters-python collectors::tests::configured_timeout_is_failed_row --all-features`
+  - `cargo test -p ayni-adapters-python collectors --all-features`
+
+#### Task 5.2e: Migrate every Kotlin collector command and close the source inventory
+
+- Tier: M
+- Tier rationale: Five primary Gradle commands and the already-structured task probe follow the
+  common seam; the final static inventory is exact and bounded to collector sources.
+- Depends on: 5.2d
+- Affected responsibilities: Kotlin normal/focused test, primary coverage, coverage task probing,
+  detekt complexity, dependencies, mutation, Gradle utility, and Kotlin collector dispatch.
+- Expected paths: `adapters/kotlin/src/collectors/mod.rs`,
+  `adapters/kotlin/src/collectors/util.rs`, `adapters/kotlin/src/collectors/test.rs`,
+  `adapters/kotlin/src/collectors/coverage.rs`, `adapters/kotlin/src/collectors/complexity.rs`,
+  `adapters/kotlin/src/collectors/deps.rs`, `adapters/kotlin/src/collectors/mutation.rs`.
+- Failure/compatibility contract: A task-probe spawn/wait/timeout and a primary Gradle spawn/wait/
+  timeout use the same common row path. A successful task probe with no preferred task and every
+  primary non-zero/report classification remain unchanged.
+- Focused checks:
+  - `cargo test -p ayni-adapters-kotlin collectors::tests::configured_timeout_is_failed_row --all-features`
+  - `cargo test -p ayni-adapters-kotlin collectors --all-features`
+  - `python3 -c 'import re; from pathlib import Path; banned=(r"\brun_command_for_context\(",r"\brun_command_for_context_streaming\(",r"\bCommand::new\(",r"\bstd::process::Command\b"); hits=[f"{p}:{pattern}" for root in Path("adapters").glob("*/src/collectors") for p in root.rglob("*.rs") for pattern in banned if re.search(pattern,p.read_text())]; assert not hits,hits'`
 
 #### Task 5.3: Define the neutral catalog runtime and generic execution backend
 
@@ -789,7 +961,7 @@ Node's npm, Python's pip/uv, and Go's module downloads are explicit CI-only netw
 - Tier rationale: This replaces a public cross-layer core trait/context and catalog installer
   contract, adds structured operation failures, and changes how every adapter reaches shared
   process execution; it is the architectural foundation of the requested L migration.
-- Depends on: 5.1
+- Depends on: 5.2e
 - Affected responsibilities: Core catalog identity/status/runtime contracts; opaque adapter-managed
   entries; generic timeout-aware status/install/preparation errors; delegation for adapters without
   private package managers.
@@ -845,7 +1017,7 @@ Node's npm, Python's pip/uv, and Go's module downloads are explicit CI-only netw
 - Tier rationale: This is the compatibility cutover for public install/list/check behavior across
   CLI, core, common, and both adapters; it removes the old API only after cross-mode workspace E2E
   proof and must preserve a versioned readiness contract.
-- Depends on: 5.2, 5.4, 5.5
+- Depends on: 5.2e, 5.4, 5.5
 - Affected responsibilities: Language-neutral CLI catalog orchestration; apply-only preparation;
   list/check read-only status; conditional install and foundation revalidation; progress/timeout
   diagnostics; deletion of manager exports, language-specific installer variants, resolver module,

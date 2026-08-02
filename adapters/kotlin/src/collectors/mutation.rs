@@ -1,5 +1,6 @@
 use super::util::{find_reports, gradle_command};
-use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
 use ayni_adapters_common::xml::{attr_string, decode_xml};
 use ayni_core::{
@@ -11,7 +12,7 @@ use serde_json::json;
 use std::fs;
 use std::path::Path;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     if !context.policy.checks.mutation {
         return Ok(SignalRow {
             kind: SignalKind::Mutation,
@@ -38,7 +39,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
 
     let (program, args) = gradle_command(context, SignalKind::Mutation, "pitest");
     let engine = format_command(&program, &args);
-    let output = run_command_for_context(context, &program, &args)?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
     if !output.status.success() {
         return Ok(error_row(
             context,
@@ -60,7 +61,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
     let mut report = PitestReport::default();
     for path in &report_paths {
-        let next = parse_pitest_xml(path)?;
+        let next = parse_pitest_xml(path).map_err(CollectorError::Adapter)?;
         report.killed += next.killed;
         report.survived += next.survived;
         report.timeout += next.timeout;

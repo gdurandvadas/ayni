@@ -198,6 +198,24 @@ fn shared_requirements_follow_any_enabled_signal() {
     }
 }
 
+#[test]
+fn spawn_errors_are_requirement_issues_not_absence_or_success() {
+    let tempdir = TempDir::new().expect("tempdir");
+    let value = check_with_path(tempdir.path(), "test");
+
+    assert_eq!(value["state"], "not_ready");
+    let issues = value["issues"].as_array().expect("issues");
+    assert!(issues.iter().any(|issue| {
+        issue["stage"] == "requirement"
+            && issue["requirement"] == "node"
+            && issue["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("kind=spawn"))
+    }));
+    assert_eq!(value["targets"][0]["requirements"][0]["status"], "missing");
+    assert_ne!(value["targets"][0]["requirements"][0]["status"], "current");
+}
+
 #[cfg(unix)]
 #[test]
 fn configured_root_escape_is_rejected_by_install_listing_apply_and_check() {
@@ -261,4 +279,54 @@ fn check_requires_an_existing_valid_policy_and_rejects_invalid_modes() {
     let stderr = String::from_utf8_lossy(&output_without_check.stderr);
     assert!(stderr.contains("required arguments"));
     assert!(stderr.contains("--check"));
+}
+
+#[cfg(unix)]
+#[test]
+fn timeout_is_not_ready() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tempdir = TempDir::new().expect("tempdir");
+    fs::write(
+        tempdir.path().join(".ayni.toml"),
+        "[checks]\ntest = true\ncoverage = false\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n\n[languages]\nenabled = [\"rust\"]\n\n[rust]\nroots = [\".\"]\n\n[execution]\ntool_timeout_seconds = 1\n",
+    )
+    .expect("policy");
+    fs::write(
+        tempdir.path().join("Cargo.toml"),
+        "[package]\nname='fixture'\nversion='0.1.0'\n",
+    )
+    .expect("manifest");
+    let bin = tempdir.path().join("bin");
+    fs::create_dir(&bin).expect("bin");
+    let cargo = bin.join("cargo");
+    fs::write(&cargo, "#!/bin/sh\nsleep 5\n").expect("fake cargo");
+    let mut permissions = fs::metadata(&cargo).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&cargo, permissions).expect("chmod");
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&inherited)))
+            .expect("PATH");
+
+    let output = ayni()
+        .env("PATH", path)
+        .args(["install", "--check", "--repo-root", ".", "--output", "json"])
+        .current_dir(tempdir.path())
+        .output()
+        .expect("launch ayni");
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("readiness JSON");
+    assert_eq!(value["state"], "not_ready");
+    assert_eq!(value["targets"][0]["requirements"][0]["name"], "cargo");
+    assert_eq!(value["targets"][0]["requirements"][0]["status"], "missing");
+    assert_eq!(value["issues"][0]["stage"], "requirement");
+    assert!(
+        value["issues"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("kind=timeout")
+    );
 }

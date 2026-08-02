@@ -1,4 +1,4 @@
-use ayni_adapters_common::exec::{context_timeout, run_command};
+use ayni_adapters_common::exec::{ExecutionError, run_command_for_context_structured};
 use ayni_core::{Language, RunContext, SignalKind};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -29,20 +29,13 @@ fn default_gradle_args(task: &str) -> Vec<String> {
 pub fn resolve_gradle_task(
     context: &RunContext,
     preferred_tasks: &[&str],
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, Box<ExecutionError>> {
     let args = [
         String::from("tasks"),
         String::from("--all"),
         String::from("--quiet"),
     ];
-    let timeout = context_timeout(context);
-    let output = run_command(
-        &context.execution.exec_cwd,
-        &context.execution.runner,
-        &args,
-        timeout,
-    )
-    .map_err(|error| format!("failed to execute {}: {error}", context.execution.runner))?;
+    let output = run_command_for_context_structured(context, &context.execution.runner, &args)?;
     if !output.status.success() {
         return Ok(None);
     }

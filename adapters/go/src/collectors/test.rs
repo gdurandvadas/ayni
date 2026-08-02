@@ -1,4 +1,5 @@
 use super::util::run_tool_for_context;
+use ayni_adapters_common::collector::CollectorResult;
 use ayni_adapters_common::exec::format_command;
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
@@ -22,7 +23,7 @@ struct GoTestEvent {
     output: Option<String>,
 }
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let (program, args) = test_command(context);
     collect_with_command(context, program, args)
 }
@@ -31,7 +32,7 @@ pub fn collect_selected(
     context: &RunContext,
     selection: &VerificationSelection,
     _on_line: &mut dyn FnMut(&str),
-) -> Result<SignalRow, String> {
+) -> CollectorResult {
     let (program, mut args) = test_command(context);
     if let Some(target) = context
         .scope
@@ -55,7 +56,7 @@ fn collect_with_command(
     context: &RunContext,
     program: String,
     args: Vec<String>,
-) -> Result<SignalRow, String> {
+) -> CollectorResult {
     let runner = format_command(&program, &args);
     let output = run_tool_for_context(context, &program, &args)?;
     let success = output.status.success();

@@ -1,7 +1,10 @@
 //! Shared command-failure classification and `CommandFailure` construction.
 
-use crate::exec::format_command;
-use ayni_core::{CommandFailure, ConfiguredMetricEvaluation, RunContext, SignalKind};
+use crate::exec::{ExecutionError, ExecutionErrorKind, format_command};
+use ayni_core::{
+    CatalogOperation, CatalogOperationError, CatalogOperationErrorKind, CommandFailure,
+    ConfiguredMetricEvaluation, RunContext, SignalKind,
+};
 use std::process::Output;
 
 /// Maps a signal kind to its documented failure category (see
@@ -48,6 +51,64 @@ pub fn command_failure_from_output(
     output: &Output,
 ) -> CommandFailure {
     command_failure_with_classification(context, kind, program, args, output, "command_error")
+}
+
+/// Converts a runner-owned failure into the same serialized failure shape as a
+/// tool's non-zero exit.  Unlike an `Output`, runner failures retain the exact
+/// command, working directory, and configured timeout that caused the error.
+pub fn command_failure_from_execution_error(
+    kind: SignalKind,
+    error: &ExecutionError,
+) -> CommandFailure {
+    let classification = match error.kind {
+        ExecutionErrorKind::Spawn => "command_error",
+        ExecutionErrorKind::Wait => "command_error",
+        ExecutionErrorKind::Timeout => "timeout",
+    };
+    let timeout_detail = error
+        .timeout
+        .map(|timeout| format!(" (configured timeout: {}s)", timeout.as_secs_f64()))
+        .unwrap_or_default();
+    let diagnostics = execution_diagnostics(error);
+    CommandFailure {
+        category: failure_category(kind).to_string(),
+        classification: classification.to_string(),
+        command: error.command.clone(),
+        cwd: error.cwd.display().to_string(),
+        exit_code: error.status.and_then(|status| status.code()),
+        message: format!("{}{timeout_detail}{diagnostics}", error),
+    }
+}
+
+/// Preserve runner-owned diagnostics at the language-neutral catalog boundary.
+pub fn catalog_error_from_execution_error(
+    operation: CatalogOperation,
+    error: &ExecutionError,
+) -> CatalogOperationError {
+    let kind = match error.kind {
+        ExecutionErrorKind::Spawn => CatalogOperationErrorKind::Spawn,
+        ExecutionErrorKind::Wait => CatalogOperationErrorKind::Wait,
+        ExecutionErrorKind::Timeout => CatalogOperationErrorKind::Timeout,
+    };
+    CatalogOperationError::new(
+        operation,
+        kind,
+        Some(error.command.clone()),
+        Some(error.cwd.clone()),
+        error.status.and_then(|status| status.code()),
+        error.to_string(),
+    )
+}
+
+fn execution_diagnostics(error: &ExecutionError) -> String {
+    let stdout = String::from_utf8_lossy(&error.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&error.stderr).trim().to_string();
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => format!("\ncaptured stdout:\n{stdout}"),
+        (true, false) => format!("\ncaptured stderr:\n{stderr}"),
+        (false, false) => format!("\ncaptured stderr:\n{stderr}\ncaptured stdout:\n{stdout}"),
+    }
 }
 
 /// Builds a `CommandFailure` with an adapter-supplied classification and the
@@ -130,14 +191,17 @@ pub fn coverage_metric_failure(
 #[cfg(test)]
 mod tests {
     use super::{
-        combined_output, concise_failure_message, coverage_metric_failure, failure_category,
+        combined_output, command_failure_from_execution_error, concise_failure_message,
+        coverage_metric_failure, failure_category,
     };
+    use crate::exec::{ExecutionError, ExecutionErrorKind};
     use ayni_core::{
         AyniPolicy, ConfiguredMetricEvaluation, ExecutionResolution, RunContext, Scope, SignalKind,
     };
     use std::os::unix::process::ExitStatusExt;
     use std::path::PathBuf;
     use std::process::{ExitStatus, Output};
+    use std::time::Duration;
 
     fn output(stdout: &str, stderr: &str) -> Output {
         Output {
@@ -170,6 +234,44 @@ mod tests {
             concise_failure_message(&output("\n\nsecond source", "\nfirst line\nmore")),
             "first line"
         );
+    }
+
+    #[test]
+    fn execution_error_classification() {
+        let spawn = ExecutionError {
+            kind: ExecutionErrorKind::Spawn,
+            command: String::from("missing-tool"),
+            cwd: PathBuf::from("workspace"),
+            status: None,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            timeout: None,
+            detail: String::from("not found"),
+        };
+        let timeout = ExecutionError {
+            kind: ExecutionErrorKind::Timeout,
+            command: String::from("tool check"),
+            cwd: PathBuf::from("workspace"),
+            status: Some(ExitStatus::from_raw(9 << 8)),
+            stdout: b"partial output".to_vec(),
+            stderr: b"partial diagnostics".to_vec(),
+            timeout: Some(Duration::from_secs(12)),
+            detail: String::new(),
+        };
+
+        let spawn_failure = command_failure_from_execution_error(SignalKind::Test, &spawn);
+        assert_eq!(spawn_failure.category, "repo_code_issue");
+        assert_eq!(spawn_failure.classification, "command_error");
+        assert_eq!(spawn_failure.command, "missing-tool");
+        assert_eq!(spawn_failure.cwd, "workspace");
+
+        let timeout_failure = command_failure_from_execution_error(SignalKind::Deps, &timeout);
+        assert_eq!(timeout_failure.category, "ayni_internal_issue");
+        assert_eq!(timeout_failure.classification, "timeout");
+        assert_eq!(timeout_failure.exit_code, Some(9));
+        assert!(timeout_failure.message.contains("configured timeout: 12s"));
+        assert!(timeout_failure.message.contains("partial diagnostics"));
+        assert!(timeout_failure.message.contains("partial output"));
     }
 
     fn context() -> RunContext {

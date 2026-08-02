@@ -1,5 +1,6 @@
 use super::util::{find_reports, gradle_command, resolve_gradle_task};
-use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{
     command_failure_from_output, coverage_metric_failure, setup_failure,
 };
@@ -15,11 +16,11 @@ use serde_json::json;
 use std::fs;
 use std::path::Path;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let task = resolve_coverage_task(context)?;
     let (program, args) = gradle_command(context, SignalKind::Coverage, &task);
     let engine = format_command(&program, &args);
-    let output = run_command_for_context(context, &program, &args)?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
     if !output.status.success() {
         return Ok(error_row(
             context,
@@ -41,7 +42,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
     let mut totals = CoverageCounters::default();
     for path in &report_paths {
-        totals.merge(parse_jacoco_xml(path)?);
+        totals.merge(parse_jacoco_xml(path).map_err(CollectorError::Adapter)?);
     }
     let report = totals.finish();
     let coverage_config = context.policy.kotlin.coverage.as_ref();
@@ -95,7 +96,9 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     })
 }
 
-fn resolve_coverage_task(context: &RunContext) -> Result<String, String> {
+fn resolve_coverage_task(
+    context: &RunContext,
+) -> Result<String, Box<ayni_adapters_common::exec::ExecutionError>> {
     if context
         .policy
         .tool_override_for(Language::Kotlin, SignalKind::Coverage)
@@ -266,9 +269,7 @@ fn parse_jacoco_content(content: &str) -> Result<CoverageReport, String> {
 }
 
 fn percent(covered: u64, missed: u64) -> Option<f64> {
-    let Some(total) = covered.checked_add(missed) else {
-        return None;
-    };
+    let total = covered.checked_add(missed)?;
     (total > 0).then_some((covered as f64 / total as f64) * 100.0)
 }
 

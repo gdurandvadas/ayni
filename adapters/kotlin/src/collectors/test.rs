@@ -1,5 +1,6 @@
 use super::util::gradle_command;
-use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_adapters_common::xml::{attr_f64, attr_string, attr_u64};
 use ayni_core::{
@@ -12,7 +13,7 @@ use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let (program, args) = gradle_command(context, SignalKind::Test, "test");
     collect_with_command(context, program, args)
 }
@@ -21,18 +22,22 @@ pub fn collect_selected(
     context: &RunContext,
     selection: &VerificationSelection,
     _on_line: &mut dyn FnMut(&str),
-) -> Result<SignalRow, String> {
+) -> CollectorResult {
     if context.scope.file.is_some() {
-        return Err(String::from(
+        return Err(CollectorError::Adapter(String::from(
             "Kotlin source-file selection is unsupported; use --package and optional --name",
-        ));
+        )));
     }
     let (program, mut args) = gradle_command(context, SignalKind::Test, "test");
     let selector = match (&context.scope.package, &selection.name) {
         (Some(package), Some(name)) => format!("{package}.{name}"),
         (Some(package), None) => package.clone(),
         (None, Some(name)) => name.clone(),
-        (None, None) => return Err(String::from("a package or test name is required")),
+        (None, None) => {
+            return Err(CollectorError::Adapter(String::from(
+                "a package or test name is required",
+            )));
+        }
     };
     args.extend([String::from("--tests"), selector]);
     collect_with_command(context, program, args)
@@ -42,10 +47,11 @@ fn collect_with_command(
     context: &RunContext,
     program: String,
     args: Vec<String>,
-) -> Result<SignalRow, String> {
+) -> CollectorResult {
     let runner = format_command(&program, &args);
-    let output = run_command_for_context(context, &program, &args)?;
-    let report = parse_reports(&context.workdir.join("build/test-results/test"))?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
+    let report = parse_reports(&context.workdir.join("build/test-results/test"))
+        .map_err(CollectorError::Adapter)?;
     let failed = report.failures + report.errors;
     let mut offenders = report.offenders;
     if output.status.success() && report.tests == 0 {

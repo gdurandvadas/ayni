@@ -1,4 +1,6 @@
 use super::util::run_tool_for_context;
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_adapters_common::paths::{resolve_repo_path, to_repo_relative_path};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
@@ -8,24 +10,23 @@ use regex::Regex;
 use serde_json::json;
 use std::path::Path;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let config = context
-        .policy
-        .go
-        .complexity
-        .as_ref()
-        .ok_or_else(|| String::from("missing [go.complexity] policy"))?;
-    let cyclomatic = config
-        .fn_cyclomatic
-        .ok_or_else(|| String::from("missing go.complexity.fn_cyclomatic"))?;
+pub fn collect(context: &RunContext) -> CollectorResult {
+    let config =
+        context.policy.go.complexity.as_ref().ok_or_else(|| {
+            CollectorError::Adapter(String::from("missing [go.complexity] policy"))
+        })?;
+    let cyclomatic = config.fn_cyclomatic.ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing go.complexity.fn_cyclomatic"))
+    })?;
 
     let args = complexity_args(context);
     let output = run_tool_for_context(context, "gocyclo", &args)?;
     let status_ok = output.status.success();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    let re = Regex::new(r"^(\d+)\s+(\S+)\s+(\S+)\s+(.+):(\d+):\d+$")
-        .map_err(|error| format!("failed to compile gocyclo parser regex: {error}"))?;
+    let re = Regex::new(r"^(\d+)\s+(\S+)\s+(\S+)\s+(.+):(\d+):\d+$").map_err(|error| {
+        CollectorError::Adapter(format!("failed to compile gocyclo parser regex: {error}"))
+    })?;
 
     let mut offenders = Vec::<ComplexityOffender>::new();
     let mut measured_functions = 0_u64;
@@ -124,7 +125,15 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             max_fn_cognitive: None,
             warn_count,
             fail_count,
-            failure: None,
+            failure: (!status_ok).then(|| {
+                command_failure_from_output(
+                    context,
+                    SignalKind::Complexity,
+                    "gocyclo",
+                    &args,
+                    &output,
+                )
+            }),
         }),
         budget: Budget::Complexity(budget),
         offenders: Offenders::Complexity(offenders),

@@ -1,5 +1,6 @@
 use super::util::gradle_command;
-use ayni_adapters_common::exec::run_command_for_context;
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
     Budget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope, SignalKind,
@@ -10,7 +11,7 @@ use regex::Regex;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let rules = context
         .policy
         .kotlin
@@ -19,7 +20,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .map(|value| value.forbidden.clone())
         .unwrap_or_default();
     let (program, args) = gradle_command(context, SignalKind::Deps, "dependencies");
-    let output = run_command_for_context(context, &program, &args)?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
     if !output.status.success() {
         return Ok(error_row(
             context,
@@ -32,8 +33,8 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .path
         .clone()
         .unwrap_or_else(|| String::from("."));
-    let edges = parse_project_edges(&stdout, &from)?;
-    let compiled_rules = compile_rules(&rules)?;
+    let edges = parse_project_edges(&stdout, &from).map_err(CollectorError::Adapter)?;
+    let compiled_rules = compile_rules(&rules).map_err(CollectorError::Adapter)?;
     let mut offenders = Vec::new();
     for (source, target) in &edges {
         for rule in &compiled_rules {

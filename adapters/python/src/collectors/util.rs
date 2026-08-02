@@ -1,25 +1,27 @@
-use ayni_adapters_common::{exec, failure};
-use ayni_core::{CommandFailure, PythonPackageManager, RunContext, SignalKind};
+use crate::package_manager::PackageManager;
+use ayni_adapters_common::{collector::CollectorError, exec, failure};
+use ayni_core::{CommandFailure, RunContext, SignalKind};
 use std::path::PathBuf;
 
 // Re-export common helpers so existing collector imports (`super::util::*`) are unchanged.
-pub use ayni_adapters_common::exec::{format_command, run_command_for_context};
+pub use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 pub use ayni_adapters_common::failure::combined_output;
 pub use ayni_adapters_common::paths::to_repo_relative_path;
 
-pub fn package_manager_for_context(context: &RunContext) -> PythonPackageManager {
-    PythonPackageManager::from_executable(&context.execution.runner)
-        .unwrap_or(PythonPackageManager::Pip)
+pub(crate) fn package_manager_for_context(context: &RunContext) -> PackageManager {
+    PackageManager::from_runner(&context.execution.runner).unwrap_or(PackageManager::Pip)
 }
 
 pub fn run_python_tool(
     context: &RunContext,
     tool: &str,
     args: &[&str],
-) -> Result<std::process::Output, String> {
+) -> Result<std::process::Output, CollectorError> {
     let manager = package_manager_for_context(context);
     let (program, argv) = manager.run_command(tool, args);
-    run_command_for_context(context, &program, &argv)
+    Ok(run_command_for_context_structured(
+        context, &program, &argv,
+    )?)
 }
 
 pub fn command_for_override_or_default(

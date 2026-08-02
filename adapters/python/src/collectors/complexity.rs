@@ -1,7 +1,8 @@
 use super::util::{
-    command_failure_from_output, format_command, prepare_report_path, run_command_for_context,
-    to_repo_relative_path,
+    command_failure_from_output, format_command, prepare_report_path,
+    run_command_for_context_structured, to_repo_relative_path,
 };
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow, classify_maximum,
@@ -10,18 +11,16 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let config = context
-        .policy
-        .python
-        .complexity
-        .as_ref()
-        .ok_or_else(|| String::from("missing [python.complexity] policy"))?;
-    let cognitive = config
-        .fn_cognitive
-        .ok_or_else(|| String::from("missing python.complexity.fn_cognitive"))?;
+pub fn collect(context: &RunContext) -> CollectorResult {
+    let config = context.policy.python.complexity.as_ref().ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing [python.complexity] policy"))
+    })?;
+    let cognitive = config.fn_cognitive.ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing python.complexity.fn_cognitive"))
+    })?;
 
-    let report_path = prepare_report_path(context, "complexipy.json")?;
+    let report_path =
+        prepare_report_path(context, "complexipy.json").map_err(CollectorError::Adapter)?;
     let threshold = cognitive.fail.to_string();
     let output_path = report_path.to_string_lossy().to_string();
     let args = vec![
@@ -41,7 +40,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     ];
     command_args.extend(args);
     let engine = format_command("uv", &command_args);
-    let output = run_command_for_context(context, "uv", &command_args)?;
+    let output = run_command_for_context_structured(context, "uv", &command_args)?;
     if !output.status.success() {
         return Ok(error_row(
             context,
@@ -56,7 +55,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         ));
     }
 
-    let value = read_report(&report_path)?;
+    let value = read_report(&report_path).map_err(CollectorError::Adapter)?;
     let mut entries = Vec::new();
     collect_function_entries(&value, None, &mut entries);
 

@@ -18,9 +18,8 @@ pub use adapter::{
     VerificationSelection, VerificationSelectorSupport,
 };
 pub use catalog::{
-    CatalogEntry, InstallContext, Installer, NodePackageManager, PythonPackageManager,
-    PythonPackageManagerResolution, PythonResolutionKind, ToolStatus, VersionCheck,
-    detect_node_package_manager, detect_python_package_manager, resolve_python_package_manager,
+    CatalogEntry, CatalogOperation, CatalogOperationError, CatalogOperationErrorKind,
+    CatalogRuntime, Installer, ToolStatus, VersionCheck,
 };
 pub use comparison::{
     ARTIFACT_COMPARISON_SCHEMA_VERSION, ArtifactComparison, ArtifactComparisonError,

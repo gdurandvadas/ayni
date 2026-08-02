@@ -1,5 +1,6 @@
-use super::util::{command_failure_from_output, run_tool};
-use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use super::util::{command_failure_from_output, run_tool, tool_command};
+use ayni_adapters_common::collector::CollectorResult;
+use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::coverage_metric_failure;
 use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
@@ -10,12 +11,15 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::fs;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let (output, engine) = if let Some((program, args, engine)) = coverage_override_command(context)
     {
-        (run_command_for_context(context, &program, &args)?, engine)
+        (
+            run_command_for_context_structured(context, &program, &args)?,
+            engine,
+        )
     } else {
-        let output = run_tool(
+        let (program, args) = tool_command(
             context,
             "vitest",
             &[
@@ -24,8 +28,21 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
                 "--coverage.reporter=json-summary",
                 "--passWithNoTests",
             ],
-        )?;
-        (output, String::from("vitest"))
+        );
+        let engine = format_command(&program, &args);
+        (
+            run_tool(
+                context,
+                "vitest",
+                &[
+                    "run",
+                    "--coverage",
+                    "--coverage.reporter=json-summary",
+                    "--passWithNoTests",
+                ],
+            )?,
+            engine,
+        )
     };
     let coverage_path = context
         .workdir

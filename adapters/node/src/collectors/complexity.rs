@@ -1,4 +1,5 @@
 use super::util::run_tool;
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::failure::setup_failure;
 use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
@@ -10,16 +11,14 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::path::Path;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let config = context
-        .policy
-        .node
-        .complexity
-        .as_ref()
-        .ok_or_else(|| String::from("missing [node.complexity] policy"))?;
-    let cyclomatic = config
-        .fn_cyclomatic
-        .ok_or_else(|| String::from("missing node.complexity.fn_cyclomatic"))?;
+pub fn collect(context: &RunContext) -> CollectorResult {
+    let config =
+        context.policy.node.complexity.as_ref().ok_or_else(|| {
+            CollectorError::Adapter(String::from("missing [node.complexity] policy"))
+        })?;
+    let cyclomatic = config.fn_cyclomatic.ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing node.complexity.fn_cyclomatic"))
+    })?;
 
     let target = complexity_target(context);
     let output = run_tool(
@@ -43,7 +42,8 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .cloned()
         .unwrap_or_default();
 
-    let re_complexity = Regex::new(r"complexity of (\d+)").map_err(|e| e.to_string())?;
+    let re_complexity =
+        Regex::new(r"complexity of (\d+)").map_err(|e| CollectorError::Adapter(e.to_string()))?;
     let mut offenders = Vec::<ComplexityOffender>::new();
     let mut measured_functions = 0_u64;
     let mut max_fn_cyclomatic = 0.0_f64;

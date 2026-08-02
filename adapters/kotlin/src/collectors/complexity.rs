@@ -1,5 +1,6 @@
 use super::util::{find_reports, gradle_command};
-use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
 use ayni_adapters_common::paths::{
     canonicalize_relative_posix, resolve_repo_path, to_repo_relative_path,
@@ -14,19 +15,16 @@ use serde_json::json;
 use std::fs;
 use std::path::Path;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let config = context
-        .policy
-        .kotlin
-        .complexity
-        .as_ref()
-        .ok_or_else(|| String::from("missing [kotlin.complexity] policy"))?;
-    let cyclomatic = config
-        .fn_cyclomatic
-        .ok_or_else(|| String::from("missing kotlin.complexity.fn_cyclomatic"))?;
+pub fn collect(context: &RunContext) -> CollectorResult {
+    let config = context.policy.kotlin.complexity.as_ref().ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing [kotlin.complexity] policy"))
+    })?;
+    let cyclomatic = config.fn_cyclomatic.ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing kotlin.complexity.fn_cyclomatic"))
+    })?;
     let (program, args) = gradle_command(context, SignalKind::Complexity, "detekt");
     let engine = format_command(&program, &args);
-    let output = run_command_for_context(context, &program, &args)?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
     if !output.status.success() {
         return Ok(error_row(
             context,
@@ -48,11 +46,10 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
     let mut offenders = Vec::new();
     for report_path in &report_paths {
-        offenders.extend(parse_checkstyle_xml(
-            report_path,
-            context,
-            cyclomatic.fail + 1.0,
-        )?);
+        offenders.extend(
+            parse_checkstyle_xml(report_path, context, cyclomatic.fail + 1.0)
+                .map_err(CollectorError::Adapter)?,
+        );
     }
     let mut max_fn_cyclomatic = 0.0_f64;
     let mut warn_count = 0_u64;

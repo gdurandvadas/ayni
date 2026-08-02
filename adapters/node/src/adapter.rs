@@ -1,14 +1,15 @@
-use crate::catalog::NODE_CATALOG;
+use crate::catalog::{NODE_CATALOG, NODE_CATALOG_RUNTIME};
 use crate::collectors::NodeCollector;
 use crate::discovery;
+use crate::package_manager;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
-    CatalogEntry, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
-    LanguageAdapter, LanguageProfile, NodePackageManager, OffenderIdentity,
-    PolicyEffectivenessFacts, ProjectDiscovery, Scope, SignalCollector, SignalKind,
-    VerificationSelectorSupport, VerificationTarget, detect_node_package_manager,
+    CatalogEntry, CatalogRuntime, ComplexityThresholdKind, DetectResult, ExecutionResolution,
+    Language, LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts,
+    ProjectDiscovery, Scope, SignalCollector, SignalKind, VerificationSelectorSupport,
+    VerificationTarget,
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Default)]
 pub struct NodeAdapter {
@@ -39,7 +40,7 @@ impl LanguageAdapter for NodeAdapter {
             };
         }
 
-        let pm = detect_node_package_manager(root);
+        let pm = package_manager::detect(root);
         let confidence = if pm.is_some() { 100 } else { 60 };
         let reason = if let Some(pm) = pm {
             format!(
@@ -62,27 +63,7 @@ impl LanguageAdapter for NodeAdapter {
     }
 
     fn resolve_execution(&self, repo_root: &Path, root: &Path) -> Option<ExecutionResolution> {
-        let direct = detect_node_package_manager(root).map(|manager| {
-            node_resolution(manager, root.to_path_buf(), "direct_root", false, 100, root)
-        });
-        let ancestor = find_node_workspace_ancestor(repo_root, root);
-        match (direct, ancestor) {
-            (Some(mut direct), Some(ancestor)) if direct.runner != ancestor.runner => {
-                direct.ambiguous = true;
-                Some(direct)
-            }
-            (Some(direct), _) => Some(direct),
-            (None, Some(ancestor)) => Some(ancestor),
-            (None, None) if root.join("package.json").is_file() => Some(node_resolution(
-                NodePackageManager::Npm,
-                root.to_path_buf(),
-                "fallback",
-                false,
-                60,
-                root,
-            )),
-            (None, None) => None,
-        }
+        package_manager::resolve(repo_root, root)
     }
 
     fn discover_roots(&self, repo_root: &Path) -> Vec<String> {
@@ -109,6 +90,10 @@ impl LanguageAdapter for NodeAdapter {
 
     fn catalog(&self) -> &'static [CatalogEntry] {
         NODE_CATALOG
+    }
+
+    fn catalog_runtime(&self) -> &dyn CatalogRuntime {
+        &NODE_CATALOG_RUNTIME
     }
 
     fn collector(&self) -> &dyn SignalCollector {
@@ -144,90 +129,6 @@ impl LanguageAdapter for NodeAdapter {
             DependencySource::Package,
         )
     }
-
-    fn prepare_install(&self, execution: &ExecutionResolution) -> Result<(), String> {
-        let manager = NodePackageManager::from_executable(&execution.runner)
-            .unwrap_or(NodePackageManager::Npm);
-        install_node_dependencies(&execution.install_cwd, manager)
-    }
-}
-
-fn install_node_dependencies(root_path: &Path, manager: NodePackageManager) -> Result<(), String> {
-    let status = std::process::Command::new(manager.executable())
-        .arg("install")
-        .current_dir(root_path)
-        .status()
-        .map_err(|error| {
-            format!(
-                "failed to run {} install in {}: {error}",
-                manager.executable(),
-                root_path.display()
-            )
-        })?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "{} install failed in {} (exit {})",
-            manager.executable(),
-            root_path.display(),
-            status.code().unwrap_or(-1)
-        ))
-    }
-}
-
-fn node_resolution(
-    manager: NodePackageManager,
-    resolved_from: PathBuf,
-    kind: &str,
-    ambiguous: bool,
-    confidence: u8,
-    exec_root: &Path,
-) -> ExecutionResolution {
-    ExecutionResolution {
-        runner: manager.executable().to_string(),
-        resolved_from: resolved_from.clone(),
-        kind: kind.to_string(),
-        source: String::from("node package manager"),
-        confidence,
-        ambiguous,
-        install_cwd: resolved_from,
-        exec_cwd: exec_root.to_path_buf(),
-    }
-}
-
-fn find_node_workspace_ancestor(repo_root: &Path, root: &Path) -> Option<ExecutionResolution> {
-    let mut current = root.parent();
-    while let Some(path) = current {
-        if !path.starts_with(repo_root) {
-            break;
-        }
-        if path.join("package.json").is_file()
-            && package_json_has_workspaces(&path.join("package.json"))
-            && let Some(manager) = detect_node_package_manager(path)
-        {
-            return Some(node_resolution(
-                manager,
-                path.to_path_buf(),
-                "workspace_ancestor",
-                false,
-                90,
-                root,
-            ));
-        }
-        current = path.parent();
-    }
-    None
-}
-
-fn package_json_has_workspaces(path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return false;
-    };
-    value.get("workspaces").is_some()
 }
 
 #[cfg(test)]
@@ -241,7 +142,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn resolves_workspace_ancestor_package_manager() {
+    fn package_manager_resolution_matrix() {
         let dir = TempDir::new().expect("tempdir");
         fs::write(
             dir.path().join("package.json"),
@@ -261,6 +162,66 @@ mod tests {
         assert_eq!(resolution.kind, "workspace_ancestor");
         assert_eq!(resolution.install_cwd, dir.path());
         assert_eq!(resolution.exec_cwd, dir.path().join("apps/api"));
+
+        fs::write(
+            dir.path().join("apps/api/package.json"),
+            r#"{"packageManager":"yarn@4"}"#,
+        )
+        .expect("direct manager");
+        let direct = adapter
+            .resolve_execution(dir.path(), &dir.path().join("apps/api"))
+            .expect("direct resolution");
+        assert_eq!(direct.runner, "yarn");
+        assert_eq!(direct.kind, "direct_root");
+        assert!(direct.ambiguous);
+        assert_eq!(direct.install_cwd, dir.path().join("apps/api"));
+        assert_eq!(direct.exec_cwd, dir.path().join("apps/api"));
+
+        let fallback_dir = TempDir::new().expect("fallback tempdir");
+        let standalone = fallback_dir.path().join("standalone");
+        fs::create_dir_all(&standalone).expect("standalone dir");
+        fs::write(standalone.join("package.json"), "{}").expect("standalone manifest");
+        let fallback = adapter
+            .resolve_execution(fallback_dir.path(), &standalone)
+            .expect("fallback resolution");
+        assert_eq!(fallback.runner, "npm");
+        assert_eq!(fallback.kind, "fallback");
+        assert!(!fallback.ambiguous);
+        assert_eq!(fallback.install_cwd, standalone);
+        assert_eq!(fallback.exec_cwd, fallback.install_cwd);
+
+        for manager in ["npm", "pnpm", "yarn", "bun"] {
+            let direct_dir = TempDir::new().expect("direct tempdir");
+            fs::write(
+                direct_dir.path().join("package.json"),
+                format!(r#"{{"packageManager":"{manager}@1"}}"#),
+            )
+            .expect("direct manifest");
+            let resolution = adapter
+                .resolve_execution(direct_dir.path(), direct_dir.path())
+                .expect("direct resolution");
+            assert_eq!(resolution.runner, manager);
+            assert_eq!(resolution.kind, "direct_root");
+            assert_eq!(resolution.install_cwd, direct_dir.path());
+            assert_eq!(resolution.exec_cwd, direct_dir.path());
+        }
+
+        let npm_workspace = TempDir::new().expect("npm workspace tempdir");
+        fs::write(
+            npm_workspace.path().join("package.json"),
+            r#"{"workspaces":["packages/*"]}"#,
+        )
+        .expect("workspace manifest");
+        let member = npm_workspace.path().join("packages/member");
+        fs::create_dir_all(&member).expect("member directory");
+        fs::write(member.join("package.json"), "{}").expect("member manifest");
+        let workspace_fallback = adapter
+            .resolve_execution(npm_workspace.path(), &member)
+            .expect("workspace npm resolution");
+        assert_eq!(workspace_fallback.runner, "npm");
+        assert_eq!(workspace_fallback.kind, "workspace_ancestor");
+        assert_eq!(workspace_fallback.install_cwd, npm_workspace.path());
+        assert_eq!(workspace_fallback.exec_cwd, member);
     }
 
     #[test]

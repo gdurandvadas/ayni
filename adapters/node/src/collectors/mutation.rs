@@ -1,11 +1,12 @@
-use super::util::{command_failure_from_output, package_manager_for_context, run_tool};
-use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use super::util::{command_failure_from_output, run_tool, tool_command};
+use ayni_adapters_common::collector::CollectorResult;
+use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_core::{
     Budget, MutationResult, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
 };
 use serde_json::json;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let enabled = context.policy.checks.mutation;
     if !enabled {
         return Ok(SignalRow {
@@ -33,11 +34,17 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
 
     let (output, engine) = if let Some((program, args, engine)) = mutation_override_command(context)
     {
-        (run_command_for_context(context, &program, &args)?, engine)
+        (
+            run_command_for_context_structured(context, &program, &args)?,
+            engine,
+        )
     } else {
-        let output = run_tool(context, "stryker", &["run", "--logLevel", "error"])?;
-        let manager = package_manager_for_context(context);
-        (output, format!("{} exec stryker", manager.executable()))
+        let (program, args) = tool_command(context, "stryker", &["run", "--logLevel", "error"]);
+        let engine = format_command(&program, &args);
+        (
+            run_tool(context, "stryker", &["run", "--logLevel", "error"])?,
+            engine,
+        )
     };
     let status_ok = output.status.success();
     let failure = (!status_ok).then(|| {

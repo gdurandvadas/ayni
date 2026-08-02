@@ -1,4 +1,5 @@
-use ayni_adapters_common::exec::{format_command, run_command_for_context_streaming};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::exec::{format_command, run_command_for_context_streaming_structured};
 use ayni_core::{
     Budget, CommandFailure, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
     TestFailure, TestResult, VerificationSelection,
@@ -8,13 +9,13 @@ use serde_json::json;
 const STDERR_TAIL_LINES: usize = 20;
 
 /// Run `cargo test` and stream each stdout line through `on_line`.
-pub fn collect_with_lines<F>(context: &RunContext, on_line: F) -> Result<SignalRow, String>
+pub fn collect_with_lines<F>(context: &RunContext, on_line: F) -> CollectorResult
 where
     F: FnMut(&str),
 {
     let (program, args) = test_command(context);
     let runner = format_command(&program, &args);
-    let output = run_command_for_context_streaming(context, &program, &args, on_line)?;
+    let output = run_command_for_context_streaming_structured(context, &program, &args, on_line)?;
     let success = output.status.success();
     let stdout_text = String::from_utf8_lossy(&output.stdout);
     let stderr_text = String::from_utf8_lossy(&output.stderr);
@@ -32,18 +33,19 @@ pub fn collect_selected_with_lines<F>(
     context: &RunContext,
     selection: &VerificationSelection,
     on_line: F,
-) -> Result<SignalRow, String>
+) -> CollectorResult
 where
     F: FnMut(&str),
 {
     if context.scope.file.is_some() {
-        return Err(String::from(
+        return Err(CollectorError::Adapter(String::from(
             "Rust source-file selection is unsupported; use --package and optional --name",
-        ));
+        )));
     }
-    let (program, args) = selected_test_command(context, selection)?;
+    let (program, args) =
+        selected_test_command(context, selection).map_err(CollectorError::Adapter)?;
     let runner = format_command(&program, &args);
-    let output = run_command_for_context_streaming(context, &program, &args, on_line)?;
+    let output = run_command_for_context_streaming_structured(context, &program, &args, on_line)?;
     Ok(build_test_row(
         context,
         output.status.success(),
@@ -74,7 +76,7 @@ fn selected_test_command(
     Ok((program, args))
 }
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     collect_with_lines(context, |_| {})
 }
 

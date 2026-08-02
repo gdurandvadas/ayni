@@ -1,4 +1,5 @@
-use ayni_adapters_common::exec::{DEFAULT_TOOL_TIMEOUT, run_command};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow, classify_maximum,
@@ -6,19 +7,17 @@ use ayni_core::{
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let config = context
-        .policy
-        .rust
-        .complexity
-        .as_ref()
-        .ok_or_else(|| String::from("missing [rust.complexity] policy"))?;
-    let cyclomatic = config
-        .fn_cyclomatic
-        .ok_or_else(|| String::from("missing rust.complexity.fn_cyclomatic"))?;
+pub fn collect(context: &RunContext) -> CollectorResult {
+    let config =
+        context.policy.rust.complexity.as_ref().ok_or_else(|| {
+            CollectorError::Adapter(String::from("missing [rust.complexity] policy"))
+        })?;
+    let cyclomatic = config.fn_cyclomatic.ok_or_else(|| {
+        CollectorError::Adapter(String::from("missing rust.complexity.fn_cyclomatic"))
+    })?;
 
     let target = resolve_analysis_target(context)?;
-    let metrics = run_rust_code_analysis(&context.repo_root, &context.workdir, &target)?;
+    let metrics = run_rust_code_analysis(context, &target)?;
 
     let mut offenders = Vec::new();
     let mut measured_functions = 0_u64;
@@ -122,10 +121,25 @@ struct CargoMetadata {
     packages: Vec<MetadataPackage>,
 }
 
-fn resolve_analysis_target(context: &RunContext) -> Result<PathBuf, String> {
-    resolve_analysis_target_with(context, resolve_package_path)
+fn resolve_analysis_target(context: &RunContext) -> Result<PathBuf, CollectorError> {
+    let target = if let Some(file) = &context.scope.file {
+        resolve_repo_path(&context.repo_root, file)
+    } else if let Some(package) = &context.scope.package {
+        resolve_package_path(context, package)?
+    } else if let Some(path) = &context.scope.path {
+        resolve_repo_path(&context.repo_root, path)
+    } else {
+        context.workdir.clone()
+    };
+    target.canonicalize().map_err(|error| {
+        CollectorError::Adapter(format!(
+            "complexity scope {} could not be resolved: {error}",
+            target.display()
+        ))
+    })
 }
 
+#[cfg(test)]
 fn resolve_analysis_target_with<F>(
     context: &RunContext,
     resolve_package: F,
@@ -160,8 +174,8 @@ fn resolve_repo_path(repo_root: &Path, value: &str) -> PathBuf {
     }
 }
 
-fn resolve_package_path(repo_root: &Path, package: &str) -> Result<PathBuf, String> {
-    let metadata = load_metadata(repo_root)?;
+fn resolve_package_path(context: &RunContext, package: &str) -> Result<PathBuf, CollectorError> {
+    let metadata = load_metadata(context)?;
     metadata
         .packages
         .into_iter()
@@ -171,33 +185,37 @@ fn resolve_package_path(repo_root: &Path, package: &str) -> Result<PathBuf, Stri
                 .parent()
                 .map(Path::to_path_buf)
         })
-        .ok_or_else(|| format!("package scope '{package}' was not found in cargo metadata"))
+        .ok_or_else(|| {
+            CollectorError::Adapter(format!(
+                "package scope '{package}' was not found in cargo metadata"
+            ))
+        })
 }
 
-fn load_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
+fn load_metadata(context: &RunContext) -> Result<CargoMetadata, CollectorError> {
     let args = vec![
         String::from("metadata"),
         String::from("--format-version"),
         String::from("1"),
         String::from("--no-deps"),
     ];
-    let output = run_command(repo_root, "cargo", &args, DEFAULT_TOOL_TIMEOUT)?;
+    let output = run_command_for_context_structured(context, "cargo", &args)?;
     if !output.status.success() {
-        return Err(format!(
+        return Err(CollectorError::Adapter(format!(
             "cargo metadata failed (exit {}): {}",
             output.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        )));
     }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("failed to parse cargo metadata output: {error}"))
+    serde_json::from_slice(&output.stdout).map_err(|error| {
+        CollectorError::Adapter(format!("failed to parse cargo metadata output: {error}"))
+    })
 }
 
 fn run_rust_code_analysis(
-    repo_root: &Path,
-    workdir: &Path,
+    context: &RunContext,
     target: &Path,
-) -> Result<Vec<FunctionMetric>, String> {
+) -> Result<Vec<FunctionMetric>, CollectorError> {
     let mut args = vec![
         String::from("--metrics"),
         String::from("--paths"),
@@ -212,32 +230,25 @@ fn run_rust_code_analysis(
         args.push(String::from("*.rs"));
     }
 
-    let output = run_command(workdir, "rust-code-analysis-cli", &args, DEFAULT_TOOL_TIMEOUT)
-        .map_err(|error| {
-            if error.contains("os error 2") {
-                String::from(
-                    "rust-code-analysis-cli is not installed; run `cargo install rust-code-analysis-cli`",
-                )
-            } else {
-                error
-            }
-        })?;
+    let output = run_command_for_context_structured(context, "rust-code-analysis-cli", &args)?;
     if !output.status.success() {
-        return Err(format!(
+        return Err(CollectorError::Adapter(format!(
             "rust-code-analysis-cli failed (exit {}): {}",
             output.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        )));
     }
 
-    let canonical_repo_root = repo_root
+    let canonical_repo_root = context
+        .repo_root
         .canonicalize()
-        .unwrap_or_else(|_| repo_root.to_path_buf());
+        .unwrap_or_else(|_| context.repo_root.to_path_buf());
     parse_rust_code_analysis_output(
         &String::from_utf8_lossy(&output.stdout),
         &canonical_repo_root,
-        workdir,
+        &context.workdir,
     )
+    .map_err(CollectorError::Adapter)
 }
 
 fn parse_rust_code_analysis_output(

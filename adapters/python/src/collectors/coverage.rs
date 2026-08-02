@@ -1,7 +1,8 @@
 use super::util::{
     command_failure_from_output, command_for_override_or_default, format_command,
-    prepare_report_path, run_command_for_context, to_repo_relative_path,
+    prepare_report_path, run_command_for_context_structured, to_repo_relative_path,
 };
+use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::failure::coverage_metric_failure;
 use ayni_core::{
     Budget, ConfiguredMetricEvaluation, CoverageOffender, CoveragePolicy, CoverageResult, Language,
@@ -29,14 +30,15 @@ struct CoverageSummary {
     num_branches: Option<f64>,
 }
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let report_path = prepare_report_path(context, "coverage.json")?;
+pub fn collect(context: &RunContext) -> CollectorResult {
+    let report_path =
+        prepare_report_path(context, "coverage.json").map_err(CollectorError::Adapter)?;
     let cov_arg = format!("--cov-report=json:{}", report_path.display());
     let default_args = default_coverage_args(&cov_arg);
     let (program, args) =
         command_for_override_or_default(context, SignalKind::Coverage, "pytest", &default_args);
     let engine = format_command(&program, &args);
-    let output = run_command_for_context(context, &program, &args)?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
     let mut status = if output.status.success() {
         "ok"
     } else {

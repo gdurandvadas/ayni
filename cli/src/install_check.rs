@@ -4,12 +4,11 @@
 //! installation remain in `install`; this probe only asks adapters to detect
 //! roots, resolve execution, and inspect catalog status.
 
-use crate::discovery::plan_configured_targets_for_languages;
-use crate::install::{catalog_entry_enabled_for_policy, install_context_for_execution};
-use ayni_adapters_common::catalog::tool_status;
+use crate::discovery::{PlannedConfiguredTarget, plan_configured_targets_for_languages};
+use crate::install::{catalog_entry_enabled_for_policy, catalog_failure, catalog_timeout};
 use ayni_core::{
-    AdapterRegistry, AyniPolicy, CompletionStage, ExecutionResolution, Language, SignalKind,
-    ToolStatus,
+    AdapterRegistry, AyniPolicy, CatalogEntry, CompletionIssue, CompletionStage,
+    ExecutionResolution, Language, LanguageAdapter, SignalKind, ToolStatus,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -96,66 +95,12 @@ pub(crate) fn probe_install_readiness(
     let mut issues = Vec::new();
 
     for planned_target in planned {
-        let detection = InstallDetection {
-            detected: planned_target.detected,
-            reason: planned_target.issue.as_ref().and_then(|issue| {
-                (issue.stage == CompletionStage::Detection).then(|| issue.message.clone())
-            }),
-        };
-        if let Some(issue) = planned_target.issue.as_ref() {
-            issues.push(InstallReadinessIssue {
-                language: issue.language,
-                configured_root: issue.configured_root.clone(),
-                stage: match issue.stage {
-                    CompletionStage::Detection => InstallReadinessIssueStage::Detection,
-                    CompletionStage::Resolution => InstallReadinessIssueStage::Resolution,
-                    _ => unreachable!(
-                        "configured-target planner only emits detection or resolution issues"
-                    ),
-                },
-                message: issue.message.clone(),
-                requirement: None,
-            });
-        }
-
-        let mut requirements = Vec::new();
-        if let Some(execution) = planned_target.execution.as_ref() {
-            let adapter = registry
-                .adapters()
-                .iter()
-                .find(|adapter| adapter.language() == planned_target.language)
-                .expect(
-                    "configured-target planner resolved execution only for registered adapters",
-                );
-            let context = install_context_for_execution(execution);
-            for entry in adapter.catalog() {
-                if !catalog_entry_enabled_for_policy(policy, entry) {
-                    continue;
-                }
-                let status = readiness_status(tool_status(entry, context));
-                if status != InstallRequirementStatus::Current {
-                    issues.push(InstallReadinessIssue {
-                        language: planned_target.language,
-                        configured_root: planned_target.configured_root.clone(),
-                        stage: InstallReadinessIssueStage::Requirement,
-                        message: format!("{} is {}", entry.name, readiness_status_name(status)),
-                        requirement: Some(entry.name.to_string()),
-                    });
-                }
-                requirements.push(InstallRequirement {
-                    name: entry.name.to_string(),
-                    signals: entry.for_signals.to_vec(),
-                    status,
-                });
-            }
-        }
-        targets.push(InstallReadinessTarget {
-            language: planned_target.language,
-            configured_root: planned_target.configured_root,
-            detection,
-            execution: planned_target.execution,
-            requirements,
-        });
+        targets.push(project_target(
+            planned_target,
+            policy,
+            registry,
+            &mut issues,
+        ));
     }
     let state = if issues.is_empty() {
         InstallReadinessState::Ready
@@ -168,6 +113,138 @@ pub(crate) fn probe_install_readiness(
         targets,
         issues,
     })
+}
+
+fn project_target(
+    planned: PlannedConfiguredTarget,
+    policy: &AyniPolicy,
+    registry: &AdapterRegistry,
+    issues: &mut Vec<InstallReadinessIssue>,
+) -> InstallReadinessTarget {
+    let detection = InstallDetection {
+        detected: planned.detected,
+        reason: planned.issue.as_ref().and_then(|issue| {
+            (issue.stage == CompletionStage::Detection).then(|| issue.message.clone())
+        }),
+    };
+    if let Some(issue) = planned.issue.as_ref() {
+        issues.push(planning_issue(issue));
+    }
+    let requirements = planned
+        .execution
+        .as_ref()
+        .map_or_else(Vec::new, |execution| {
+            probe_requirements(
+                planned.language,
+                &planned.configured_root,
+                execution,
+                policy,
+                registry,
+                issues,
+            )
+        });
+    InstallReadinessTarget {
+        language: planned.language,
+        configured_root: planned.configured_root,
+        detection,
+        execution: planned.execution,
+        requirements,
+    }
+}
+
+fn planning_issue(issue: &CompletionIssue) -> InstallReadinessIssue {
+    InstallReadinessIssue {
+        language: issue.language,
+        configured_root: issue.configured_root.clone(),
+        stage: match issue.stage {
+            CompletionStage::Detection => InstallReadinessIssueStage::Detection,
+            CompletionStage::Resolution => InstallReadinessIssueStage::Resolution,
+            _ => {
+                unreachable!("configured-target planner only emits detection or resolution issues")
+            }
+        },
+        message: issue.message.clone(),
+        requirement: None,
+    }
+}
+
+fn probe_requirements(
+    language: Language,
+    configured_root: &str,
+    execution: &ExecutionResolution,
+    policy: &AyniPolicy,
+    registry: &AdapterRegistry,
+    issues: &mut Vec<InstallReadinessIssue>,
+) -> Vec<InstallRequirement> {
+    let adapter = registry
+        .adapters()
+        .iter()
+        .find(|adapter| adapter.language() == language)
+        .expect("configured-target planner resolved execution only for registered adapters");
+    let mut requirements = Vec::new();
+    for entry in adapter
+        .catalog()
+        .iter()
+        .filter(|entry| catalog_entry_enabled_for_policy(policy, entry))
+    {
+        let (requirement, issue) = probe_requirement(
+            adapter.as_ref(),
+            entry,
+            execution,
+            language,
+            configured_root,
+            policy,
+        );
+        if let Some(issue) = issue {
+            issues.push(issue);
+        }
+        requirements.push(requirement);
+    }
+    requirements
+}
+
+fn probe_requirement(
+    adapter: &dyn LanguageAdapter,
+    entry: &CatalogEntry,
+    execution: &ExecutionResolution,
+    language: Language,
+    configured_root: &str,
+    policy: &AyniPolicy,
+) -> (InstallRequirement, Option<InstallReadinessIssue>) {
+    let (status, diagnostic) =
+        match adapter
+            .catalog_runtime()
+            .status(entry, execution, catalog_timeout(policy))
+        {
+            Ok(status) => (readiness_status(status), None),
+            Err(error) => (
+                InstallRequirementStatus::Missing,
+                Some(catalog_failure(
+                    language,
+                    configured_root,
+                    entry.name,
+                    &error,
+                )),
+            ),
+        };
+    let issue = (status != InstallRequirementStatus::Current || diagnostic.is_some()).then(|| {
+        InstallReadinessIssue {
+            language,
+            configured_root: configured_root.to_string(),
+            stage: InstallReadinessIssueStage::Requirement,
+            message: diagnostic
+                .unwrap_or_else(|| format!("{} is {}", entry.name, readiness_status_name(status))),
+            requirement: Some(entry.name.to_string()),
+        }
+    });
+    (
+        InstallRequirement {
+            name: entry.name.to_string(),
+            signals: entry.for_signals.to_vec(),
+            status,
+        },
+        issue,
+    )
 }
 
 /// Load the existing policy and emit one readiness report. This path never

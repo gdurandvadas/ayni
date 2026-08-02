@@ -1,5 +1,7 @@
 use super::util::run_tool_for_context;
+use ayni_adapters_common::collector::CollectorResult;
 use ayni_adapters_common::exec::format_command;
+use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_adapters_common::failure::{command_failure_from_output, coverage_metric_failure};
 use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
@@ -9,24 +11,33 @@ use ayni_core::{
 };
 use serde_json::json;
 use std::fs;
-use std::process::Command;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let profile_path = context.workdir.join(".ayni-go-cover.out");
     let profile_arg = format!("-coverprofile={}", profile_path.display());
     let (test_program, test_args, test_engine) = coverage_test_command(context, &profile_arg);
-    let test_output = run_tool_for_context(context, &test_program, &test_args)
-        .map_err(|error| format!("failed to execute {test_engine}: {error}"))?;
+    let test_output = match run_tool_for_context(context, &test_program, &test_args) {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = fs::remove_file(&profile_path);
+            return Err(error.into());
+        }
+    };
 
     let (status, raw_line_percent, cover_failure) = if test_output.status.success() {
-        let cover_output = Command::new("go")
-            .arg("tool")
-            .arg("cover")
-            .arg("-func")
-            .arg(&profile_path)
-            .current_dir(&context.workdir)
-            .output()
-            .map_err(|error| format!("failed to execute go tool cover: {error}"))?;
+        let cover_args = vec![
+            String::from("tool"),
+            String::from("cover"),
+            String::from("-func"),
+            profile_path.to_string_lossy().into_owned(),
+        ];
+        let cover_output = match run_command_for_context_structured(context, "go", &cover_args) {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = fs::remove_file(&profile_path);
+                return Err(error.into());
+            }
+        };
         if cover_output.status.success() {
             let text = String::from_utf8_lossy(&cover_output.stdout);
             let line = parse_total_percent(&text);
@@ -39,11 +50,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
                     context,
                     SignalKind::Coverage,
                     "go",
-                    &[
-                        String::from("tool"),
-                        String::from("cover"),
-                        String::from("-func"),
-                    ],
+                    &cover_args,
                     &cover_output,
                 )),
             )

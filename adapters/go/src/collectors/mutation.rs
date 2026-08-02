@@ -1,4 +1,5 @@
 use super::util::run_tool_for_context;
+use ayni_adapters_common::collector::CollectorResult;
 use ayni_adapters_common::exec::format_command;
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
@@ -7,7 +8,7 @@ use ayni_core::{
 };
 use serde_json::json;
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let enabled = context.policy.checks.mutation;
     if !enabled {
         return Ok(SignalRow {

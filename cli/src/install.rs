@@ -4,15 +4,15 @@ use crate::{
     AYNI_POLICY_FILE, GO_POLICY_TEMPLATE, KOTLIN_POLICY_TEMPLATE, NODE_POLICY_TEMPLATE,
     PYTHON_POLICY_TEMPLATE, RUST_POLICY_TEMPLATE,
 };
-use ayni_adapters_common::catalog::{install_tool, tool_status};
 use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
-    AyniPolicy, CatalogEntry, ExecutionResolution, InstallContext, Installer, Language,
-    NodePackageManager, PythonPackageManager, SignalKind, ToolStatus, VersionCheck,
+    AyniPolicy, CatalogEntry, CatalogOperationError, Installer, Language, SignalKind, ToolStatus,
+    VersionCheck,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub(crate) fn install_impl(
     repo_root: &str,
@@ -38,8 +38,7 @@ pub(crate) fn install_impl(
             Err(failures)
         }
     } else {
-        print_install_requirements(&root, &policy, selected_languages);
-        Ok(())
+        print_install_requirements(&root, &policy, selected_languages)
     }
 }
 
@@ -47,7 +46,7 @@ pub(crate) fn print_install_requirements(
     repo_root: &Path,
     policy: &AyniPolicy,
     selected_languages: &BTreeSet<Language>,
-) {
+) -> Result<(), Vec<String>> {
     println!("Ayni tooling requirements (from adapter catalogs)");
     println!("Scaffolding is already updated (`.ayni.toml`, `.gitignore`).");
     println!(
@@ -55,6 +54,8 @@ pub(crate) fn print_install_requirements(
     );
     let registry = crate::build_registry();
     let mut any_tool_row = false;
+    let mut failures = Vec::new();
+    let timeout = catalog_timeout(policy);
     for adapter in registry.adapters() {
         let language = adapter.language();
         if should_skip_install_language(policy, language, selected_languages) {
@@ -70,7 +71,6 @@ pub(crate) fn print_install_requirements(
             let Some(execution) = adapter.resolve_execution(repo_root, &root_path) else {
                 continue;
             };
-            let install_context = install_context_for_execution(&execution);
             println!(
                 "  runner: runner={} source={} kind={} resolved_from={} confidence={} ambiguous={}",
                 execution.runner,
@@ -85,7 +85,13 @@ pub(crate) fn print_install_requirements(
                     continue;
                 }
                 any_tool_row = true;
-                let status = tool_status(entry, install_context);
+                let status = match adapter.catalog_runtime().status(entry, &execution, timeout) {
+                    Ok(status) => status,
+                    Err(error) => {
+                        failures.push(catalog_failure(language, root_entry, entry.name, &error));
+                        ToolStatus::Missing
+                    }
+                };
                 let status_str = match status {
                     ToolStatus::Missing => "missing",
                     ToolStatus::Outdated => "outdated",
@@ -109,6 +115,11 @@ pub(crate) fn print_install_requirements(
     if !any_tool_row {
         println!("No catalog tools listed for the current policy and detected workspaces.");
         println!("Enable languages in `.ayni.toml`, adjust `[checks]`, or pass `--language`.");
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures)
     }
 }
 
@@ -146,19 +157,6 @@ fn installer_summary(inst: &Installer) -> String {
         } => fmt_cargo_install(crate_name, *version),
         Installer::Rustup { component } => format!("install: rustup component add {component}"),
         Installer::GoInstall { module, version } => fmt_go_install(module, *version),
-        Installer::NpmGlobal { package, version } => fmt_npm_global(package, *version),
-        Installer::NodePackage {
-            package,
-            version,
-            dev,
-        } => fmt_node_package(package, *version, *dev),
-        Installer::PythonPackage {
-            package,
-            version,
-            dev,
-            ..
-        } => fmt_python_package(package, *version, *dev),
-        Installer::UvTool { package, version } => fmt_uv_tool(package, *version),
         Installer::GradleTask { task } => format!("install: provided by Gradle task `{task}`"),
         Installer::GradleTaskAny { tasks } => format!(
             "install: provided by one of Gradle tasks {}",
@@ -168,8 +166,8 @@ fn installer_summary(inst: &Installer) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        Installer::PythonRuntime => String::from("install: (python runtime on PATH)"),
         Installer::Custom { program, args } => format!("install: {} {}", program, args.join(" ")),
+        Installer::AdapterManaged { summary, .. } => (*summary).to_string(),
     }
 }
 
@@ -183,36 +181,6 @@ fn fmt_cargo_install(crate_name: &str, version: Option<&str>) -> String {
 fn fmt_go_install(module: &str, version: Option<&str>) -> String {
     let ver = version.unwrap_or("latest");
     format!("install: go install {module}@{ver}")
-}
-
-fn fmt_npm_global(package: &str, version: Option<&str>) -> String {
-    match version {
-        Some(v) => format!("install: npm install -g {package}@{v}"),
-        None => format!("install: npm install -g {package}"),
-    }
-}
-
-fn fmt_node_package(package: &str, version: Option<&str>, dev: bool) -> String {
-    let scope = if dev { "devDependency" } else { "dependency" };
-    match version {
-        Some(v) => format!("install: add {scope} {package}@{v} via package manager"),
-        None => format!("install: add {scope} {package} via package manager"),
-    }
-}
-
-fn fmt_python_package(package: &str, version: Option<&str>, dev: bool) -> String {
-    let scope = if dev { "devDependency" } else { "dependency" };
-    match version {
-        Some(v) => format!("install: add Python {scope} {package}=={v} via package manager"),
-        None => format!("install: add Python {scope} {package} via package manager"),
-    }
-}
-
-fn fmt_uv_tool(package: &str, version: Option<&str>) -> String {
-    match version {
-        Some(v) => format!("install: uv tool install {package}=={v}"),
-        None => format!("install: uv tool install {package}"),
-    }
 }
 
 fn collect_install_failures(
@@ -268,9 +236,8 @@ fn install_for_root(
         ));
         return failures;
     };
-    if let Err(error) = adapter.prepare_install(&execution) {
-        failures.push(format!("install prep ({language}:{root_entry}): {error}"));
-    }
+    let runtime = adapter.catalog_runtime();
+    let timeout = catalog_timeout(policy);
     println!(
         "install {language}:{root_entry} runner={} source={} kind={} resolved_from={} confidence={} ambiguous={}",
         execution.runner,
@@ -280,31 +247,68 @@ fn install_for_root(
         execution.confidence,
         execution.ambiguous
     );
-    let install_context = install_context_for_execution(&execution);
+    if let Err(error) = runtime.prepare(&execution, timeout, &mut |line| println!("  {line}")) {
+        failures.push(catalog_failure(
+            language,
+            root_entry,
+            "catalog preparation",
+            &error,
+        ));
+        return failures;
+    }
 
     for entry in adapter.catalog() {
         if !catalog_entry_enabled_for_policy(policy, entry) {
             continue;
         }
-        if matches!(
-            tool_status(entry, install_context),
-            ToolStatus::Missing | ToolStatus::Outdated
-        ) && let Err(error) = install_tool(entry, install_context)
-        {
-            failures.push(format!("{} ({language}:{root_entry}): {error}", entry.name));
+        let status = match runtime.status(entry, &execution, timeout) {
+            Ok(status) => status,
+            Err(error) => {
+                failures.push(catalog_failure(language, root_entry, entry.name, &error));
+                continue;
+            }
+        };
+        if matches!(status, ToolStatus::Missing | ToolStatus::Outdated) {
+            println!("installing {} ({language}:{root_entry})", entry.name);
+            if let Err(error) = runtime.install(entry, &execution, timeout, &mut |line| {
+                println!("  {line}");
+            }) {
+                failures.push(catalog_failure(language, root_entry, entry.name, &error));
+            }
         }
     }
 
     failures
 }
 
-pub(crate) fn install_context_for_execution(execution: &ExecutionResolution) -> InstallContext<'_> {
-    InstallContext {
-        cwd: Some(execution.install_cwd.as_path()),
-        node_package_manager: NodePackageManager::from_executable(&execution.runner),
-        python_package_manager: PythonPackageManager::from_executable(&execution.runner),
-        gradle_runner: Some(execution.runner.as_str()),
+pub(crate) fn catalog_timeout(policy: &AyniPolicy) -> Duration {
+    Duration::from_secs(policy.execution.tool_timeout_seconds)
+}
+
+pub(crate) fn catalog_failure(
+    language: Language,
+    configured_root: &str,
+    requirement: &str,
+    error: &CatalogOperationError,
+) -> String {
+    let mut details = vec![
+        format!("operation={}", error.operation),
+        format!("kind={:?}", error.kind).to_lowercase(),
+    ];
+    if let Some(command) = &error.command {
+        details.push(format!("command={command}"));
     }
+    if let Some(cwd) = &error.cwd {
+        details.push(format!("cwd={}", cwd.display()));
+    }
+    if let Some(exit_code) = error.exit_code {
+        details.push(format!("exit_code={exit_code}"));
+    }
+    format!(
+        "catalog failure ({language}:{configured_root}) requirement `{requirement}`: {}; {}; install_cwd/status context is adapter-owned",
+        error.message,
+        details.join(" ")
+    )
 }
 
 fn language_enabled(policy: &AyniPolicy, language: Language) -> bool {
@@ -386,22 +390,29 @@ pub(crate) fn validate_install_foundation(
                     execution.resolved_from.display()
                 ));
             }
-            let install_context = install_context_for_execution(&execution);
+            let runtime = adapter.catalog_runtime();
+            let timeout = catalog_timeout(policy);
             for entry in adapter.catalog() {
                 if !catalog_entry_enabled_for_policy(policy, entry) {
                     continue;
                 }
-                if tool_status(entry, install_context) == ToolStatus::Missing {
-                    failures.push(format!(
-                        "foundation validation failed ({language}:{root_entry}): repo_setup_issue: {} is not invocable; runner={} source={} kind={} resolved_from={} install_cwd={} exec_cwd={}",
+                match runtime.status(entry, &execution, timeout) {
+                    Ok(ToolStatus::Current) => {}
+                    Ok(status) => failures.push(format!(
+                        "foundation validation failed ({language}:{root_entry}): repo_setup_issue: {} is {}; runner={} source={} kind={} resolved_from={} install_cwd={} exec_cwd={}",
                         entry.name,
+                        match status { ToolStatus::Missing => "not invocable", ToolStatus::Outdated => "outdated", ToolStatus::Current => unreachable!() },
                         execution.runner,
                         execution.source,
                         execution.kind,
                         execution.resolved_from.display(),
                         execution.install_cwd.display(),
                         execution.exec_cwd.display()
-                    ));
+                    )),
+                    Err(error) => failures.push(format!(
+                        "foundation validation failed: {}",
+                        catalog_failure(language, root_entry, entry.name, &error)
+                    )),
                 }
             }
         }

@@ -1,4 +1,5 @@
-use ayni_adapters_common::exec::{format_command, run_command_for_context};
+use ayni_adapters_common::collector::CollectorResult;
+use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{concise_failure_message, coverage_metric_failure};
 use ayni_core::{
     Budget, CommandFailure, ConfiguredMetricEvaluation, CoverageOffender, CoveragePolicy,
@@ -7,9 +8,9 @@ use ayni_core::{
 };
 use serde_json::{Value as JsonValue, json};
 
-pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
+pub fn collect(context: &RunContext) -> CollectorResult {
     let (program, args, engine_label) = coverage_command(context);
-    let output = run_command_for_context(context, &program, &args)?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
 
     let (status, raw_line_percent, raw_branch_percent, report_failure) = if output.status.success()
     {
