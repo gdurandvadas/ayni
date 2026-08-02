@@ -7,7 +7,7 @@ use ayni_adapters_common::paths::{
 use ayni_adapters_common::xml::{attr_string, attr_u64};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use regex::Regex;
 use serde_json::json;
@@ -57,17 +57,20 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     let mut max_fn_cyclomatic = 0.0_f64;
     let mut warn_count = 0_u64;
     let mut fail_count = 0_u64;
-    for offender in &mut offenders {
+    offenders.retain_mut(|offender| {
         max_fn_cyclomatic = max_fn_cyclomatic.max(offender.cyclomatic);
-        if offender.cyclomatic > cyclomatic.fail {
-            offender.level = Level::Fail;
-            fail_count += 1;
-        } else if offender.cyclomatic > cyclomatic.warn {
-            offender.level = Level::Warn;
-            warn_count += 1;
-        }
-    }
-    offenders.retain(|offender| offender.cyclomatic > cyclomatic.warn);
+        let Some(level) = classify_complexity(
+            offender.cyclomatic,
+            cyclomatic.warn,
+            cyclomatic.fail,
+            &mut warn_count,
+            &mut fail_count,
+        ) else {
+            return false;
+        };
+        offender.level = level;
+        true
+    });
     offenders.sort_by(|left, right| {
         right
             .level
@@ -101,6 +104,22 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         })),
         offenders: Offenders::Complexity(offenders),
     })
+}
+
+fn classify_complexity(
+    value: f64,
+    warn: f64,
+    fail: f64,
+    warn_count: &mut u64,
+    fail_count: &mut u64,
+) -> Option<Level> {
+    let level = classify_maximum(value, warn, fail);
+    match level {
+        Some(Level::Warn) => *warn_count += 1,
+        Some(Level::Fail) => *fail_count += 1,
+        None => {}
+    }
+    level
 }
 
 fn error_row(
@@ -208,8 +227,8 @@ fn selected_file(context: &RunContext) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_checkstyle_content;
-    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    use super::{classify_complexity, parse_checkstyle_content};
+    use ayni_core::{AyniPolicy, ExecutionResolution, Level, RunContext, Scope};
     use std::path::PathBuf;
 
     #[test]
@@ -262,5 +281,24 @@ mod tests {
         assert_eq!(offenders.len(), 1);
         assert_eq!(offenders[0].file, "src/Selected.kt");
         assert_eq!(offenders[0].cyclomatic, 12.0);
+    }
+
+    #[test]
+    fn maximum_threshold_equality() {
+        let mut warn_count = 0;
+        let mut fail_count = 0;
+        assert_eq!(
+            classify_complexity(9.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            None
+        );
+        assert_eq!(
+            classify_complexity(10.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Warn)
+        );
+        assert_eq!(
+            classify_complexity(15.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Fail)
+        );
+        assert_eq!((warn_count, fail_count), (1, 1));
     }
 }

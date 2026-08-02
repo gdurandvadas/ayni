@@ -148,6 +148,11 @@ fn validate_selector_shape(request: &Request) -> Result<(), String> {
 }
 
 fn validate_file_selector(repo_root: &Path, value: &str) -> Result<String, String> {
+    let normalized = normalize_file_selector(value)?;
+    canonical_repository_file(repo_root, &normalized)
+}
+
+fn normalize_file_selector(value: &str) -> Result<PathBuf, String> {
     let portable = value.trim().replace('\\', "/");
     let path = Path::new(&portable);
     let has_windows_prefix = portable.as_bytes().get(1) == Some(&b':')
@@ -176,18 +181,19 @@ fn validate_file_selector(repo_root: &Path, value: &str) -> Result<String, Strin
         return Err(String::from("--file must identify a repository file"));
     }
 
+    Ok(normalized)
+}
+
+fn canonical_repository_file(repo_root: &Path, normalized: &Path) -> Result<String, String> {
     let canonical_root = repo_root
         .canonicalize()
         .map_err(|error| format!("failed to resolve repository root: {error}"))?;
-    let canonical_file = repo_root
-        .join(&normalized)
-        .canonicalize()
-        .map_err(|error| {
-            format!(
-                "--file {} does not resolve to a configured repository file: {error}",
-                normalized.display()
-            )
-        })?;
+    let canonical_file = repo_root.join(normalized).canonicalize().map_err(|error| {
+        format!(
+            "--file {} does not resolve to a configured repository file: {error}",
+            normalized.display()
+        )
+    })?;
     if !canonical_file.is_file() || !canonical_file.starts_with(&canonical_root) {
         return Err(format!(
             "--file {} must resolve to a file inside the repository",

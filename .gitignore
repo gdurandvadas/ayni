@@ -31,4 +31,6 @@ target
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 .projects/**
+!.projects/0-8-0-fixes/
+!.projects/0-8-0-fixes/*.md
 **/node_modules/

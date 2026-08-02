@@ -61,66 +61,17 @@ fn collect_with_command(
     let success = output.status.success();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut summary = parse_test_events(&stdout);
 
-    let mut offenders = Vec::new();
-    let mut total_tests = 0_u64;
-    let mut passed = 0_u64;
-    let mut failed = 0_u64;
-    let mut duration_ms = 0_u64;
-
-    for line in stdout.lines() {
-        let Ok(event) = serde_json::from_str::<GoTestEvent>(line) else {
-            continue;
-        };
-        let Some(action) = event.action.as_deref() else {
-            continue;
-        };
-        if event.test.is_some() {
-            match action {
-                "pass" => {
-                    total_tests += 1;
-                    passed += 1;
-                }
-                "fail" => {
-                    total_tests += 1;
-                    failed += 1;
-                    offenders.push(TestFailure {
-                        file: event.package.clone(),
-                        line: None,
-                        message: format!(
-                            "test '{}' failed",
-                            event.test.as_deref().unwrap_or("<unknown>")
-                        ),
-                        test_name: event.test.clone(),
-                    });
-                }
-                _ => {}
-            }
-            if let Some(elapsed) = event.elapsed {
-                duration_ms = duration_ms.saturating_add((elapsed * 1000.0) as u64);
-            }
-        } else if action == "output"
-            && let Some(out) = event.output
-            && out.contains("FAIL")
-        {
-            offenders.push(TestFailure {
-                file: event.package.clone(),
-                line: None,
-                message: out.trim().to_string(),
-                test_name: None,
-            });
-        }
-    }
-
-    if !success && offenders.is_empty() {
-        offenders.push(TestFailure {
+    if !success && summary.offenders.is_empty() {
+        summary.offenders.push(TestFailure {
             file: None,
             line: None,
             message: stderr.trim().to_string(),
             test_name: None,
         });
-    } else if success && total_tests == 0 {
-        offenders.push(zero_tests_failure());
+    } else if success && summary.total_tests == 0 {
+        summary.offenders.push(zero_tests_failure());
     }
 
     Ok(SignalRow {
@@ -132,20 +83,83 @@ fn collect_with_command(
             package: context.scope.package.clone(),
             file: context.scope.file.clone(),
         },
-        pass: test_row_passes(success, total_tests, failed),
+        pass: test_row_passes(success, summary.total_tests, summary.failed),
         result: SignalResult::Test(TestResult {
-            total_tests,
-            passed,
-            failed,
-            duration_ms: (duration_ms > 0).then_some(duration_ms),
+            total_tests: summary.total_tests,
+            passed: summary.passed,
+            failed: summary.failed,
+            duration_ms: (summary.duration_ms > 0).then_some(summary.duration_ms),
             runner,
             failure: (!success).then(|| {
                 command_failure_from_output(context, SignalKind::Test, &program, &args, &output)
             }),
         }),
         budget: Budget::Test(json!({})),
-        offenders: Offenders::Test(offenders),
+        offenders: Offenders::Test(summary.offenders),
     })
+}
+
+#[derive(Default)]
+struct TestSummary {
+    offenders: Vec<TestFailure>,
+    total_tests: u64,
+    passed: u64,
+    failed: u64,
+    duration_ms: u64,
+}
+
+fn parse_test_events(stdout: &str) -> TestSummary {
+    let mut summary = TestSummary::default();
+    for line in stdout.lines() {
+        let Ok(event) = serde_json::from_str::<GoTestEvent>(line) else {
+            continue;
+        };
+        record_test_event(&mut summary, event);
+    }
+    summary
+}
+
+fn record_test_event(summary: &mut TestSummary, event: GoTestEvent) {
+    let Some(action) = event.action.as_deref() else {
+        return;
+    };
+    if event.test.is_some() {
+        match action {
+            "pass" => {
+                summary.total_tests += 1;
+                summary.passed += 1;
+            }
+            "fail" => {
+                summary.total_tests += 1;
+                summary.failed += 1;
+                summary.offenders.push(TestFailure {
+                    file: event.package.clone(),
+                    line: None,
+                    message: format!(
+                        "test '{}' failed",
+                        event.test.as_deref().unwrap_or("<unknown>")
+                    ),
+                    test_name: event.test.clone(),
+                });
+            }
+            _ => {}
+        }
+        if let Some(elapsed) = event.elapsed {
+            summary.duration_ms = summary
+                .duration_ms
+                .saturating_add((elapsed * 1000.0) as u64);
+        }
+    } else if action == "output"
+        && let Some(out) = event.output
+        && out.contains("FAIL")
+    {
+        summary.offenders.push(TestFailure {
+            file: event.package.clone(),
+            line: None,
+            message: out.trim().to_string(),
+            test_name: None,
+        });
+    }
 }
 
 fn zero_tests_failure() -> TestFailure {

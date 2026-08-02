@@ -2,7 +2,7 @@ use super::util::run_tool_for_context;
 use ayni_adapters_common::paths::{resolve_repo_path, to_repo_relative_path};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use regex::Regex;
 use serde_json::json;
@@ -65,15 +65,13 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         measured_functions += 1;
         max_fn_cyclomatic = max_fn_cyclomatic.max(complexity);
 
-        let level = if complexity > cyclomatic.fail {
-            fail_count += 1;
-            Some(Level::Fail)
-        } else if complexity > cyclomatic.warn {
-            warn_count += 1;
-            Some(Level::Warn)
-        } else {
-            None
-        };
+        let level = classify_complexity(
+            complexity,
+            cyclomatic.warn,
+            cyclomatic.fail,
+            &mut warn_count,
+            &mut fail_count,
+        );
 
         if let Some(level) = level {
             offenders.push(ComplexityOffender {
@@ -133,6 +131,22 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     })
 }
 
+fn classify_complexity(
+    value: f64,
+    warn: f64,
+    fail: f64,
+    warn_count: &mut u64,
+    fail_count: &mut u64,
+) -> Option<Level> {
+    let level = classify_maximum(value, warn, fail);
+    match level {
+        Some(Level::Warn) => *warn_count += 1,
+        Some(Level::Fail) => *fail_count += 1,
+        None => {}
+    }
+    level
+}
+
 fn complexity_args(context: &RunContext) -> Vec<String> {
     context.scope.file.as_ref().map_or_else(
         || vec![String::from(".")],
@@ -157,8 +171,8 @@ fn resolve_reported_path(context: &RunContext, raw_file: &str) -> std::path::Pat
 
 #[cfg(test)]
 mod tests {
-    use super::complexity_args;
-    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    use super::{classify_complexity, complexity_args};
+    use ayni_core::{AyniPolicy, ExecutionResolution, Level, RunContext, Scope};
     use std::path::PathBuf;
 
     #[test]
@@ -180,5 +194,24 @@ mod tests {
             complexity_args(&context),
             vec![String::from("/repo/internal/api/handler.go")]
         );
+    }
+
+    #[test]
+    fn maximum_threshold_equality() {
+        let mut warn_count = 0;
+        let mut fail_count = 0;
+        assert_eq!(
+            classify_complexity(9.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            None
+        );
+        assert_eq!(
+            classify_complexity(10.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Warn)
+        );
+        assert_eq!(
+            classify_complexity(15.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Fail)
+        );
+        assert_eq!((warn_count, fail_count), (1, 1));
     }
 }

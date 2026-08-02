@@ -1,7 +1,7 @@
 use ayni_adapters_common::exec::{DEFAULT_TOOL_TIMEOUT, run_command};
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -44,10 +44,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         );
 
         if let Some(level) = level {
-            match level {
-                Level::Warn => warn_count += 1,
-                Level::Fail => fail_count += 1,
-            }
+            count_level(level, &mut warn_count, &mut fail_count);
             offenders.push(ComplexityOffender {
                 file: metric.file,
                 line: metric.line,
@@ -415,12 +412,13 @@ fn metric_string(map: &Map<String, Value>, keys: &[&str]) -> Option<String> {
 }
 
 fn threshold_level(value: f64, warn: f64, fail: f64) -> Option<Level> {
-    if value > fail {
-        Some(Level::Fail)
-    } else if value > warn {
-        Some(Level::Warn)
-    } else {
-        None
+    classify_maximum(value, warn, fail)
+}
+
+fn count_level(level: Level, warn_count: &mut u64, fail_count: &mut u64) {
+    match level {
+        Level::Warn => *warn_count += 1,
+        Level::Fail => *fail_count += 1,
     }
 }
 
@@ -446,9 +444,10 @@ fn level_rank(level: Level) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_function_metric, parse_rust_code_analysis_output, resolve_analysis_target_with,
+        count_level, parse_function_metric, parse_rust_code_analysis_output,
+        resolve_analysis_target_with, threshold_level,
     };
-    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    use ayni_core::{AyniPolicy, ExecutionResolution, Level, RunContext, Scope};
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
@@ -607,5 +606,20 @@ mod tests {
                 .canonicalize()
                 .expect("canonical")
         );
+    }
+
+    #[test]
+    fn maximum_threshold_equality() {
+        let mut warn_count = 0;
+        let mut fail_count = 0;
+        assert_eq!(threshold_level(9.0, 10.0, 15.0), None);
+        let warn = threshold_level(10.0, 10.0, 15.0).expect("warn offender");
+        count_level(warn, &mut warn_count, &mut fail_count);
+        assert_eq!(warn, Level::Warn);
+        assert_eq!(threshold_level(14.0, 10.0, 15.0), Some(Level::Warn));
+        let fail = threshold_level(15.0, 10.0, 15.0).expect("fail offender");
+        count_level(fail, &mut warn_count, &mut fail_count);
+        assert_eq!(fail, Level::Fail);
+        assert_eq!((warn_count, fail_count), (1, 1));
     }
 }

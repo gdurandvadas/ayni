@@ -4,7 +4,7 @@ use super::util::{
 };
 use ayni_core::{
     Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -69,15 +69,13 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     for entry in entries {
         measured_functions += 1;
         max_fn_cognitive = max_fn_cognitive.max(entry.complexity);
-        let level = if entry.complexity > cognitive.fail {
-            fail_count += 1;
-            Some(Level::Fail)
-        } else if entry.complexity > cognitive.warn {
-            warn_count += 1;
-            Some(Level::Warn)
-        } else {
-            None
-        };
+        let level = classify_complexity(
+            entry.complexity,
+            cognitive.warn,
+            cognitive.fail,
+            &mut warn_count,
+            &mut fail_count,
+        );
         if let Some(level) = level {
             offenders.push(ComplexityOffender {
                 file: to_repo_relative_path(
@@ -132,6 +130,22 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         })),
         offenders: Offenders::Complexity(offenders),
     })
+}
+
+fn classify_complexity(
+    value: f64,
+    warn: f64,
+    fail: f64,
+    warn_count: &mut u64,
+    fail_count: &mut u64,
+) -> Option<Level> {
+    let level = classify_maximum(value, warn, fail);
+    match level {
+        Some(Level::Warn) => *warn_count += 1,
+        Some(Level::Fail) => *fail_count += 1,
+        None => {}
+    }
+    level
 }
 
 fn error_row(
@@ -255,8 +269,8 @@ fn complexity_target(context: &RunContext) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FunctionEntry, collect_function_entries, complexity_target};
-    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    use super::{FunctionEntry, classify_complexity, collect_function_entries, complexity_target};
+    use ayni_core::{AyniPolicy, ExecutionResolution, Level, RunContext, Scope};
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -295,5 +309,24 @@ mod tests {
         };
 
         assert_eq!(complexity_target(&context), "/repo/src/handler.py");
+    }
+
+    #[test]
+    fn maximum_threshold_equality() {
+        let mut warn_count = 0;
+        let mut fail_count = 0;
+        assert_eq!(
+            classify_complexity(9.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            None
+        );
+        assert_eq!(
+            classify_complexity(10.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Warn)
+        );
+        assert_eq!(
+            classify_complexity(15.0, 10.0, 15.0, &mut warn_count, &mut fail_count),
+            Some(Level::Fail)
+        );
+        assert_eq!((warn_count, fail_count), (1, 1));
     }
 }

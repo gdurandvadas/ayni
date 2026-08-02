@@ -10,6 +10,7 @@ pub mod registry;
 pub mod runtime;
 pub mod signal;
 pub mod size;
+pub mod threshold;
 
 pub use adapter::{
     ComplexityThresholdKind, DetectResult, DiscoveredRoot, LanguageAdapter, LanguageProfile,
@@ -45,3 +46,4 @@ pub use signal::{
     SignalResult, SignalRow, SizeOffender, SizeResult, TestFailure, TestResult,
     VerificationMetadata, VerificationTarget,
 };
+pub use threshold::classify_maximum;
