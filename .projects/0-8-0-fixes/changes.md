@@ -18,6 +18,16 @@ Append one section per milestone. Before `project_commit`, use this exact marker
 - Promotion validation:
 - Ayni: passed | failed | skipped
 - Accepted deviations: none
+
+## Milestone: milestone-3
+
+- Status: validated
+- Changed responsibilities: Catalog eligibility now uses any associated enabled signal, with test-only/coverage-only Node/Python readiness matrices; lexical configured-root validation rejects all parent, absolute/rooted/UNC, and drive-prefixed forms; shared canonical containment rejects existing symlink escapes while preserving inside symlinks and missing safe roots; analyze, verify, install list/apply, and install check guard before detection/execution, while contract display remains filesystem-free.
+- Explicit changed paths: `.projects/0-8-0-fixes/plan.md`, `core/src/policy.rs`, `adapters/common/src/paths.rs`, `cli/src/discovery.rs`, `cli/src/install.rs`, `cli/src/tests.rs`, `cli/src/verify.rs`, `cli/tests/completion_e2e.rs`, `cli/tests/install_check_e2e.rs`, `cli/tests/verify_e2e.rs`, `docs/product/config.md`.
+- Focused commands and outcomes: Focused checks passed.
+- Promotion commands and outcomes: `cargo fmt --all -- --check` passed; `cargo test -p ayni-core -p ayni-adapters-common -p ayni-cli --all-features` passed.
+- Ayni status and evidence: passed. Canonical Ayni ran once and passed: complete 1/1, 5/5 rows, 282 tests, line coverage 67.33195687084194%, zero failing offenders.
+- Accepted deviations: Product config containment text was updated alongside behavior rather than deferred to final docs; no behavior/scope deviation.
 -->
 
 ## Milestone: milestone-1

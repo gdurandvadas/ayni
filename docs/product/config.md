@@ -218,6 +218,8 @@ Rules:
 - Default is `["."]` when omitted.
 - `auto` is not supported in `languages.enabled` in v0.
 - Paths are canonicalized to POSIX style: backslashes become `/`, trailing `/` is removed.
+- Absolute, rooted, Windows drive-prefixed, and any parent-component (`..`) roots are rejected during policy validation.
+- Before operational commands inspect adapters, every existing root is resolved against the canonical repository; a symlink that resolves outside the repository is rejected. Lexically safe missing roots remain valid so detection and completion can report them.
 - `.` means workspace root and maps to `scope.path = null` in artifacts.
 
 ---

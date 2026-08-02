@@ -648,6 +648,54 @@ enabled = ["rust"]
 }
 
 #[test]
+fn catalog_entry_is_eligible_for_any_enabled_signal() {
+    let cases = [
+        ("test-only", &[SignalKind::Test][..], true, false, true),
+        (
+            "coverage-only",
+            &[SignalKind::Coverage][..],
+            false,
+            true,
+            true,
+        ),
+        (
+            "test-and-coverage-test-enabled",
+            &[SignalKind::Test, SignalKind::Coverage][..],
+            true,
+            false,
+            true,
+        ),
+        (
+            "test-and-coverage-both-disabled",
+            &[SignalKind::Test, SignalKind::Coverage][..],
+            false,
+            false,
+            false,
+        ),
+        ("unassociated", &[][..], false, false, true),
+    ];
+
+    for (name, signals, test, coverage, expected) in cases {
+        let policy: ayni_core::AyniPolicy = toml::from_str(&format!(
+            "[checks]\ntest = {test}\ncoverage = {coverage}\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n"
+        ))
+        .expect("policy");
+        let entry = CatalogEntry {
+            name,
+            check: None,
+            installer: Installer::Bundled,
+            for_signals: signals,
+            opt_in: false,
+        };
+        assert_eq!(
+            catalog_entry_enabled_for_policy(&policy, &entry),
+            expected,
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn install_new_python_policy_uses_member_roots_for_uv_workspace() {
     let dir = TempDir::new().expect("tempdir");
     fs::write(

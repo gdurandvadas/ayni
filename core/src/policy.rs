@@ -4,7 +4,7 @@ use crate::signal::SignalKind;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 pub const AYNI_POLICY_FILE: &str = ".ayni.toml";
@@ -565,32 +565,41 @@ fn normalize_roots(language: &str, roots: &[String]) -> Result<Vec<String>, Stri
 }
 
 fn normalize_root_entry(language: &str, value: &str) -> Result<String, String> {
-    let mut normalized = value.trim().replace('\\', "/");
-    while normalized.ends_with('/') {
-        normalized.pop();
-    }
-    if normalized.is_empty() {
-        return Ok(String::from("."));
-    }
-    if normalized.starts_with('/') {
+    let portable = value.trim().replace('\\', "/");
+    let path = Path::new(&portable);
+    let has_windows_prefix = portable.as_bytes().get(1) == Some(&b':')
+        && portable
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic);
+    if path.is_absolute() || portable.starts_with('/') || has_windows_prefix {
         return Err(format!(
             "{language}.roots entry '{value}' must be repo-relative, not absolute"
         ));
     }
-    if normalized == ".." || normalized.starts_with("../") || normalized.contains("/../") {
-        return Err(format!(
-            "{language}.roots entry '{value}' must stay within repository root"
-        ));
-    }
-    if normalized.len() >= 3 {
-        let bytes = normalized.as_bytes();
-        if bytes[1] == b':' && bytes[2] == b'/' && bytes[0].is_ascii_alphabetic() {
-            return Err(format!(
-                "{language}.roots entry '{value}' must be repo-relative, not absolute"
-            ));
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(component) => normalized.push(component),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(format!(
+                    "{language}.roots entry '{value}' must stay within repository root and cannot contain parent components"
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "{language}.roots entry '{value}' must be repo-relative, not absolute"
+                ));
+            }
         }
     }
-    Ok(normalized)
+    if normalized.as_os_str().is_empty() {
+        Ok(String::from("."))
+    } else {
+        Ok(normalized.to_string_lossy().replace('\\', "/"))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -1014,25 +1023,35 @@ roots = ["./", "apps\\service//", "apps/service"]
     }
 
     #[test]
-    fn rejects_parent_traversal_root() {
-        let document = r#"
-[checks]
-test = true
-coverage = false
-size = false
-complexity = false
-deps = false
-mutation = false
+    fn rejects_parent_components() {
+        for root in [
+            "..",
+            "./..",
+            "../outside",
+            "apps/../outside",
+            "apps/./../outside",
+        ] {
+            let error = normalize_root_entry("rust", root).expect_err("must fail");
+            assert!(
+                error.contains("must stay within repository root"),
+                "{root}: {error}"
+            );
+        }
+    }
 
-[languages]
-enabled = ["rust"]
-
-[rust]
-roots = ["../outside"]
-"#;
-        let mut policy: AyniPolicy = toml::from_str(document).expect("parse");
-        let error = policy.normalize_and_validate().expect_err("must fail");
-        assert!(error.contains("must stay within repository root"));
+    #[test]
+    fn rejects_absolute_rooted_and_windows_prefixed_roots() {
+        for root in [
+            "/outside",
+            "\\outside",
+            "C:/outside",
+            "c:\\outside",
+            "D:outside",
+            "\\\\server\\share",
+        ] {
+            let error = normalize_root_entry("rust", root).expect_err("must fail");
+            assert!(error.contains("repo-relative"), "{root}: {error}");
+        }
     }
 
     #[test]

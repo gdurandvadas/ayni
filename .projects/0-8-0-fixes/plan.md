@@ -196,6 +196,31 @@ The scaffold reported `carried_changes: []`. The inventory is empty, so there ar
   such as Node `vitest` and Python `pytest` are consequently omitted when only one of test/coverage
   is enabled. The same predicate feeds listing, apply, foundation validation, and read-only
   readiness, so one predicate fix plus tests covers every install mode.
+- Task 3.1 readiness-fixture research confirms that the failing
+  `shared_requirements_are_ready_when_one_associated_signal_is_enabled` assertion is a fixture
+  expectation error, not a second eligibility defect. `install --check` is globally `ready` only
+  when every selected target is detected/resolved and every selected catalog requirement is
+  current (`docs/product/runtime.md:54-90`, `cli/src/install_check.rs:87-190`). The fixture creates
+  only `package.json`, so the configured Python target is undetected; its empty Node manifest also
+  makes `vitest` missing, and Python package status would otherwise depend on whichever interpreter
+  and modules happen to be on the host. A non-zero check can and does still emit the complete
+  readiness JSON on stdout, so the eligibility regression must inspect target requirements rather
+  than require global process success.
+- The deterministic correction is a table-driven JSON E2E with both adapter-owned detection
+  manifests (`package.json` and `pyproject.toml`) and a fixture-local empty directory as the child
+  `PATH`. This keeps all status probes deterministically `missing` without fake executables,
+  installed-package manifests, package-manager preparation, or network access. Each case expects a
+  non-zero process, empty stderr, `state = "not_ready"`, detected/resolved Node and Python targets,
+  and exact catalog-order requirement names. Test-only expects Node `[node, vitest]` and Python
+  `[python, pytest, pytest-json-report]`; coverage-only expects Node
+  `[node, vitest, @vitest/coverage-v8]` and Python `[python, pytest, pytest-cov, coverage]`; omitted
+  `[checks]` exercises `PolicyChecks::default` and expects Node
+  `[node, vitest, @vitest/coverage-v8, eslint, @stylistic/eslint-plugin]` and Python
+  `[python, pytest, pytest-json-report, pytest-cov, coverage, complexipy]`. Mutation-only entries
+  remain absent under defaults. In every case, assert the shared `vitest` and `pytest` records are
+  present with catalog associations `[test, coverage]` and status `missing`; do not infer their
+  eligibility from foundation requirements or from the aggregate readiness state. A separate
+  all-current fixture would test a different status/readiness contract and is unnecessary here.
 - Root normalization rejects `..` and `../x`, but `./..` survives because it is neither equal to
   `..` nor matched by the string fragments. Operational paths are then formed with unchecked
   `repo_root.join(root)` in discovery/install. Existing file-selector code demonstrates the desired
@@ -621,13 +646,27 @@ Node's npm, Python's pip/uv, and Go's module downloads are explicit CI-only netw
 
 - Tier: S
 - Tier rationale: The exact existing predicate and all four consumers are demonstrated; the behavior
-  change is `.all()` to `.any()` plus table-driven and readiness regression tests.
+  change is `.all()` to `.any()` while retaining vacuous eligibility for an empty association list,
+  plus table-driven predicate and readiness regression tests using existing JSON fixture patterns.
 - Depends on: 2.4
 - Affected responsibilities: Install listing/apply/foundation/readiness requirement selection.
 - Expected paths: `cli/src/install.rs`, `cli/src/tests.rs`, `cli/tests/install_check_e2e.rs`.
+- Fixture contract:
+  - Keep the unit matrix for test-only, coverage-only, one-enabled shared entries, all-disabled
+    shared entries, and empty `for_signals`; the predicate is true when the list is empty or at least
+    one associated signal is enabled, and false otherwise.
+  - Replace the global-ready E2E expectation with one table-driven
+    `shared_requirements_follow_any_enabled_signal` check covering test-only, coverage-only, and an
+    omitted-`[checks]` default policy. Create both `package.json` and `pyproject.toml`, pass a
+    fixture-local empty directory as the child `PATH`, parse JSON despite the expected non-zero exit,
+    and assert the exact per-language requirement lists documented in Research findings.
+  - Assert `vitest` and `pytest` themselves have `signals = ["test", "coverage"]` and
+    `status = "missing"`; also assert `state = "not_ready"` and empty stderr. Do not install or fake
+    tools, create `node_modules`/Python package state, access a registry, or treat foundation
+    `node`/`python` readiness as evidence for shared-entry eligibility.
 - Focused checks:
   - `cargo test -p ayni-cli catalog_entry_is_eligible_for_any_enabled_signal --all-features`
-  - `cargo test -p ayni-cli --test install_check_e2e shared_requirements --all-features`
+  - `cargo test -p ayni-cli --test install_check_e2e shared_requirements_follow_any_enabled_signal --all-features`
 
 #### Task 3.2: Reject lexical and canonical configured-root escape
 

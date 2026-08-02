@@ -1,3 +1,4 @@
+use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
     AdapterRegistry, AyniPolicy, CompletionIssue, CompletionStage, ExecutionResolution, Language,
 };
@@ -58,6 +59,7 @@ pub fn plan_configured_targets_for_languages(
     selected_languages: &BTreeSet<Language>,
     registry: &AdapterRegistry,
 ) -> Result<Vec<PlannedConfiguredTarget>, String> {
+    validate_configured_root_containment(repo_root, policy)?;
     let mut planned = Vec::new();
     for language in policy.enabled_languages()? {
         if !selected_languages.is_empty() && !selected_languages.contains(&language) {

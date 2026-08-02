@@ -4,6 +4,7 @@ use super::{
     emit_analyze_outputs, failed_signal_row, materialize_finding_commands, persist_artifact_at,
     serialize_artifact, signal_kind_slug, workspace_root_from_config_path,
 };
+use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
     AdapterRegistry, AyniPolicy, CompletionScope, CompletionState, Language, RunArtifact,
     SignalKind, SignalRow, VerificationSelection,
@@ -39,6 +40,7 @@ pub(crate) fn run(mut request: Request) -> Result<bool, String> {
 fn prepare_request(request: &mut Request) -> Result<(PathBuf, AyniPolicy), String> {
     let workspace_root = workspace_root_from_config_path(&request.config_path);
     let policy = AyniPolicy::load_from_path(&request.config_path)?;
+    validate_configured_root_containment(&workspace_root, &policy)?;
     validate_signal_enabled(&policy, request.kind)?;
     validate_selector_shape(request)?;
 

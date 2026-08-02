@@ -170,3 +170,26 @@ fn completion_verify_failure_replaces_only_requested_scope_artifact() {
         "repository-evidence\n"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn configured_root_escape_is_rejected_by_analyze_before_artifact_writes() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new(&["escape-link"], true);
+    let outside_dir = TempDir::new().expect("outside tempdir");
+    let outside = outside_dir.path();
+    fs::write(
+        outside.join("Cargo.toml"),
+        "[package]\nname = \"outside\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("outside manifest");
+    symlink(outside, fixture.root.join("escape-link")).expect("escape link");
+
+    let output = fixture.run(&["analyze", "--json"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("configured root 'escape-link'"), "{stderr}");
+    assert!(stderr.contains("repository containment"), "{stderr}");
+    assert!(!fixture.root.join(".ayni/last/signals.json").exists());
+}

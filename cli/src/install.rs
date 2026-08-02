@@ -5,6 +5,7 @@ use crate::{
     PYTHON_POLICY_TEMPLATE, RUST_POLICY_TEMPLATE,
 };
 use ayni_adapters_common::catalog::{install_tool, tool_status};
+use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
     AyniPolicy, CatalogEntry, ExecutionResolution, InstallContext, Installer, Language,
     NodePackageManager, PythonPackageManager, SignalKind, ToolStatus, VersionCheck,
@@ -20,6 +21,7 @@ pub(crate) fn install_impl(
 ) -> Result<(), Vec<String>> {
     let root = PathBuf::from(repo_root);
     let policy = prepare_install_policy(&root, selected_languages).map_err(|error| vec![error])?;
+    validate_configured_root_containment(&root, &policy).map_err(|error| vec![error])?;
     if apply {
         let mut failures = collect_install_failures(&root, &policy, selected_languages);
         if failures.is_empty() {
@@ -310,14 +312,14 @@ fn language_enabled(policy: &AyniPolicy, language: Language) -> bool {
 }
 
 pub(crate) fn catalog_entry_enabled_for_policy(policy: &AyniPolicy, entry: &CatalogEntry) -> bool {
-    entry.for_signals.iter().all(|kind| match kind {
+    entry.for_signals.iter().any(|kind| match kind {
         SignalKind::Test => policy.checks.test,
         SignalKind::Coverage => policy.checks.coverage,
         SignalKind::Size => policy.checks.size,
         SignalKind::Complexity => policy.checks.complexity,
         SignalKind::Deps => policy.checks.deps,
         SignalKind::Mutation => policy.checks.mutation,
-    })
+    }) || entry.for_signals.is_empty()
 }
 
 fn prepare_install_policy(
@@ -326,6 +328,7 @@ fn prepare_install_policy(
 ) -> Result<AyniPolicy, String> {
     let scaffold = scaffold_files(root, selected_languages)?;
     let policy = AyniPolicy::load(root)?;
+    validate_configured_root_containment(root, &policy)?;
     if scaffold.policy_created {
         let enabled_languages = policy.enabled_languages()?;
         let registry = crate::build_registry();
