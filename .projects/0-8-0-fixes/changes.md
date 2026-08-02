@@ -29,3 +29,12 @@ Append one section per milestone. Before `project_commit`, use this exact marker
 - Promotion commands and outcomes: Supplied focused and promotion fmt/tests passed.
 - Ayni status and evidence: passed after focused remediation; evidence is the exact focused checkout verification above.
 - Accepted deviations: Cargo.lock contains approved eventual 0.8.0 local workspace metadata early due Cargo/rust-analyzer regeneration; Task 6.1 remains pending.
+## Milestone: milestone-2
+
+- Status: validated
+- Changed responsibilities: shared exclusive minimum threshold and configured metric evidence evaluation; typed missing/unparseable coverage setup failures; independent line/branch budgets and fail-closed evidence in all five coverage collectors; Python default collection enables branch coverage; Go configured branch thresholds intentionally fail closed because standard Go coverage lacks compatible branch evidence.
+- Changed paths: `core/src/threshold.rs`, `core/src/lib.rs`, `adapters/common/src/failure.rs`, `adapters/rust/src/collectors/coverage.rs`, `adapters/go/src/collectors/coverage.rs`, `adapters/node/src/collectors/coverage.rs`, `adapters/python/src/collectors/coverage.rs`, `adapters/kotlin/src/collectors/coverage.rs`
+- Focused commands and outcomes: Focused tests for core/common and every adapter passed.
+- Promotion commands and outcomes: `cargo fmt --all -- --check` passed; `cargo test -p ayni-core -p ayni-adapters-common -p ayni-adapters-rust -p ayni-adapters-go -p ayni-adapters-node -p ayni-adapters-python -p ayni-adapters-kotlin --all-features` passed.
+- Ayni status and evidence: passed. Canonical checkout Ayni command ran once and passed: complete 1/1 target, 5/5 rows passing, 274 tests, line coverage 66.96238262572729%, no failing offenders.
+- Accepted deviations: none

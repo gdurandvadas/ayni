@@ -46,4 +46,6 @@ pub use signal::{
     SignalResult, SignalRow, SizeOffender, SizeResult, TestFailure, TestResult,
     VerificationMetadata, VerificationTarget,
 };
-pub use threshold::classify_maximum;
+pub use threshold::{
+    ConfiguredMetricEvaluation, classify_maximum, classify_minimum, evaluate_configured_metric,
+};

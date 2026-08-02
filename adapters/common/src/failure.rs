@@ -1,7 +1,7 @@
 //! Shared command-failure classification and `CommandFailure` construction.
 
 use crate::exec::format_command;
-use ayni_core::{CommandFailure, RunContext, SignalKind};
+use ayni_core::{CommandFailure, ConfiguredMetricEvaluation, RunContext, SignalKind};
 use std::process::Output;
 
 /// Maps a signal kind to its documented failure category (see
@@ -88,11 +88,55 @@ pub fn setup_failure(
     }
 }
 
+/// Maps required coverage-metric evidence failures to stable setup failures.
+///
+/// The metric evaluation belongs to core; this helper only supplies the common
+/// adapter failure representation. Finite and unconfigured metrics do not need
+/// a command failure.
+#[must_use]
+pub fn coverage_metric_failure(
+    context: &RunContext,
+    command: String,
+    metric: &str,
+    evaluation: ConfiguredMetricEvaluation,
+) -> Option<CommandFailure> {
+    let (classification, message) = match evaluation {
+        ConfiguredMetricEvaluation::Missing => (
+            "missing_coverage_metric",
+            format!(
+                "coverage metric `{metric}` is missing; configure the coverage tool to emit it or remove its threshold"
+            ),
+        ),
+        ConfiguredMetricEvaluation::Unparseable => (
+            "unparseable_coverage_metric",
+            format!(
+                "coverage metric `{metric}` is not finite; configure the coverage tool to emit a finite percentage or remove its threshold"
+            ),
+        ),
+        ConfiguredMetricEvaluation::Unconfigured | ConfiguredMetricEvaluation::Present { .. } => {
+            return None;
+        }
+    };
+    Some(CommandFailure {
+        category: String::from("repo_setup_issue"),
+        classification: classification.to_string(),
+        command,
+        cwd: context.execution.exec_cwd.display().to_string(),
+        exit_code: None,
+        message,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{combined_output, concise_failure_message, failure_category};
-    use ayni_core::SignalKind;
+    use super::{
+        combined_output, concise_failure_message, coverage_metric_failure, failure_category,
+    };
+    use ayni_core::{
+        AyniPolicy, ConfiguredMetricEvaluation, ExecutionResolution, RunContext, Scope, SignalKind,
+    };
     use std::os::unix::process::ExitStatusExt;
+    use std::path::PathBuf;
     use std::process::{ExitStatus, Output};
 
     fn output(stdout: &str, stderr: &str) -> Output {
@@ -125,6 +169,57 @@ mod tests {
         assert_eq!(
             concise_failure_message(&output("\n\nsecond source", "\nfirst line\nmore")),
             "first line"
+        );
+    }
+
+    fn context() -> RunContext {
+        let root = PathBuf::from("workspace");
+        RunContext {
+            repo_root: root.clone(),
+            target_root: root.clone(),
+            workdir: root.clone(),
+            policy: AyniPolicy::default(),
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("tool", root, "test", 100),
+            debug: false,
+        }
+    }
+
+    #[test]
+    fn coverage_metric_failure_has_stable_actionable_setup_details() {
+        let context = context();
+        let missing = coverage_metric_failure(
+            &context,
+            String::from("coverage-tool"),
+            "line_percent",
+            ConfiguredMetricEvaluation::Missing,
+        )
+        .expect("missing configured metric must fail");
+        assert_eq!(missing.category, "repo_setup_issue");
+        assert_eq!(missing.classification, "missing_coverage_metric");
+        assert!(missing.message.contains("`line_percent`"));
+        assert!(missing.message.contains("emit it"));
+
+        let unparseable = coverage_metric_failure(
+            &context,
+            String::from("coverage-tool"),
+            "branch_percent",
+            ConfiguredMetricEvaluation::Unparseable,
+        )
+        .expect("unparseable configured metric must fail");
+        assert_eq!(unparseable.category, "repo_setup_issue");
+        assert_eq!(unparseable.classification, "unparseable_coverage_metric");
+        assert!(unparseable.message.contains("`branch_percent`"));
+        assert!(unparseable.message.contains("finite percentage"));
+
+        assert!(
+            coverage_metric_failure(
+                &context,
+                String::from("coverage-tool"),
+                "line_percent",
+                ConfiguredMetricEvaluation::Unconfigured,
+            )
+            .is_none()
         );
     }
 }
