@@ -103,6 +103,28 @@ The typed plan should contain:
 The plan can be rendered for humans or machines. It is not itself necessarily a
 committed artifact.
 
+### Core contract decisions
+
+The initial core planning contract establishes these boundaries:
+
+- Target identity is only the language plus normalized repository-relative
+  root. Workspace and package ownership are target context, not identity.
+- Version evidence preserves whether a value is exact, a selector, a
+  compatibility range, a minimum, or unresolved. Core does not interpret the
+  ecosystem-specific expression.
+- Explainable plans may contain unresolved requirements, warnings, and blocking
+  conflicts. A resolved plan requires exact runtime, package-manager, and signal
+  tool versions, at least one target and platform, no conflicts, and validated
+  provisioning support.
+- Portable paths are lexical repository-relative paths. Core rejects absolute,
+  drive-prefixed, and parent-component paths without consulting the host
+  filesystem.
+- Adapter-owned system capabilities, system packages, platform support,
+  checkout-mutation behavior, and offline provisioning support remain typed
+  plan data. Provisioning backends must not rediscover them.
+- Project-integrated signal tools that require checkout mutation cannot become
+  resolved provisioning input.
+
 ## `.ayni.lock`
 
 The committed lock is a deterministic projection of a fully resolved plan. It
