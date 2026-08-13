@@ -1,6 +1,7 @@
 use crate::catalog::{NODE_CATALOG, NODE_CATALOG_RUNTIME};
 use crate::collectors::NodeCollector;
 use crate::discovery;
+use crate::environment::NodeEnvironmentCapability;
 use crate::package_manager;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
@@ -98,6 +99,11 @@ impl LanguageAdapter for NodeAdapter {
 
     fn collector(&self) -> &dyn SignalCollector {
         &self.collector
+    }
+
+    fn environment_capability(&self) -> Option<&dyn ayni_core::EnvironmentCapability> {
+        static CAPABILITY: NodeEnvironmentCapability = NodeEnvironmentCapability;
+        Some(&CAPABILITY)
     }
 
     fn policy_effectiveness_facts(&self) -> PolicyEffectivenessFacts {

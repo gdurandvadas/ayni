@@ -85,6 +85,18 @@ string as equivalent.
 When sources cannot be reconciled, Ayni reports the conflict. It must not choose
 an arbitrary exact version merely to finish locking.
 
+### Initial Rust and Node discovery decisions
+
+The first built-in environment capabilities establish these rules:
+
+- Discovery reads only containment-checked repository inputs. Existing manifests, selectors, toolchain files, and native locks that are unreadable, malformed, or symlink outside the repository fail closed.
+- Rust uses the nearest ancestor containing `rust-toolchain.toml` or `rust-toolchain`. In one directory, TOML takes precedence and disagreement with the legacy file is a blocking conflict. Cargo `rust-version` remains a minimum when no toolchain selector applies; workspace-inherited values retain workspace provenance.
+- Rust coverage adds `llvm-tools-preview` to runtime components rather than inventing an independently versioned tool. Adapter catalog tools remain separate signal-tool requirements.
+- Node member declarations and direct native locks take precedence over workspace defaults, matching the adapter's execution resolver. An ancestor owns a target only when a validated workspace pattern includes it.
+- `.node-version` and `.nvmrc` are peer selectors at the same ownership level; disagreement is blocking. Direct selectors override workspace selectors, direct `engines.node` overrides workspace compatibility evidence, and every conflicting value is retained in source detail.
+- Node `packageManager` declarations are checked against native lockfile family. Missing locks, ambiguous lock families, and declaration/lock disagreement are blocking conflicts. The npm execution fallback remains an unresolved assumed requirement rather than disappearing from the plan.
+- Project-integrated Node signal tools never claim immutable offline provisioning in this discovery slice. Missing declarations explicitly report checkout mutation; declared tools remain online-only until native lock materialization proves the stronger guarantee.
+
 ## Environment plan
 
 The typed plan should contain:

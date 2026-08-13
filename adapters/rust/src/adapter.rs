@@ -1,6 +1,7 @@
 use crate::catalog::RUST_CATALOG;
 use crate::collectors::RustCollector;
 use crate::discovery;
+use crate::environment::RustEnvironmentCapability;
 use ayni_adapters_common::catalog::GENERIC_CATALOG_RUNTIME;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
@@ -88,6 +89,10 @@ impl LanguageAdapter for RustAdapter {
 
     fn catalog_runtime(&self) -> &dyn CatalogRuntime {
         &GENERIC_CATALOG_RUNTIME
+    }
+
+    fn environment_capability(&self) -> Option<&dyn ayni_core::EnvironmentCapability> {
+        Some(&RustEnvironmentCapability)
     }
 
     fn collector(&self) -> &dyn SignalCollector {

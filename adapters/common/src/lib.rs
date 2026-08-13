@@ -15,4 +15,5 @@ pub mod failure;
 pub mod finding;
 pub mod paths;
 pub mod reports;
+pub mod repository;
 pub mod xml;
