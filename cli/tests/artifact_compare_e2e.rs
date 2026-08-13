@@ -45,7 +45,7 @@ fn compare_reads_explicit_artifacts_and_emits_one_json_document() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_ayni"))
         .args([
-            "artifact",
+            "results",
             "compare",
             "--baseline",
             baseline.to_str().expect("baseline path"),
@@ -82,7 +82,7 @@ fn compare_rejects_invalid_input_without_json_stdout() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_ayni"))
         .args([
-            "artifact",
+            "results",
             "compare",
             "--baseline",
             baseline.to_str().expect("baseline path"),

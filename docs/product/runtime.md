@@ -45,72 +45,17 @@ Every analyzed root records:
 - Kotlin resolves Gradle from the configured root, preferring `./gradlew`, then
   `gradlew.bat`, then `gradle`.
 
-## Install Validation
+## Environment provisioning status
 
-`ayni install --apply` must prove the foundation is usable before succeeding.
-For every enabled detected language/root it validates:
+The clean-slate `init` and `env` command vocabulary is active, but repository
+initialization, environment planning, readiness diagnosis, locking, and managed
+environment builds are not implemented yet. These commands return an explicit
+unavailable result and do not reuse the removed `install` behavior.
 
-- execution resolution exists
-- required catalog tools are invocable through the resolved setup context
-- generated artifact paths under `.ayni/work/<language>/<root>/` are writable
-
-Set `[<language>.foundation].validate_install = false` only when a repository
-intentionally wants scaffolding or installation without validation.
-
-Catalog execution is neutral shared infrastructure: core defines catalog
-contracts, the common runtime runs declarative entries, and each adapter owns
-language-specific status, preparation, and installation behavior. In
-particular, Node selects its resolved npm/pnpm/Yarn/Bun manager and Python
-selects its resolved manager (with `uv tool` where applicable). Applied install
-may prepare those local environments before installing missing or outdated
-enabled catalog requirements. Catalog status
-inspection during listing and readiness checking is read-only: it does not
-prepare a manager or install a package. Normal `install` may still perform its
-documented policy and `.gitignore` scaffolding; `install --check` writes no
-repository files.
-
-## Read-only Install Readiness
-
-`ayni install --check` evaluates an existing repository setup without changing
-it. Unlike normal `install` and `install --apply`, check mode requires an
-existing valid `.ayni.toml` and never scaffolds policy, edits `.gitignore`,
-prepares a package manager, installs a tool, creates validation directories, or
-writes an artifact. It uses the same adapter-owned configured-target detection,
-execution resolution, catalog selection, and requirement status checks used by
-the install runtime. Repeated `--language` selectors filter the enabled,
-configured policy targets; without selectors every enabled target is checked.
-
-Human-readable output is the default. `--output json` is valid only with
-`--check` and emits exactly one pretty-printed JSON document on stdout, ending
-in a newline. Diagnostics for policy loading, validation, or internal command
-failure are written to stderr, with no JSON document on stdout. Check mode
-conflicts with `--apply`.
-
-The JSON readiness contract is versioned independently from signal artifacts:
-
-- `readiness_version`: currently `0.1.0`.
-- `state`: `ready` or `not_ready`.
-- `targets`: selected configured targets in validated policy order. Each entry
-  contains `language`, `configured_root`, `detection` (`detected` and optional
-  `reason`), nullable `execution`, and `requirements`.
-- `execution`: when resolved, the adapter-owned `runner`, `resolved_from`,
-  `kind`, `source`, `confidence`, `ambiguous`, `install_cwd`, and `exec_cwd`.
-- `requirements`: enabled catalog entries in adapter catalog order, with
-  `name`, ordered `signals`, and `status` (`current`, `missing`, or `outdated`).
-- `issues`: an ordered array following target and catalog traversal. Each issue
-  has `language`, `configured_root`, `stage` (`detection`, `resolution`, or
-  `requirement`), `message`, and an optional `requirement` name.
-
-The state is `not_ready`, and the process exits non-zero, when any configured
-target is undetected or unresolved or any enabled requirement is missing or
-outdated. `ready` exits zero. Paths in detection and resolution details reflect
-the supplied repository root, so callers that need byte-identical output across
-invocations should supply the same root spelling.
-
-Catalog status, preparation, and installation failures are structured with the
-operation, command, working directory, exit status when available, and concise
-diagnostics. They are reported against the affected language/root/requirement;
-they are not silently converted to a missing tool.
+Until the environment projects are complete, quality execution requires the
+explicit `--host` escape hatch. Host mode retains adapter-owned runner
+resolution and typed failure evidence; it does not install tools or mutate
+repository dependencies.
 
 ## Failure Categories
 
@@ -144,7 +89,7 @@ resolution or explicit validation opt-out.
 Ayni should report the full repository state whenever possible. A failed tool
 row should not suppress valid rows from other roots or languages.
 
-`ayni analyze` is repository-only: it plans and evaluates every configured
+`ayni check --host` is repository-only: it plans and evaluates every configured
 language root and is the sole writer of `.ayni/last/signals.json`. Use
 `ayni verify <signal>` for focused evidence for one of the six canonical
 signals. Its adapter-owned selectors are validated before tool invocation, and

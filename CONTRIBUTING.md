@@ -6,10 +6,9 @@ Thanks for helping improve Ayni.
 
 The open-source version currently supports:
 
-- `install` (list required tools; `install --apply` runs catalog installers)
-- `analyze`
-- `verify` (focused evidence for one of the six signals)
-- `contract display` and `artifact compare`
+- the clean-slate command tree and typed operation model
+- host-mode `check` and `verify`
+- `contract show`, `contract validate`, and `results compare`
 - `agents sync` (explicitly create or refresh Ayni's marked `AGENTS.md` section)
 
 Out of scope:
@@ -38,7 +37,7 @@ cargo run -p ayni-cli -- verify test --language rust --package ayni-cli
 ```
 
 Do not use focused evidence as repository completion evidence. An unscoped
-`cargo run -p ayni-cli -- analyze --config ./.ayni.toml` is the sole writer of
+`cargo run -p ayni-cli -- check --host --config ./.ayni.toml` is the sole writer of
 `.ayni/last/signals.json` and belongs at the caller's final completion boundary.
 Focused runs write only `.ayni/verify/last/signals.json`. Re-run the exact
 `verification.command` attached to a finding when one is available.
@@ -74,7 +73,7 @@ For language adapter implementation guidance, see
 - CLI handles arguments, orchestration, and local output.
 - Core owns analysis policy, signal types, and adapter contracts.
 - Adapters own language-specific local tool execution.
-- Default analysis runs from the repository checkout and writes local artifacts.
+- Host-mode checks run from the repository checkout and writes local artifacts.
 - No reverse dependencies are allowed: `core` <- `adapters` <- `cli`.
 
 ## Pull Request Checklist
@@ -82,10 +81,10 @@ For language adapter implementation guidance, see
 - Tests added or updated when behavior changes.
 - No managed service dependency introduced.
 - Local artifact behavior preserved.
-- Repository completion uses only unscoped `analyze`; focused verification has
+- Repository completion uses only unscoped `check --host`; focused verification has
   not replaced `.ayni/last/signals.json`.
 - README or docs updated if behavior changed.
-- `install` does not modify `AGENTS.md`; `ayni agents sync` is idempotent and preserves user content outside Ayni's marked block.
+- `ayni agents sync` is idempotent and preserves user content outside Ayni's marked block.
 - `cargo fmt`, `cargo clippy`, `cargo test`, and `cargo check` pass.
 
 ## Licensing

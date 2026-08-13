@@ -73,14 +73,14 @@ for missing evidence. Follow the
 ## Catalog conventions
 
 Every external tool invoked for collection is a `CatalogEntry`; the catalog is
-the source of truth for `ayni install`. Include a stable tool name, a typed
+the source of truth for future environment provisioning. Include a stable tool name, a typed
 installer (`Cargo`, `GoInstall`, `Bundled`, `Custom`, `AdapterManaged`, or the
 language-appropriate alternative), an optional check command or version probe,
 the `for_signals` mapping, and `opt_in` for expensive checks such as mutation.
 The common catalog runtime is deliberately neutral: an adapter-managed entry
 must be handled by its owning adapter runtime, including its manager selection,
-status, preparation, and apply behavior. List and `install --check` status
-paths must be read-only; preparation belongs only to normal applied setup.
+status, preparation, and apply behavior. Status inspection must be read-only; preparation belongs only to explicit
+future environment provisioning.
 
 ## Policy conventions
 
@@ -103,8 +103,8 @@ requested-scope evidence is written to `.ayni/verify/last/signals.json` rather
 than the repository completion artifact. Document policy fields, command
 overrides, and missing-policy behavior with a language-specific TOML example.
 
-Catalog-managed dependencies are installed only when their related check is
-enabled and installation is applied. Runtime and package-manager prerequisites
+Catalog-managed dependencies are selected only when their related check is
+enabled; future provisioning must apply that selection explicitly. Runtime and package-manager prerequisites
 without catalog installers remain user-owned. Mark mutation tooling optional
 when its catalog entry is `opt_in`.
 
@@ -116,14 +116,14 @@ Do not:
 - emit free-form untyped top-level payloads;
 - parse source directly when an available tool supplies the metric;
 - couple adapter internals to CLI crates; or
-- bypass the catalog installation flow.
+- bypass the catalog provisioning boundary.
 
 ## Validation checklist
 
 Before merging an adapter:
 
-1. `ayni install` installs or validates every catalog tool.
-2. Unscoped `ayni analyze` emits typed rows for every enabled signal kind and
+1. Catalog selection includes every tool required by enabled signals.
+2. Unscoped `ayni check --host` emits typed rows for every enabled signal kind and
    is the only repository-completion artifact writer.
 3. Each supported focused selector is faithfully applied; unsupported selectors
    are rejected before tool invocation.

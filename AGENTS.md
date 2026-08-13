@@ -70,38 +70,26 @@ cargo doc-cli > docs/cli.md
 - Run `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
 - Run `cargo test --workspace --all-features`.
 - Run `cargo check --workspace --all-features`.
-- If policy behavior changed, run `cargo run -p ayni-cli -- analyze --config ./.ayni.toml`.
+- If policy behavior changed, run `cargo run -p ayni-cli -- check --host --config ./.ayni.toml`.
 
 ## Quality Command Index
 
 - classic: formatting, linting, tests, and compile check as listed above
-- install (list tools): `cargo run -p ayni-cli -- install --repo-root .`
-- install (apply tooling): `cargo run -p ayni-cli -- install --repo-root . --apply`
-- analyze: `cargo run -p ayni-cli -- analyze --config ./.ayni.toml`
-- full: run classic gates, then analyze
+- contract: `cargo run -p ayni-cli -- contract show --config ./.ayni.toml`
+- check: `cargo run -p ayni-cli -- check --host --config ./.ayni.toml`
+- full: run classic gates, then check
 
 ## Ayni (Rust)
 
-- `cargo run -p ayni-cli -- install --repo-root . --language rust` scaffolds
-  `.ayni.toml`, ensures `.gitignore` contains `.ayni/`, and lists Rust adapter
-  tools; add `--apply` to install them. It does not update `AGENTS.md`.
+- `init` and managed `env` operations are present in the clean-slate command
+  model but are not implemented yet; do not substitute removed `install`
+  behavior.
 - `cargo run -p ayni-cli -- agents sync --repo-root .` is the only command that
   creates or refreshes the Ayni-managed `AGENTS.md` block.
-- Repeat install languages for polyglot fixtures, for example
-  `--language rust --language node`; repeated values are deduplicated.
 - `cargo test -p <pkg>` runs package-scoped tests.
-- `cargo run -p ayni-cli -- analyze --config ./.ayni.toml`
-  runs repository completion analysis.
+- `cargo run -p ayni-cli -- check --host --config ./.ayni.toml`
+  runs repository completion analysis until managed environments are available.
 - Artifact output: `.ayni/last/signals.json`.
-
-## Example Workspaces
-
-- Use `install` bootstrap checks only on `examples/<language>/single`; monorepo
-  examples already include `.ayni.toml`.
-- Example install command:
-  `cargo run -p ayni-cli -- install --repo-root examples/go/single --language go --apply`
-- Remove installed single-fixture files with:
-  `rm -rf examples/go/single/.ayni.toml examples/go/single/.gitignore examples/go/single/AGENTS.md`
 
 <!-- AYNI:BEGIN -->
 ## Code quality guidance for AI agents
@@ -121,7 +109,7 @@ Discover Ayni commands using standard CLI help:
 - Run `ayni <command> --help` for command-specific options.
 
 Treat `.ayni.toml` as the authoritative repository quality policy. Run
-`ayni contract display` for a concise view of its effective configured signal
+`ayni contract show` for a concise view of its effective configured signal
 contract instead of reading the full policy file.
 
 During an edit, use the narrowest supported `ayni verify <signal>`:
@@ -130,9 +118,9 @@ During an edit, use the narrowest supported `ayni verify <signal>`:
 ayni verify <signal> [selectors]
 ```
 
-Rerun the exact verification command supplied by a finding. Do not use
-`ayni analyze` for individual tasks or iteration. Run one unscoped
-`ayni analyze` at the caller's completion boundary.
+Rerun the exact verification command supplied by a finding. Use focused
+verification or impact analysis during iteration, then run one unscoped
+`ayni check` at the caller's completion boundary.
 
 Treat incomplete artifacts as failure, and never loosen `.ayni.toml` merely
 to silence a finding.
@@ -140,7 +128,7 @@ to silence a finding.
 Use the full repository analysis as the completion gate:
 
 ```sh
-ayni analyze
+ayni check
 ```
 
 A non-zero exit code means at least one signal failed. Read

@@ -81,7 +81,12 @@ impl Fixture {
 
     fn analyze(&self, args: &[&str]) -> Output {
         ayni()
-            .args(["analyze", "--config", self.config.to_str().expect("config")])
+            .args([
+                "check",
+                "--host",
+                "--config",
+                self.config.to_str().expect("config"),
+            ])
             .args(args)
             .output()
             .expect("launch ayni")
@@ -163,13 +168,15 @@ fn preserves_non_default_config_and_root() {
 
     let output = ayni()
         .args([
-            "analyze",
+            "check",
+            "--host",
             "--config",
             config.to_str().expect("config"),
-            "--json",
+            "--output",
+            "json",
         ])
         .output()
-        .expect("analyze");
+        .expect("check");
     assert!(!output.status.success(), "size finding must fail");
     let artifact: Value = serde_json::from_slice(&output.stdout).expect("artifact");
     let command = artifact["rows"][0]["offenders"]["items"][0]["verification"]["command"]
@@ -194,7 +201,7 @@ fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
         fixture.config.display()
     );
 
-    let json = fixture.analyze(&["--json"]);
+    let json = fixture.analyze(&["--output", "json"]);
     assert!(!json.status.success(), "size finding must fail the run");
     let stdout = String::from_utf8(json.stdout).expect("JSON stdout");
     assert_eq!(stdout, fixture.persisted());
@@ -206,7 +213,7 @@ fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
     assert!(!terminal.status.success());
     assert!(String::from_utf8_lossy(&terminal.stdout).contains(&command));
 
-    let markdown = fixture.analyze(&["--output", "md"]);
+    let markdown = fixture.analyze(&["--output", "markdown"]);
     assert!(!markdown.status.success());
     assert!(String::from_utf8_lossy(&markdown.stdout).contains(&format!("- `{command}`")));
 }
@@ -218,7 +225,7 @@ fn synthetic_zero_test_finding_has_an_actionable_public_command() {
         "ayni verify test --config '{}' --language rust --root '.'",
         fixture.config.display()
     );
-    let output = fixture.analyze(&["--json"]);
+    let output = fixture.analyze(&["--output", "json"]);
     assert!(!output.status.success(), "zero tests must fail the run");
     let stdout = String::from_utf8(output.stdout).expect("JSON stdout");
     assert_eq!(stdout, fixture.persisted());

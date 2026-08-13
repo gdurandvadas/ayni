@@ -65,19 +65,19 @@ cargo install --path cli
 
 ## Quick Start
 
+The clean-slate command model is now active. Repository initialization and managed
+environment provisioning are planned commands and currently return an explicit
+unavailable result. For an already configured repository, use host mode until the
+managed environment projects are complete:
+
 ```sh
-ayni install
+ayni contract show
 ayni agents sync
-ayni analyze
+ayni check --host
 ```
 
-Without `--language`, bare `ayni install` creates the Rust policy template. For
-a non-Rust or polyglot repository, select every intended language explicitly
-with repeatable `--language` values before synchronizing guidance or analyzing.
-
-Use focused verification for the inner TDD loop. `analyze` always evaluates the
-configured repository and is the only completion gate and writer of
-`.ayni/last/signals.json`:
+Use focused verification for the inner TDD loop. `check` evaluates the configured
+repository and is the only completion gate and writer of `.ayni/last/signals.json`:
 
 ```sh
 ayni verify test --language rust --package my-crate --name test_filter
@@ -98,66 +98,37 @@ Inspect the validated configured signal contract without running discovery,
 adapters, or analysis:
 
 ```sh
-ayni contract display
-ayni contract display --config path/to/.ayni.toml
+ayni contract show
+ayni contract show --config path/to/.ayni.toml
 ```
 
 This human-readable view shows enabled-language roots, all six signal states,
 configured thresholds and rules, and explicit tool overrides. It writes no
-artifact; use `ayni analyze` for measured results.
+artifact; use `ayni check --host` for measured results.
 
-Use `install --apply` when you want Ayni to install missing or outdated adapter
-tools from local language ecosystems:
-
-```sh
-ayni install --apply
-```
-
-`install` bootstraps policy, ignores `.ayni/`, and lists or (with `--apply`)
-installs catalog tools. It never changes `AGENTS.md`; run `ayni agents sync`
-when you intentionally want its marked Ayni section created or refreshed.
-
-To inspect whether an already-configured repository is ready without changing
-any files, use check mode:
+Managed environment setup will be owned by the explicit `env` lifecycle. These
+commands are present in the command model but are not implemented yet:
 
 ```sh
-ayni install --check
-ayni install --check --output json
+ayni env lock
+ayni env build
 ```
 
-Check mode requires an existing valid `.ayni.toml`. It only detects configured
-targets, resolves their execution contexts, and inspects enabled catalog
-requirements; it never scaffolds, prepares, installs, validates writable
-artifact paths, or writes output files. The human report is the default. JSON
-mode emits one deterministic readiness document on stdout and reserves stderr
-for command diagnostics. A missing or outdated requirement, undetected target,
-or unresolved target produces `not_ready` and a non-zero exit status. `--check`
-cannot be combined with `--apply`, and `--output` is check-only.
-
-For a non-Rust or polyglot repository, repeat `--language`; duplicate values
-are ignored:
-
-```sh
-ayni install --repo-root . --language rust --language node --language python --apply
-```
-
-Single-language setup remains valid, for example `ayni install --language go`.
+`ayni init` will own repository bootstrap without installation or agent-guidance
+mutation. Run `ayni agents sync` explicitly when you want the managed guidance
+block created or refreshed.
 
 Generate Markdown output:
 
 ```sh
-ayni analyze --output md
+ayni check --host --output markdown
 ```
 
-Emit the schema-v3 artifact for scripts with either equivalent selector:
+Emit the schema-v3 artifact for scripts:
 
 ```sh
-ayni analyze --json
-ayni analyze --output json
-```
-
-Do not combine `--json` with `--output stdout` or `--output md`; use one JSON
-selector instead. JSON is written to stdout and progress to stderr.
+ayni check --host --output json
+``` JSON is written to stdout and progress to stderr.
 
 Compare two already-produced complete schema-v3 artifacts explicitly. This
 command reads only the two supplied files: it does not discover a repository,
@@ -166,8 +137,8 @@ are reported successfully; invalid, incomplete, or incompatible inputs fail
 with diagnostics on stderr.
 
 ```sh
-ayni artifact compare --baseline before.json --candidate after.json
-ayni artifact compare --baseline before.json --candidate after.json --output json
+ayni results compare --baseline before.json --candidate after.json
+ayni results compare --baseline before.json --candidate after.json --output json
 ```
 
 The JSON form writes exactly one deterministic comparison document to stdout.
@@ -179,7 +150,7 @@ For the full CLI reference, see [`docs/cli.md`](docs/cli.md).
 This is an illustrative point-in-time snapshot from a validated repository run,
 not a promised baseline for every repository or release.
 
-# ayni analyze
+# ayni check
 
 **5** / **5** checks passing · aggregate **pass** · schema `0.3.0`
 

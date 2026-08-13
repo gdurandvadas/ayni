@@ -5,7 +5,17 @@ This document contains the help content for the `ayni` command-line program.
 **Command Overview:**
 
 * [`ayni`↴](#ayni)
-* [`ayni analyze`↴](#ayni-analyze)
+* [`ayni init`↴](#ayni-init)
+* [`ayni env`↴](#ayni-env)
+* [`ayni env show`↴](#ayni-env-show)
+* [`ayni env doctor`↴](#ayni-env-doctor)
+* [`ayni env lock`↴](#ayni-env-lock)
+* [`ayni env build`↴](#ayni-env-build)
+* [`ayni env shell`↴](#ayni-env-shell)
+* [`ayni env run`↴](#ayni-env-run)
+* [`ayni contract`↴](#ayni-contract)
+* [`ayni contract show`↴](#ayni-contract-show)
+* [`ayni contract validate`↴](#ayni-contract-validate)
 * [`ayni verify`↴](#ayni-verify)
 * [`ayni verify test`↴](#ayni-verify-test)
 * [`ayni verify coverage`↴](#ayni-verify-coverage)
@@ -13,79 +23,235 @@ This document contains the help content for the `ayni` command-line program.
 * [`ayni verify complexity`↴](#ayni-verify-complexity)
 * [`ayni verify deps`↴](#ayni-verify-deps)
 * [`ayni verify mutation`↴](#ayni-verify-mutation)
-* [`ayni install`↴](#ayni-install)
+* [`ayni impact`↴](#ayni-impact)
+* [`ayni impact show`↴](#ayni-impact-show)
+* [`ayni impact run`↴](#ayni-impact-run)
+* [`ayni check`↴](#ayni-check)
 * [`ayni agents`↴](#ayni-agents)
 * [`ayni agents sync`↴](#ayni-agents-sync)
-* [`ayni contract`↴](#ayni-contract)
-* [`ayni contract display`↴](#ayni-contract-display)
-* [`ayni artifact`↴](#ayni-artifact)
-* [`ayni artifact compare`↴](#ayni-artifact-compare)
-* [`ayni version`↴](#ayni-version)
+* [`ayni results`↴](#ayni-results)
+* [`ayni results show`↴](#ayni-results-show)
+* [`ayni results compare`↴](#ayni-results-compare)
 
 ## `ayni`
 
-Open-source code quality signals for AI agents
+Correct environments, focused feedback, one definitive quality gate
 
 **Usage:** `ayni <COMMAND>`
 
 ###### **Subcommands:**
 
-* `analyze` — Analyze the local repository and print a quality report
-* `verify` — Run focused, non-promotion verification
-* `install` — Scaffold repository policy and show required tools; use `--apply` to install or `--check` to inspect readiness
+* `init` — Prepare a repository for Ayni
+* `env` — Inspect and manage the repository code environment
+* `contract` — Inspect and validate the repository quality contract
+* `verify` — Run one quality signal with optional adapter-owned selectors
+* `impact` — Explain or run the checks affected by an explicit change
+* `check` — Run the complete repository quality contract
 * `agents` — Manage Ayni's agent instructions
-* `contract` — Inspect the effective configured quality contract
-* `artifact` — Compare two explicit complete signal artifacts without repository discovery
-* `version` — Print the Ayni CLI version
+* `results` — Inspect and compare explicit local result files
 
 
 
-## `ayni analyze`
+## `ayni init`
 
-Analyze the local repository and print a quality report
+Prepare a repository for Ayni
 
-**Usage:** `ayni analyze [OPTIONS]`
+**Usage:** `ayni init [OPTIONS]`
+
+###### **Options:**
+
+* `--repo-root <REPO_ROOT>`
+
+  Default value: `.`
+
+
+
+## `ayni env`
+
+Inspect and manage the repository code environment
+
+**Usage:** `ayni env <COMMAND>`
+
+###### **Subcommands:**
+
+* `show` — Explain the resolved environment plan without modifying state
+* `doctor` — Diagnose missing, conflicting, unsupported, or stale environment state
+* `lock` — Resolve exact environment requirements into the committed lock
+* `build` — Build the repository code-environment image from a current lock
+* `shell` — Enter the managed environment with the checkout mounted
+* `run` — Run an arbitrary command inside the managed environment
+
+
+
+## `ayni env show`
+
+Explain the resolved environment plan without modifying state
+
+**Usage:** `ayni env show [OPTIONS]`
+
+###### **Options:**
+
+* `--repo-root <REPO_ROOT>`
+
+  Default value: `.`
+
+
+
+## `ayni env doctor`
+
+Diagnose missing, conflicting, unsupported, or stale environment state
+
+**Usage:** `ayni env doctor [OPTIONS]`
+
+###### **Options:**
+
+* `--repo-root <REPO_ROOT>`
+
+  Default value: `.`
+
+
+
+## `ayni env lock`
+
+Resolve exact environment requirements into the committed lock
+
+**Usage:** `ayni env lock [OPTIONS]`
+
+###### **Options:**
+
+* `--repo-root <REPO_ROOT>`
+
+  Default value: `.`
+
+
+
+## `ayni env build`
+
+Build the repository code-environment image from a current lock
+
+**Usage:** `ayni env build [OPTIONS]`
+
+###### **Options:**
+
+* `--repo-root <REPO_ROOT>`
+
+  Default value: `.`
+
+
+
+## `ayni env shell`
+
+Enter the managed environment with the checkout mounted
+
+**Usage:** `ayni env shell [OPTIONS]`
+
+###### **Options:**
+
+* `--repo-root <REPO_ROOT>`
+
+  Default value: `.`
+
+
+
+## `ayni env run`
+
+Run an arbitrary command inside the managed environment
+
+**Usage:** `ayni env run [OPTIONS] -- <COMMAND>...`
+
+###### **Arguments:**
+
+* `<COMMAND>`
+
+###### **Options:**
+
+* `--repo-root <REPO_ROOT>`
+
+  Default value: `.`
+
+
+
+## `ayni contract`
+
+Inspect and validate the repository quality contract
+
+**Usage:** `ayni contract <COMMAND>`
+
+###### **Subcommands:**
+
+* `show` — Render the effective quality contract
+* `validate` — Validate the contract without discovery or tool execution
+
+
+
+## `ayni contract show`
+
+Render the effective quality contract
+
+**Usage:** `ayni contract show [OPTIONS]`
 
 ###### **Options:**
 
 * `--config <CONFIG>`
 
   Default value: `./.ayni.toml`
-* `--output <OUTPUT>` — Report format: `stdout` (default, coloured console), `md` (markdown report), or `json` (machine-readable signal artifact on stdout)
+* `--output <OUTPUT>`
+
+  Default value: `human`
 
   Possible values:
-  - `stdout`:
-    Coloured console report (default)
-  - `md`:
-    Markdown report printed to stdout
+  - `human`:
+    Human-readable terminal output
   - `json`:
-    Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout
+    One deterministic JSON document on stdout
 
-* `--json` — Print the machine-readable signal artifact to stdout (equivalent to `--output json`)
-* `--debug` — Print raw command diagnostics and disable the live dashboard
+
+
+
+## `ayni contract validate`
+
+Validate the contract without discovery or tool execution
+
+**Usage:** `ayni contract validate [OPTIONS]`
+
+###### **Options:**
+
+* `--config <CONFIG>`
+
+  Default value: `./.ayni.toml`
+* `--output <OUTPUT>`
+
+  Default value: `human`
+
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+
 
 
 
 ## `ayni verify`
 
-Run focused, non-promotion verification
+Run one quality signal with optional adapter-owned selectors
 
 **Usage:** `ayni verify <COMMAND>`
 
 ###### **Subcommands:**
 
-* `test` — Run only the test signal with adapter-owned selectors
-* `coverage` — Run only the coverage signal with adapter-owned selectors
-* `size` — Run only the size signal with adapter-owned selectors
-* `complexity` — Run only the complexity signal with adapter-owned selectors
-* `deps` — Run only the dependency signal with adapter-owned selectors
-* `mutation` — Run only the mutation signal with adapter-owned selectors
+* `test` — Run only the test signal
+* `coverage` — Run only the coverage signal
+* `size` — Run only the size signal
+* `complexity` — Run only the complexity signal
+* `deps` — Run only the dependency signal
+* `mutation` — Run only the mutation signal
 
 
 
 ## `ayni verify test`
 
-Run only the test signal with adapter-owned selectors
+Run only the test signal
 
 **Usage:** `ayni verify test [OPTIONS]`
 
@@ -101,15 +267,17 @@ Run only the test signal with adapter-owned selectors
 * `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
-  Possible values:
-  - `stdout`:
-    Coloured console report (default)
-  - `md`:
-    Markdown report printed to stdout
-  - `json`:
-    Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout
+  Default value: `human`
 
-* `--json`
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+  - `markdown`:
+    Deterministic Markdown output
+
+* `--host` — Run on the host instead of in the managed environment
 * `--debug` — Print raw command diagnostics
 * `--file <FILE>`
 * `--package <PACKAGE>`
@@ -119,7 +287,7 @@ Run only the test signal with adapter-owned selectors
 
 ## `ayni verify coverage`
 
-Run only the coverage signal with adapter-owned selectors
+Run only the coverage signal
 
 **Usage:** `ayni verify coverage [OPTIONS]`
 
@@ -135,22 +303,24 @@ Run only the coverage signal with adapter-owned selectors
 * `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
-  Possible values:
-  - `stdout`:
-    Coloured console report (default)
-  - `md`:
-    Markdown report printed to stdout
-  - `json`:
-    Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout
+  Default value: `human`
 
-* `--json`
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+  - `markdown`:
+    Deterministic Markdown output
+
+* `--host` — Run on the host instead of in the managed environment
 * `--debug` — Print raw command diagnostics
 
 
 
 ## `ayni verify size`
 
-Run only the size signal with adapter-owned selectors
+Run only the size signal
 
 **Usage:** `ayni verify size [OPTIONS]`
 
@@ -166,15 +336,17 @@ Run only the size signal with adapter-owned selectors
 * `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
-  Possible values:
-  - `stdout`:
-    Coloured console report (default)
-  - `md`:
-    Markdown report printed to stdout
-  - `json`:
-    Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout
+  Default value: `human`
 
-* `--json`
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+  - `markdown`:
+    Deterministic Markdown output
+
+* `--host` — Run on the host instead of in the managed environment
 * `--debug` — Print raw command diagnostics
 * `--file <FILE>`
 
@@ -182,7 +354,7 @@ Run only the size signal with adapter-owned selectors
 
 ## `ayni verify complexity`
 
-Run only the complexity signal with adapter-owned selectors
+Run only the complexity signal
 
 **Usage:** `ayni verify complexity [OPTIONS]`
 
@@ -198,15 +370,17 @@ Run only the complexity signal with adapter-owned selectors
 * `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
-  Possible values:
-  - `stdout`:
-    Coloured console report (default)
-  - `md`:
-    Markdown report printed to stdout
-  - `json`:
-    Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout
+  Default value: `human`
 
-* `--json`
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+  - `markdown`:
+    Deterministic Markdown output
+
+* `--host` — Run on the host instead of in the managed environment
 * `--debug` — Print raw command diagnostics
 * `--file <FILE>`
 * `--package <PACKAGE>`
@@ -215,7 +389,7 @@ Run only the complexity signal with adapter-owned selectors
 
 ## `ayni verify deps`
 
-Run only the dependency signal with adapter-owned selectors
+Run only the dependency signal
 
 **Usage:** `ayni verify deps [OPTIONS]`
 
@@ -231,15 +405,17 @@ Run only the dependency signal with adapter-owned selectors
 * `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
-  Possible values:
-  - `stdout`:
-    Coloured console report (default)
-  - `md`:
-    Markdown report printed to stdout
-  - `json`:
-    Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout
+  Default value: `human`
 
-* `--json`
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+  - `markdown`:
+    Deterministic Markdown output
+
+* `--host` — Run on the host instead of in the managed environment
 * `--debug` — Print raw command diagnostics
 * `--file <FILE>`
 * `--package <PACKAGE>`
@@ -248,7 +424,7 @@ Run only the dependency signal with adapter-owned selectors
 
 ## `ayni verify mutation`
 
-Run only the mutation signal with adapter-owned selectors
+Run only the mutation signal
 
 **Usage:** `ayni verify mutation [OPTIONS]`
 
@@ -264,40 +440,117 @@ Run only the mutation signal with adapter-owned selectors
 * `--root <ROOT>` — Select exactly one normalized root configured for the selected language
 * `--output <OUTPUT>`
 
-  Possible values:
-  - `stdout`:
-    Coloured console report (default)
-  - `md`:
-    Markdown report printed to stdout
-  - `json`:
-    Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout
+  Default value: `human`
 
-* `--json`
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+  - `markdown`:
+    Deterministic Markdown output
+
+* `--host` — Run on the host instead of in the managed environment
 * `--debug` — Print raw command diagnostics
 
 
 
-## `ayni install`
+## `ayni impact`
 
-Scaffold repository policy and show required tools; use `--apply` to install or `--check` to inspect readiness
+Explain or run the checks affected by an explicit change
 
-**Usage:** `ayni install [OPTIONS]`
+**Usage:** `ayni impact <COMMAND>`
+
+###### **Subcommands:**
+
+* `show` — Explain the quality work affected by a change without running it
+* `run` — Execute the quality work affected by a change
+
+
+
+## `ayni impact show`
+
+Explain the quality work affected by a change without running it
+
+**Usage:** `ayni impact show [OPTIONS] --base <BASE>`
 
 ###### **Options:**
 
-* `--repo-root <REPO_ROOT>`
+* `--config <CONFIG>`
 
-  Default value: `.`
-* `--language <LANGUAGE>` — Limit setup to one or more languages; repeat `--language` for polyglot repositories
+  Default value: `./.ayni.toml`
+* `--base <BASE>` — Explicit base revision used to calculate the change
+* `--output <OUTPUT>`
 
-  Possible values: `rust`, `go`, `node`, `python`, `kotlin`
+  Default value: `human`
 
-* `--apply` — Install missing or outdated tools from adapter catalogs (cargo, rustup, go, npm, …)
-* `--check` — Check the existing policy and tooling without modifying the repository
-* `--output <OUTPUT>` — Readiness output format; JSON is available only with `--check`
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+  - `markdown`:
+    Deterministic Markdown output
 
-  Possible values: `json`
+* `--host` — Run on the host instead of in the managed environment
+* `--debug` — Print raw command diagnostics
 
+
+
+## `ayni impact run`
+
+Execute the quality work affected by a change
+
+**Usage:** `ayni impact run [OPTIONS] --base <BASE>`
+
+###### **Options:**
+
+* `--config <CONFIG>`
+
+  Default value: `./.ayni.toml`
+* `--base <BASE>` — Explicit base revision used to calculate the change
+* `--output <OUTPUT>`
+
+  Default value: `human`
+
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+  - `markdown`:
+    Deterministic Markdown output
+
+* `--host` — Run on the host instead of in the managed environment
+* `--debug` — Print raw command diagnostics
+
+
+
+## `ayni check`
+
+Run the complete repository quality contract
+
+**Usage:** `ayni check [OPTIONS]`
+
+###### **Options:**
+
+* `--config <CONFIG>`
+
+  Default value: `./.ayni.toml`
+* `--output <OUTPUT>`
+
+  Default value: `human`
+
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+  - `markdown`:
+    Deterministic Markdown output
+
+* `--host` — Run on the host instead of in the managed environment
+* `--debug` — Print raw command diagnostics
 
 
 
@@ -309,13 +562,13 @@ Manage Ayni's agent instructions
 
 ###### **Subcommands:**
 
-* `sync` — Create or update Ayni's managed section in AGENTS.md
+* `sync` — Create or refresh only Ayni's managed AGENTS.md block
 
 
 
 ## `ayni agents sync`
 
-Create or update Ayni's managed section in AGENTS.md
+Create or refresh only Ayni's managed AGENTS.md block
 
 **Usage:** `ayni agents sync [OPTIONS]`
 
@@ -327,76 +580,63 @@ Create or update Ayni's managed section in AGENTS.md
 
 
 
-## `ayni contract`
+## `ayni results`
 
-Inspect the effective configured quality contract
+Inspect and compare explicit local result files
 
-**Usage:** `ayni contract <COMMAND>`
-
-###### **Subcommands:**
-
-* `display` — Display the validated policy without running analysis or discovery
-
-
-
-## `ayni contract display`
-
-Display the validated policy without running analysis or discovery
-
-**Usage:** `ayni contract display [OPTIONS]`
-
-###### **Options:**
-
-* `--config <CONFIG>` — Path to the policy file to display
-
-  Default value: `./.ayni.toml`
-* `--output <OUTPUT>` — Render the deterministic contract projection as JSON
-
-  Possible values: `json`
-
-
-
-
-## `ayni artifact`
-
-Compare two explicit complete signal artifacts without repository discovery
-
-**Usage:** `ayni artifact <COMMAND>`
+**Usage:** `ayni results <COMMAND>`
 
 ###### **Subcommands:**
 
-* `compare` — Compare exactly two explicit schema-v3 artifact files
+* `show` — Render one explicit local result file
+* `compare` — Compare two explicit compatible result files
 
 
 
-## `ayni artifact compare`
+## `ayni results show`
 
-Compare exactly two explicit schema-v3 artifact files
+Render one explicit local result file
 
-**Usage:** `ayni artifact compare [OPTIONS] --baseline <BASELINE> --candidate <CANDIDATE>`
+**Usage:** `ayni results show [OPTIONS] --file <FILE>`
 
 ###### **Options:**
 
-* `--baseline <BASELINE>` — Earlier artifact file
-* `--candidate <CANDIDATE>` — Later artifact file
-* `--output <OUTPUT>` — Comparison output format
+* `--file <FILE>` — Result file to render
+* `--output <OUTPUT>`
 
-  Default value: `stdout`
+  Default value: `human`
 
   Possible values:
-  - `stdout`:
-    Human-readable comparison report
+  - `human`:
+    Human-readable terminal output
   - `json`:
-    One machine-readable comparison document
+    One deterministic JSON document on stdout
+  - `markdown`:
+    Deterministic Markdown output
 
 
 
 
-## `ayni version`
+## `ayni results compare`
 
-Print the Ayni CLI version
+Compare two explicit compatible result files
 
-**Usage:** `ayni version`
+**Usage:** `ayni results compare [OPTIONS] --baseline <BASELINE> --candidate <CANDIDATE>`
+
+###### **Options:**
+
+* `--baseline <BASELINE>` — Earlier result file
+* `--candidate <CANDIDATE>` — Later result file
+* `--output <OUTPUT>`
+
+  Default value: `human`
+
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+
 
 
 
@@ -406,4 +646,3 @@ Print the Ayni CLI version
     This document was generated automatically by
     <a href="https://crates.io/crates/clap-markdown"><code>clap-markdown</code></a>.
 </i></small>
-

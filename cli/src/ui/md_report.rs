@@ -20,7 +20,7 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
         AggregateStatus::Pass => "pass",
         AggregateStatus::Fail => "fail",
     };
-    out.push_str("# ayni analyze\n\n");
+    out.push_str("# ayni check\n\n");
     out.push_str(&format!(
         "**{}** / **{}** checks passing · aggregate **{}** · schema `{}`\n\n",
         passing, total, aggregate, artifact.schema_version
@@ -426,7 +426,7 @@ mod tests {
         };
 
         let text = build_markdown(&artifact, 3);
-        assert!(text.contains("# ayni analyze"));
+        assert!(text.contains("# ayni check"));
         assert!(text.contains("## rust (workspace)"));
         assert!(text.contains("| # | Signal | Summary | Status |"));
         assert!(text.contains(

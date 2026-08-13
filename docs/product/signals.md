@@ -34,15 +34,15 @@ and payload shapes are version-specific; use the selected version reference.
 
 ## Version selection and compatibility
 
-`ayni analyze` writes `.ayni/last/signals.json`; `ayni analyze --json` and
-`ayni analyze --output json` print the same artifact. Current output uses
+`ayni check --host` writes `.ayni/last/signals.json`; `ayni check --host --output json` and
+`ayni check --host --output json` print the same artifact. Current output uses
 schema `0.3.0`. Consumers must inspect `schema_version` and use the matching
 version page rather than assuming fields from another envelope.
 
 Schema v3 is a breaking replacement for v2 consumers. Explicit artifact
 comparison accepts only two valid, complete artifacts whose `schema_version`
-is the current schema string. Use `ayni artifact compare --baseline <artifact>
---candidate <artifact> [--output stdout|json]`; it reads exactly those files
+is the current schema string. Use `ayni results compare --baseline <artifact>
+--candidate <artifact> [--output human|json]`; it reads exactly those files
 and has no implicit prior-artifact, repository, Git, fetch, storage, or write
 behavior. There is no compatibility payload or automatic conversion from an
 earlier schema.

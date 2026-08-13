@@ -43,12 +43,12 @@ fn load_artifact(path: &Path, side: &str) -> Result<RunArtifact, String> {
 
 fn fail(error: String) -> ExitCode {
     eprintln!("{error}");
-    ExitCode::FAILURE
+    ExitCode::from(2)
 }
 
 fn human_report(comparison: &ArtifactComparison) -> String {
     let mut output = format!(
-        "# ayni artifact compare\n\ncomparison schema `{}` · artifact schema `{}`\n\nmatched: {} · changed: {} · added: {} · removed: {}\n",
+        "# ayni results compare\n\ncomparison schema `{}` · artifact schema `{}`\n\nmatched: {} · changed: {} · added: {} · removed: {}\n",
         comparison.comparison_schema_version,
         comparison.artifact_schema_version,
         comparison.matched.len(),
@@ -248,7 +248,7 @@ mod tests {
                 generated_at: format!("timestamp-{root}"),
                 ayni_version: String::from("test"),
                 invocation: InvocationContext {
-                    command: String::from("analyze"),
+                    command: String::from("check"),
                     languages: vec![Language::Rust],
                     scope: None,
                 },

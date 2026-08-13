@@ -48,7 +48,7 @@ impl RustFixture {
         ayni()
             .args(["verify"])
             .args(args)
-            .args(["--config", self.config.to_str().expect("config")])
+            .args(["--host", "--config", self.config.to_str().expect("config")])
             .output()
             .expect("launch ayni")
     }
@@ -96,13 +96,15 @@ fn emitted_multi_root_command_is_reproducible() {
 
     let analyze = ayni()
         .args([
-            "analyze",
+            "check",
+            "--host",
             "--config",
             config.to_str().expect("config"),
-            "--json",
+            "--output",
+            "json",
         ])
         .output()
-        .expect("analyze");
+        .expect("check");
     assert!(!analyze.status.success(), "size findings must fail");
     let artifact: Value = serde_json::from_slice(&analyze.stdout).expect("artifact");
     let commands = artifact["rows"]
@@ -125,6 +127,7 @@ fn emitted_multi_root_command_is_reproducible() {
         .args([
             "verify",
             "size",
+            "--host",
             "--config",
             config.to_str().expect("config"),
             "--language",
@@ -133,7 +136,8 @@ fn emitted_multi_root_command_is_reproducible() {
             "services/one",
             "--file",
             "services/one/oversized.rs",
-            "--json",
+            "--output",
+            "json",
         ])
         .output()
         .expect("reproduce finding command");
@@ -155,7 +159,7 @@ fn size_file_verification_is_exact_requested_evidence_and_preserves_analyze_arti
     fs::create_dir_all(analyze.parent().expect("parent")).expect("analyze dir");
     fs::write(&analyze, "repository evidence\n").expect("analyze evidence");
 
-    let output = fixture.run(&["size", "--file", "src/lib.rs", "--json"]);
+    let output = fixture.run(&["size", "--file", "src/lib.rs", "--output", "json"]);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -226,7 +230,8 @@ fn package_and_dependency_forms_select_one_rust_target() {
         "rust",
         "--package",
         "fixture",
-        "--json",
+        "--output",
+        "json",
     ]);
     assert!(
         output.status.success(),

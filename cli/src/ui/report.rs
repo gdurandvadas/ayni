@@ -111,12 +111,7 @@ fn build_report_text(
 ) -> String {
     let mut out = String::new();
     out.push('\n');
-    out.push_str(&stylize(
-        color,
-        "ayni analyze report",
-        Palette::Heading,
-        true,
-    ));
+    out.push_str(&stylize(color, "ayni check report", Palette::Heading, true));
     out.push('\n');
 
     if let Some(completion) = completion {

@@ -2,20 +2,9 @@
 
 ## Installation
 
-Python roots are directories containing `pyproject.toml`, `requirements.txt`,
-or `Pipfile`; discovery excludes virtual environments, caches, `.git`, and
-`.ayni`. A uv workspace or root `uv.lock` controls workspace discovery, and uv
-workspace exclusions are respected. Configure roots in `[python].roots`.
-
-Runner resolution prefers direct `uv.lock`, `poetry.lock`, `pdm.lock`,
-`Pipfile.lock`, or `hatch.toml`, then an ancestor uv workspace, then
-`pyproject.toml` or `requirements.txt` using `python -m`. Python and its
-resolved package manager are user-owned prerequisites. Applied installation
-uses the resolved manager for local development packages and `uv tool` for
-`complexipy`. Catalog status inspection during listing and `ayni install
---check` is read-only for that manager; it does not prepare a manager or modify
-dependencies. Applied setup performs only the adapter-owned manager operations
-required for enabled requirements.
+Repository initialization and managed tool provisioning are not implemented in
+the clean-slate command model yet. Configure roots in `.ayni.toml` and provide
+the documented runtime, package manager, and signal tools when using `--host`.
 
 ## Signal Coverage
 

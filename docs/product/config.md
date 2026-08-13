@@ -8,7 +8,7 @@ Policy lives at the repository root. It controls enabled signals, active
 languages and roots, per-language thresholds, dependency rules, report settings,
 and tool command overrides.
 
-Use `ayni contract display` to print a concise, deterministic projection of the
+Use `ayni contract show` to print a concise, deterministic projection of the
 validated configured policy. Pass `--config <path>` to select a policy other
 than `./.ayni.toml`, or `--output json` for a machine-readable, deterministic
 projection. JSON output has a `projection_version` field (currently `0.1.0`),
@@ -19,7 +19,7 @@ dependency restrictions, and explicit tool overrides. Both formats include
 advisory effectiveness warnings with stable codes; warnings do not make a valid
 policy fail. It does not discover
 projects, inspect or invoke tools, run adapters, analyze code, or write
-artifacts. Use `ayni analyze` for measured results and completion evidence.
+artifacts. Use `ayni check --host` for measured results and completion evidence.
 
 For the signal vocabulary and schema selection, see [`signals.md`](signals.md);
 for current JSON artifact fields, see [schema v3](signals/v3.md).
@@ -189,7 +189,7 @@ validate_install = true
 Notes:
 
 - `runner = "workspace"` pins workspace-style runner behavior when install detects a shared workspace manager.
-- `validate_install = true` keeps `ayni install --apply` in bootstrap-and-validate mode. Set it to `false` only when a repository deliberately wants scaffold-plus-install without validation.
+- `validate_install` is retained in the current policy schema but has no active clean-slate command behavior; the future environment contract will replace this legacy setting.
 
 ## Language roots
 
@@ -238,12 +238,12 @@ Use `[report]` to tune console-only rendering behavior.
 offenders_limit = 4
 ```
 
-`offenders_limit` caps how many offender lines `ayni analyze` prints per
+`offenders_limit` caps how many offender lines `ayni check --host` prints per
 signal row. If omitted, Ayni prints all offenders (no cap).
 
 ## Concurrency
 
-Use `[concurrency]` to control how `ayni analyze` schedules independent roots.
+Use `[concurrency]` to control how `ayni check --host` schedules independent roots.
 This is scheduler-level parallelism across analyze targets such as `rust/single`,
 `rust/mono`, `node/frontend`, or `go/backend`. It does not change how an
 individual language tool parallelizes internally.
@@ -356,13 +356,13 @@ current artifact's `applied_thresholds` field; see [schema v3](signals/v3.md).
 
 ## Output and report safety
 
-`ayni analyze --output md` renders typed findings under **Offenders** and adds a
+`ayni check --host --output markdown` renders typed findings under **Offenders** and adds a
 **Failures** section only when a collector command failed. Failure entries can
 include the command, working directory, exit code, and tool message. Markdown
 and the schema-v3 JSON artifact can consequently expose repository paths and raw
 tool output; do not publish them without reviewing that diagnostic data.
 
-For machine consumers, `ayni analyze --json` and `ayni analyze --output json`
+For machine consumers, `ayni check --host --output json` and `ayni check --host --output json`
 select the same schema-v3 artifact. `--json` conflicts with an explicit
 non-JSON `--output` value (`stdout` or `md`); choose one output mode. See
 [schema v3](signals/v3.md) for the current schema and migration posture.
@@ -382,7 +382,7 @@ Forbidden edges use the same map style as size: keys and values are glob pattern
 
 ## Completion and focused verification
 
-`ayni analyze` always evaluates every configured language root. It is the
+`ayni check --host` always evaluates every configured language root. It is the
 repository completion operation and the sole writer of
 `.ayni/last/signals.json`; it does not accept `--file`, `--package`, or
 `--language` selectors.

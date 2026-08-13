@@ -2,19 +2,9 @@
 
 ## Installation
 
-Node roots are discovered from `package.json`, excluding `node_modules`; a
-root workspace declaration also discovers direct `/*` workspace members.
-Configure the roots in `[node].roots`. For each root, package-manager
-resolution prefers `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`,
-`bun.lock`/`bun.lockb`, the `packageManager` field, then an ancestor workspace
-package manifest; otherwise it uses npm-compatible behavior.
-
-Node and the selected package manager are user-owned prerequisites. When
-installation is applied, Ayni adds catalog packages as root-local development
-dependencies using that resolved manager. Catalog status inspection during
-listing and `ayni install --check` is read-only for that manager; normal applied
-setup may run the resolved manager's dependency preparation before adding
-enabled requirements.
+Repository initialization and managed tool provisioning are not implemented in
+the clean-slate command model yet. Configure roots in `.ayni.toml` and provide
+the documented runtime, package manager, and signal tools when using `--host`.
 
 ## Signal Coverage
 

@@ -8,12 +8,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 mod agents;
+mod application;
+mod args;
 mod artifact_compare;
 mod completion;
 mod contract;
 mod discovery;
-mod install;
-mod install_check;
 mod ui;
 mod verification_command;
 mod verify;
@@ -23,313 +23,102 @@ use ayni_adapters_node::NodeAdapter;
 use ayni_adapters_python::PythonAdapter;
 use ayni_adapters_rust::RustAdapter;
 use ayni_core::{
-    AYNI_POLICY_FILE, AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, AyniPolicy, Budget,
-    CommandFailure, CompletionIssue, CompletionScope, CompletionStage, CompletionState,
-    ComplexityResult, ConcurrencyPolicy, CoverageResult, DepsResult, InvocationContext, Language,
-    MutationResult, Offenders, OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion,
-    RunContext, Scope, SignalKind, SignalResult, SignalRow, SizeResult, TestResult,
+    AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, AyniPolicy, Budget, CommandFailure,
+    CompletionIssue, CompletionScope, CompletionStage, CompletionState, ComplexityResult,
+    ConcurrencyPolicy, CoverageResult, DepsResult, InvocationContext, Language, MutationResult,
+    Offenders, OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion, RunContext, Scope,
+    SignalKind, SignalResult, SignalRow, SizeResult, TestResult,
 };
-use clap::{Args, Parser, Subcommand, ValueEnum};
-use install::{enabled_signal_kinds, install_impl};
+use clap::Parser;
 
 const ARTIFACTS_DIR: &str = ".ayni/last";
 const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
 const VERIFY_ARTIFACTS_DIR: &str = ".ayni/verify/last";
 const VERIFY_SIGNALS_ARTIFACT: &str = ".ayni/verify/last/signals.json";
-const RUST_POLICY_TEMPLATE: &str = include_str!("../templates/policy/rust.toml");
-const GO_POLICY_TEMPLATE: &str = include_str!("../templates/policy/go.toml");
-const NODE_POLICY_TEMPLATE: &str = include_str!("../templates/policy/node.toml");
-const PYTHON_POLICY_TEMPLATE: &str = include_str!("../templates/policy/python.toml");
-const KOTLIN_POLICY_TEMPLATE: &str = include_str!("../templates/policy/kotlin.toml");
-
-#[derive(Parser, Debug)]
-#[command(name = "ayni")]
-#[command(version, about = "Open-source code quality signals for AI agents")]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand, Debug)]
-enum Commands {
-    /// Analyze the local repository and print a quality report.
-    Analyze {
-        #[arg(long, default_value = "./.ayni.toml")]
-        config: String,
-        /// Report format: `stdout` (default, coloured console), `md` (markdown report),
-        /// or `json` (machine-readable signal artifact on stdout).
-        #[arg(long, value_enum)]
-        output: Option<OutputArg>,
-        /// Print the machine-readable signal artifact to stdout (equivalent to `--output json`).
-        #[arg(long)]
-        json: bool,
-        /// Print raw command diagnostics and disable the live dashboard.
-        #[arg(long)]
-        debug: bool,
-    },
-    /// Run focused, non-promotion verification.
-    Verify {
-        #[command(subcommand)]
-        command: VerifyCommands,
-    },
-    /// Scaffold repository policy and show required tools; use `--apply` to install or `--check` to inspect readiness.
-    Install {
-        #[arg(long, default_value = ".")]
-        repo_root: String,
-        /// Limit setup to one or more languages; repeat `--language` for polyglot repositories.
-        #[arg(long, value_enum)]
-        language: Vec<LanguageArg>,
-        /// Install missing or outdated tools from adapter catalogs (cargo, rustup, go, npm, …).
-        #[arg(long, conflicts_with = "check")]
-        apply: bool,
-        /// Check the existing policy and tooling without modifying the repository.
-        #[arg(long, conflicts_with = "apply")]
-        check: bool,
-        /// Readiness output format; JSON is available only with `--check`.
-        #[arg(long, value_enum, requires = "check")]
-        output: Option<InstallOutputArg>,
-    },
-    /// Manage Ayni's agent instructions.
-    Agents {
-        #[command(subcommand)]
-        command: AgentsCommands,
-    },
-    /// Inspect the effective configured quality contract.
-    Contract {
-        #[command(subcommand)]
-        command: ContractCommands,
-    },
-    /// Compare two explicit complete signal artifacts without repository discovery.
-    Artifact {
-        #[command(subcommand)]
-        command: ArtifactCommands,
-    },
-    /// Print the Ayni CLI version.
-    Version,
-    #[command(hide = true)]
-    GenerateDocs,
-}
-
-#[derive(Subcommand, Debug)]
-enum VerifyCommands {
-    /// Run only the test signal with adapter-owned selectors.
-    Test {
-        #[command(flatten)]
-        options: VerifyFilePackageOptions,
-        #[arg(long)]
-        name: Option<String>,
-    },
-    /// Run only the coverage signal with adapter-owned selectors.
-    Coverage(VerifyCommonOptions),
-    /// Run only the size signal with adapter-owned selectors.
-    Size(VerifyFileOptions),
-    /// Run only the complexity signal with adapter-owned selectors.
-    Complexity(VerifyFilePackageOptions),
-    /// Run only the dependency signal with adapter-owned selectors.
-    Deps(VerifyFilePackageOptions),
-    /// Run only the mutation signal with adapter-owned selectors.
-    Mutation(VerifyCommonOptions),
-}
-
-#[derive(Args, Debug)]
-struct VerifyCommonOptions {
-    #[arg(long, default_value = "./.ayni.toml")]
-    config: String,
-    #[arg(long, value_enum)]
-    language: Option<LanguageArg>,
-    /// Select exactly one normalized root configured for the selected language.
-    #[arg(long)]
-    root: Option<String>,
-    #[arg(long, value_enum)]
-    output: Option<OutputArg>,
-    #[arg(long)]
-    json: bool,
-    /// Print raw command diagnostics.
-    #[arg(long)]
-    debug: bool,
-}
-
-#[derive(Args, Debug)]
-struct VerifyFileOptions {
-    #[command(flatten)]
-    common: VerifyCommonOptions,
-    #[arg(long)]
-    file: Option<String>,
-}
-
-#[derive(Args, Debug)]
-struct VerifyFilePackageOptions {
-    #[command(flatten)]
-    common: VerifyCommonOptions,
-    #[arg(long)]
-    file: Option<String>,
-    #[arg(long)]
-    package: Option<String>,
-}
-
-#[derive(Subcommand, Debug)]
-enum AgentsCommands {
-    /// Create or update Ayni's managed section in AGENTS.md.
-    Sync {
-        #[arg(long, default_value = ".")]
-        repo_root: String,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum ContractCommands {
-    /// Display the validated policy without running analysis or discovery.
-    Display {
-        /// Path to the policy file to display.
-        #[arg(long, default_value = "./.ayni.toml")]
-        config: String,
-        /// Render the deterministic contract projection as JSON.
-        #[arg(long)]
-        output: Option<ContractOutputArg>,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum ArtifactCommands {
-    /// Compare exactly two explicit schema-v3 artifact files.
-    Compare {
-        /// Earlier artifact file.
-        #[arg(long)]
-        baseline: PathBuf,
-        /// Later artifact file.
-        #[arg(long)]
-        candidate: PathBuf,
-        /// Comparison output format.
-        #[arg(long, value_enum, default_value_t = ArtifactCompareOutputArg::Stdout)]
-        output: ArtifactCompareOutputArg,
-    },
-}
-
-#[derive(Clone, Debug, ValueEnum)]
-enum LanguageArg {
-    Rust,
-    Go,
-    Node,
-    Python,
-    Kotlin,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
-enum OutputArg {
-    /// Coloured console report (default).
-    Stdout,
-    /// Markdown report printed to stdout.
-    Md,
-    /// Machine-readable signal artifact (same shape as `.ayni/last/signals.json`) on stdout.
-    Json,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum ContractOutputArg {
-    Json,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
-enum InstallOutputArg {
-    Json,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum ArtifactCompareOutputArg {
-    /// Human-readable comparison report.
-    Stdout,
-    /// One machine-readable comparison document.
-    Json,
-}
-
-fn resolve_output_mode(output: Option<OutputArg>, json: bool) -> Result<OutputArg, String> {
-    match (output, json) {
-        (Some(OutputArg::Json), true) | (Some(OutputArg::Json), false) => Ok(OutputArg::Json),
-        (Some(output), true) => Err(format!(
-            "--json cannot be combined with --output {}; use --output json or --json",
-            output.as_str()
-        )),
-        (Some(output), false) => Ok(output),
-        (None, true) => Ok(OutputArg::Json),
-        (None, false) => Ok(OutputArg::Stdout),
-    }
-}
-
-impl OutputArg {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Stdout => "stdout",
-            Self::Md => "md",
-            Self::Json => "json",
-        }
-    }
-}
-
-impl LanguageArg {
-    fn as_language(&self) -> Language {
-        match self {
-            Self::Rust => Language::Rust,
-            Self::Go => Language::Go,
-            Self::Node => Language::Node,
-            Self::Python => Language::Python,
-            Self::Kotlin => Language::Kotlin,
-        }
-    }
-}
 
 fn main() -> ExitCode {
-    match Cli::parse().command {
-        Commands::Analyze {
-            config,
-            output,
-            json,
-            debug,
-        } => match resolve_output_mode(output, json) {
-            Ok(output_mode) => analyze(&config, AnalyzeOptions { output_mode, debug }),
-            Err(error) => {
-                eprintln!("{error}");
-                ExitCode::FAILURE
-            }
-        },
-        Commands::Install {
-            repo_root,
-            language,
-            apply,
-            check,
-            output,
-        } => install(
-            &repo_root,
-            selected_install_languages(language),
-            apply,
-            check,
-            output,
+    dispatch(args::Cli::parse().into_operation())
+}
+
+fn dispatch(operation: application::Operation) -> ExitCode {
+    use application::{ExecutionMode, Operation, OutputFormat};
+
+    match operation {
+        Operation::Check(operation) if operation.execution_mode == ExecutionMode::Host => analyze(
+            operation.config.to_string_lossy().as_ref(),
+            AnalyzeOptions {
+                output_mode: output_arg(operation.output),
+                debug: operation.debug,
+            },
         ),
-        Commands::Verify { command } => run_verify_command(command),
-        Commands::Agents {
-            command: AgentsCommands::Sync { repo_root },
-        } => agents_sync(&repo_root),
-        Commands::Contract {
-            command: ContractCommands::Display { config, output },
-        } => contract_display(&config, output.is_some()),
-        Commands::Artifact {
-            command:
-                ArtifactCommands::Compare {
-                    baseline,
-                    candidate,
-                    output,
-                },
-        } => artifact_compare::run(
-            &baseline,
-            &candidate,
-            matches!(output, ArtifactCompareOutputArg::Json),
+        Operation::Verify(operation) if operation.execution_mode == ExecutionMode::Host => {
+            run_verify_operation(operation)
+        }
+        Operation::ContractShow(operation) => contract_display(
+            operation.config.to_string_lossy().as_ref(),
+            operation.output == OutputFormat::Json,
         ),
-        Commands::Version => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+        Operation::ContractValidate(operation) => contract_validate(&operation.config),
+        Operation::AgentsSync(operation) => agents_sync(&operation.repo_root),
+        Operation::ResultsCompare(operation) => artifact_compare::run(
+            &operation.baseline,
+            &operation.candidate,
+            operation.output == OutputFormat::Json,
+        ),
+        Operation::Check(_) | Operation::Verify(_) => environment_unavailable(),
+        Operation::GenerateDocs => {
+            print!("{}", clap_markdown::help_markdown::<args::Cli>());
             ExitCode::SUCCESS
         }
-        Commands::GenerateDocs => {
-            println!("{}", clap_markdown::help_markdown::<Cli>());
-            ExitCode::SUCCESS
+        operation => not_implemented(&operation),
+    }
+}
+
+fn output_arg(output: application::OutputFormat) -> OutputArg {
+    match output {
+        application::OutputFormat::Human => OutputArg::Stdout,
+        application::OutputFormat::Json => OutputArg::Json,
+        application::OutputFormat::Markdown => OutputArg::Md,
+    }
+}
+
+fn run_verify_operation(operation: application::VerifyOperation) -> ExitCode {
+    let request = verify::Request {
+        kind: operation.signal,
+        config_path: operation.config,
+        file: operation.file,
+        package: operation.package,
+        name: operation.name,
+        language: operation.language,
+        root: operation.root,
+        output_mode: output_arg(operation.output),
+        debug: operation.debug,
+    };
+    match verify::run(request) {
+        Ok(false) => ExitCode::SUCCESS,
+        Ok(true) => ExitCode::from(1),
+        Err(error) => {
+            eprintln!("{error}");
+            if error.starts_with("failed to read ") || error.starts_with("failed to parse ") {
+                ExitCode::from(2)
+            } else {
+                ExitCode::from(4)
+            }
+        }
+    }
+}
+
+fn contract_validate(config_path: &Path) -> ExitCode {
+    let adapter_facts = build_registry()
+        .adapters()
+        .iter()
+        .map(|adapter| adapter.policy_effectiveness_facts())
+        .collect::<Vec<_>>();
+    match contract::display(config_path, &adapter_facts, false) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(2)
         }
     }
 }
@@ -347,76 +136,29 @@ fn contract_display(config_path: &str, json: bool) -> ExitCode {
         }
         Err(error) => {
             eprintln!("{error}");
-            ExitCode::FAILURE
+            ExitCode::from(2)
         }
     }
 }
 
-fn run_verify_command(command: VerifyCommands) -> ExitCode {
-    let (kind, options, file, package, name) = match command {
-        VerifyCommands::Test { options, name } => (
-            SignalKind::Test,
-            options.common,
-            options.file,
-            options.package,
-            name,
-        ),
-        VerifyCommands::Coverage(options) => (SignalKind::Coverage, options, None, None, None),
-        VerifyCommands::Size(options) => {
-            (SignalKind::Size, options.common, options.file, None, None)
-        }
-        VerifyCommands::Complexity(options) => (
-            SignalKind::Complexity,
-            options.common,
-            options.file,
-            options.package,
-            None,
-        ),
-        VerifyCommands::Deps(options) => (
-            SignalKind::Deps,
-            options.common,
-            options.file,
-            options.package,
-            None,
-        ),
-        VerifyCommands::Mutation(options) => (SignalKind::Mutation, options, None, None, None),
-    };
-    let output_mode = match resolve_output_mode(options.output, options.json) {
-        Ok(mode) => mode,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let request = verify::Request {
-        kind,
-        config_path: PathBuf::from(options.config),
-        file,
-        package,
-        name,
-        language: options.language.map(|value| value.as_language()),
-        root: options.root,
-        output_mode,
-        debug: options.debug,
-    };
-    match verify::run(request) {
-        Ok(false) => ExitCode::SUCCESS,
-        Ok(true) => ExitCode::FAILURE,
-        Err(error) => {
-            eprintln!("{error}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn agents_sync(repo_root: &str) -> ExitCode {
-    match sync_impl(repo_root) {
+fn agents_sync(repo_root: &Path) -> ExitCode {
+    match sync_impl(repo_root.to_string_lossy().as_ref()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
-            ExitCode::FAILURE
+            ExitCode::from(4)
         }
     }
+}
+
+fn environment_unavailable() -> ExitCode {
+    eprintln!("managed environment execution is not implemented yet; rerun with --host");
+    ExitCode::from(3)
+}
+
+fn not_implemented(operation: &application::Operation) -> ExitCode {
+    eprintln!("{operation:?} is part of the greenfield command model but is not implemented yet");
+    ExitCode::from(4)
 }
 
 fn build_registry() -> AdapterRegistry {
@@ -429,44 +171,44 @@ fn build_registry() -> AdapterRegistry {
     registry
 }
 
-fn selected_install_languages(values: Vec<LanguageArg>) -> BTreeSet<Language> {
-    values
-        .into_iter()
-        .map(|value| value.as_language())
-        .collect()
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputArg {
+    Stdout,
+    Md,
+    Json,
 }
 
-fn install(
-    repo_root: &str,
-    languages: BTreeSet<Language>,
-    apply: bool,
-    check: bool,
-    output: Option<InstallOutputArg>,
-) -> ExitCode {
-    if check {
-        return match install_check::run(
-            Path::new(repo_root),
-            &languages,
-            output == Some(InstallOutputArg::Json),
-            &build_registry(),
-        ) {
-            Ok(true) => ExitCode::SUCCESS,
-            Ok(false) => ExitCode::FAILURE,
-            Err(error) => {
-                eprintln!("{error}");
-                ExitCode::FAILURE
-            }
-        };
-    }
-    match install_impl(repo_root, &languages, apply) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(failures) => {
-            for failure in failures {
-                eprintln!("{failure}");
-            }
-            ExitCode::FAILURE
+impl OutputArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Md => "md",
+            Self::Json => "json",
         }
     }
+}
+
+fn enabled_signal_kinds(policy: &AyniPolicy) -> Vec<SignalKind> {
+    let mut kinds = Vec::new();
+    if policy.checks.test {
+        kinds.push(SignalKind::Test);
+    }
+    if policy.checks.coverage {
+        kinds.push(SignalKind::Coverage);
+    }
+    if policy.checks.size {
+        kinds.push(SignalKind::Size);
+    }
+    if policy.checks.complexity {
+        kinds.push(SignalKind::Complexity);
+    }
+    if policy.checks.deps {
+        kinds.push(SignalKind::Deps);
+    }
+    if policy.checks.mutation {
+        kinds.push(SignalKind::Mutation);
+    }
+    kinds
 }
 
 fn signal_kind_slug(kind: SignalKind) -> &'static str {
@@ -1017,18 +759,22 @@ fn analyze(config_path: &str, options: AnalyzeOptions) -> ExitCode {
     match analyze_impl(config_path, options) {
         Ok(AnalyzeOutcome::Completed { has_failures }) => {
             if has_failures {
-                ExitCode::FAILURE
+                ExitCode::from(1)
             } else {
                 ExitCode::SUCCESS
             }
         }
         Ok(AnalyzeOutcome::Aborted) => {
-            eprintln!("analyze aborted");
-            ExitCode::from(130)
+            eprintln!("check aborted");
+            ExitCode::from(4)
         }
-        Err(error) => {
+        Err(AnalyzeError::InvalidContract(error)) => {
             eprintln!("{error}");
-            ExitCode::FAILURE
+            ExitCode::from(2)
+        }
+        Err(AnalyzeError::Incomplete(error)) => {
+            eprintln!("{error}");
+            ExitCode::from(4)
         }
     }
 }
@@ -1038,10 +784,24 @@ enum AnalyzeOutcome {
     Aborted,
 }
 
-fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<AnalyzeOutcome, String> {
+enum AnalyzeError {
+    InvalidContract(String),
+    Incomplete(String),
+}
+
+impl From<String> for AnalyzeError {
+    fn from(error: String) -> Self {
+        Self::Incomplete(error)
+    }
+}
+
+fn analyze_impl(
+    config_path: &str,
+    options: AnalyzeOptions,
+) -> Result<AnalyzeOutcome, AnalyzeError> {
     let config_path = PathBuf::from(config_path);
     let workspace_root = workspace_root_from_config_path(&config_path);
-    let policy = AyniPolicy::load_from_path(&config_path)?;
+    let policy = AyniPolicy::load_from_path(&config_path).map_err(AnalyzeError::InvalidContract)?;
     ensure_analyze_directories(&workspace_root)?;
 
     let AnalyzeOptions { output_mode, debug } = options;
@@ -1258,13 +1018,7 @@ fn build_artifact_metadata(
     planning: &AnalyzePlanning,
     output_mode: OutputArg,
 ) -> Result<RunArtifactMetadata, String> {
-    build_artifact_metadata_for_command(
-        config_path,
-        workspace_root,
-        planning,
-        output_mode,
-        "analyze",
-    )
+    build_artifact_metadata_for_command(config_path, workspace_root, planning, output_mode, "check")
 }
 
 fn build_artifact_metadata_for_command(
