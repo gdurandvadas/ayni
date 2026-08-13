@@ -427,6 +427,62 @@ impl EnvironmentPlan {
 #[serde(transparent)]
 pub struct ResolvedEnvironmentPlan(EnvironmentPlan);
 
+/// Adapter-owned contribution for one target before repository-level plan
+/// aggregation. Construction runs the same deterministic validation as a full
+/// plan without requiring repository identity or a complete target matrix.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EnvironmentContribution {
+    target: TargetEnvironment,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<EnvironmentWarning>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    conflicts: Vec<EnvironmentConflict>,
+}
+
+impl EnvironmentContribution {
+    pub fn new(
+        mut target: TargetEnvironment,
+        mut warnings: Vec<EnvironmentWarning>,
+        mut conflicts: Vec<EnvironmentConflict>,
+    ) -> Result<Self, EnvironmentPlanError> {
+        normalize_target_environment(&mut target)?;
+        let targets = std::slice::from_ref(&target);
+        normalize_warnings(&mut warnings, targets)?;
+        normalize_conflicts(&mut conflicts, targets)?;
+        Ok(Self {
+            target,
+            warnings,
+            conflicts,
+        })
+    }
+
+    #[must_use]
+    pub const fn target(&self) -> &TargetEnvironment {
+        &self.target
+    }
+
+    #[must_use]
+    pub fn warnings(&self) -> &[EnvironmentWarning] {
+        &self.warnings
+    }
+
+    #[must_use]
+    pub fn conflicts(&self) -> &[EnvironmentConflict] {
+        &self.conflicts
+    }
+
+    #[must_use]
+    pub fn into_parts(
+        self,
+    ) -> (
+        TargetEnvironment,
+        Vec<EnvironmentWarning>,
+        Vec<EnvironmentConflict>,
+    ) {
+        (self.target, self.warnings, self.conflicts)
+    }
+}
+
 impl ResolvedEnvironmentPlan {
     #[must_use]
     pub const fn plan(&self) -> &EnvironmentPlan {
@@ -569,7 +625,7 @@ fn normalize_runtime_requirements(
     }
     for runtime in runtimes.iter_mut() {
         runtime.runtime = required_label("runtime", runtime.runtime.clone())?;
-        validate_version_requirement(&runtime.version)?;
+        normalize_version_requirement(&mut runtime.version)?;
         normalize_string_set("runtime component", &mut runtime.components)?;
         normalize_string_set("runtime target", &mut runtime.targets)?;
         normalize_source(&mut runtime.source)?;
@@ -583,7 +639,7 @@ fn normalize_package_manager(
     manager: &mut PackageManagerRequirement,
 ) -> Result<(), EnvironmentPlanError> {
     manager.family = required_label("package manager", manager.family.clone())?;
-    validate_version_requirement(&manager.version)?;
+    normalize_version_requirement(&mut manager.version)?;
     manager.ownership_root =
         normalize_repository_path("package-manager ownership root", &manager.ownership_root)?;
     normalize_source(&mut manager.source)
@@ -594,7 +650,7 @@ fn normalize_signal_tools(
 ) -> Result<(), EnvironmentPlanError> {
     for tool in signal_tools.iter_mut() {
         tool.tool = required_label("signal tool", tool.tool.clone())?;
-        validate_version_requirement(&tool.version)?;
+        normalize_version_requirement(&mut tool.version)?;
         tool.provider = required_label("signal-tool provider", tool.provider.clone())?;
         tool.signals.sort();
         tool.signals.dedup();
@@ -750,25 +806,29 @@ fn repository_components(path: &str) -> Vec<&str> {
     }
 }
 
-fn validate_version_requirement(
-    requirement: &VersionRequirement,
+fn normalize_version_requirement(
+    requirement: &mut VersionRequirement,
 ) -> Result<(), EnvironmentPlanError> {
     match requirement {
         VersionRequirement::Exact { version } => {
-            let version = required_label("exact version", version.clone())?;
-            reject_floating_version(&version)
+            *version = required_label("exact version", std::mem::take(version))?;
+            reject_floating_version(version)
         }
         VersionRequirement::Selector { expression } => {
-            required_label("version selector", expression.clone()).map(drop)
+            *expression = required_label("version selector", std::mem::take(expression))?;
+            Ok(())
         }
         VersionRequirement::Compatibility { expression } => {
-            required_label("version compatibility", expression.clone()).map(drop)
+            *expression = required_label("version compatibility", std::mem::take(expression))?;
+            Ok(())
         }
         VersionRequirement::Minimum { version } => {
-            required_label("minimum version", version.clone()).map(drop)
+            *version = required_label("minimum version", std::mem::take(version))?;
+            Ok(())
         }
         VersionRequirement::Unresolved { reason } => {
-            required_label("unresolved reason", reason.clone()).map(drop)
+            *reason = required_label("unresolved reason", std::mem::take(reason))?;
+            Ok(())
         }
     }
 }
@@ -1240,6 +1300,43 @@ mod tests {
                 "latest"
             )))
         );
+    }
+
+    #[test]
+    fn contribution_normalizes_forged_version_values() {
+        let variants = [
+            VersionRequirement::Exact {
+                version: String::from(" 22.1.0 "),
+            },
+            VersionRequirement::Selector {
+                expression: String::from(" stable "),
+            },
+            VersionRequirement::Compatibility {
+                expression: String::from(" >=20 <23 "),
+            },
+            VersionRequirement::Minimum {
+                version: String::from(" 1.80 "),
+            },
+            VersionRequirement::Unresolved {
+                reason: String::from(" ambiguous sources "),
+            },
+        ];
+        let expected = ["22.1.0", "stable", ">=20 <23", "1.80", "ambiguous sources"];
+
+        for (version, expected) in variants.into_iter().zip(expected) {
+            let contribution =
+                EnvironmentContribution::new(target("apps/web", version), Vec::new(), Vec::new())
+                    .expect("contribution");
+            let serialized = serde_json::to_value(contribution).expect("serialize");
+            let runtime_version = &serialized["target"]["runtimes"][0]["version"];
+            let value = runtime_version
+                .get("version")
+                .or_else(|| runtime_version.get("expression"))
+                .or_else(|| runtime_version.get("reason"))
+                .and_then(serde_json::Value::as_str)
+                .expect("version value");
+            assert_eq!(value, expected);
+        }
     }
 
     #[test]

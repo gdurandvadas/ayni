@@ -9,6 +9,7 @@
 pub mod catalog;
 pub mod collector;
 pub mod discovery;
+pub mod environment;
 pub mod exec;
 pub mod failure;
 pub mod finding;

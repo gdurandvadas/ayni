@@ -132,6 +132,30 @@ report an unsupported optional capability explicitly.
 Core capability types contain semantic data. They do not expose CLI argument
 types, Dockerfile fragments, or `mise` command strings.
 
+### Initial environment-capability boundary
+
+The first environment adapter interface uses these decisions:
+
+- Environment discovery is an optional, separable capability on a language
+  adapter. Quality support does not imply environment support.
+- Each call receives a canonical, containment-checked repository root, one
+  normalized target identity, the enabled signal set, and deterministically
+  ordered requested platforms. Existing target roots, including symlinked
+  roots, must resolve within the canonical repository; missing targets are
+  validated through their nearest existing ancestor.
+- Each result is one validated target contribution plus typed warnings and
+  conflicts. Repository-level aggregation remains outside the adapter.
+- Enabled-signal matching uses **any** semantics: a tool associated with several
+  signals is required when at least one associated signal is enabled. An empty
+  signal association does not make a tool universally required; composite or
+  non-signal requirements must be modeled explicitly.
+- Unsupported capabilities fail explicitly. Request language, capability
+  language, and returned target identity are checked before results enter a
+  plan.
+- The shared conformance harness runs discovery repeatedly, compares canonical
+  serialized contributions, and snapshots the bounded fixture to detect
+  mutation. It does not interpret ecosystem files or execute providers.
+
 ## Non-goals
 
 - Public third-party adapter ABI in the first release.

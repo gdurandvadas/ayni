@@ -4,6 +4,7 @@ pub mod adapter;
 pub mod catalog;
 pub mod comparison;
 pub mod environment;
+pub mod environment_adapter;
 pub mod finding;
 pub mod language;
 pub mod policy;
@@ -29,12 +30,13 @@ pub use comparison::{
 };
 pub use environment::{
     Architecture, DependencyLockRequirement, ENVIRONMENT_PLAN_SCHEMA_VERSION, EnvironmentConflict,
-    EnvironmentPlan, EnvironmentPlanError, EnvironmentWarning, Libc, OperatingSystem,
-    PackageManagerRequirement, ProvisioningSupport, RepositoryIdentity, RequirementConfidence,
-    RequirementSource, ResolvedEnvironmentPlan, RuntimeRequirement, SignalToolRequirement,
-    SystemRequirement, SystemRequirementKind, TargetEnvironment, TargetIdentity, TargetPlatform,
-    ToolInstallationScope, VersionRequirement,
+    EnvironmentContribution, EnvironmentPlan, EnvironmentPlanError, EnvironmentWarning, Libc,
+    OperatingSystem, PackageManagerRequirement, ProvisioningSupport, RepositoryIdentity,
+    RequirementConfidence, RequirementSource, ResolvedEnvironmentPlan, RuntimeRequirement,
+    SignalToolRequirement, SystemRequirement, SystemRequirementKind, TargetEnvironment,
+    TargetIdentity, TargetPlatform, ToolInstallationScope, VersionRequirement,
 };
+pub use environment_adapter::{EnvironmentCapability, EnvironmentDiscoveryRequest};
 pub use language::Language;
 pub use policy::{
     AYNI_POLICY_FILE, AyniPolicy, ComplexityPolicy, ConcurrencyPolicy, CoveragePolicy, DepsPolicy,
