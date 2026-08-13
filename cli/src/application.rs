@@ -17,7 +17,7 @@ pub(crate) enum ExecutionMode {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Operation {
     Init(RepositoryOperation),
-    EnvShow(RepositoryOperation),
+    EnvShow(EnvShowOperation),
     EnvDoctor(RepositoryOperation),
     EnvLock(RepositoryOperation),
     EnvBuild(RepositoryOperation),
@@ -38,6 +38,13 @@ pub(crate) enum Operation {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RepositoryOperation {
     pub repo_root: PathBuf,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct EnvShowOperation {
+    pub config: PathBuf,
+    pub repo_root: PathBuf,
+    pub output: OutputFormat,
 }
 
 #[derive(Debug, PartialEq, Eq)]

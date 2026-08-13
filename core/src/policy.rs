@@ -150,12 +150,31 @@ impl AyniPolicy {
     pub fn load_from_path(config_path: &Path) -> Result<Self, String> {
         let content = fs::read_to_string(config_path)
             .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
-        let mut policy = toml::from_str::<Self>(&content)
-            .map_err(|error| format!("failed to parse {}: {error}", config_path.display()))?;
-        policy
-            .normalize_and_validate()
-            .map_err(|error| format!("failed to parse {}: {error}", config_path.display()))?;
+        Self::parse(&content)
+            .map_err(|error| format!("failed to parse {}: {error}", config_path.display()))
+    }
+
+    /// Parse and normalize one policy snapshot already read by the caller.
+    /// This lets consumers hash and interpret the exact same bytes.
+    pub fn parse(content: &str) -> Result<Self, String> {
+        let mut policy = toml::from_str::<Self>(content).map_err(|error| error.to_string())?;
+        policy.normalize_and_validate()?;
         Ok(policy)
+    }
+
+    #[must_use]
+    pub fn enabled_signals(&self) -> Vec<SignalKind> {
+        [
+            (self.checks.test, SignalKind::Test),
+            (self.checks.coverage, SignalKind::Coverage),
+            (self.checks.size, SignalKind::Size),
+            (self.checks.complexity, SignalKind::Complexity),
+            (self.checks.deps, SignalKind::Deps),
+            (self.checks.mutation, SignalKind::Mutation),
+        ]
+        .into_iter()
+        .filter_map(|(enabled, signal)| enabled.then_some(signal))
+        .collect()
     }
 
     /// Whether this language's adapter should run.

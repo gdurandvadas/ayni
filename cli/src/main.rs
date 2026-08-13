@@ -14,6 +14,7 @@ mod artifact_compare;
 mod completion;
 mod contract;
 mod discovery;
+mod environment;
 mod ui;
 mod verification_command;
 mod verify;
@@ -60,6 +61,7 @@ fn dispatch(operation: application::Operation) -> ExitCode {
         ),
         Operation::ContractValidate(operation) => contract_validate(&operation.config),
         Operation::AgentsSync(operation) => agents_sync(&operation.repo_root),
+        Operation::EnvShow(operation) => environment::show(operation, &build_registry()),
         Operation::ResultsCompare(operation) => artifact_compare::run(
             &operation.baseline,
             &operation.candidate,

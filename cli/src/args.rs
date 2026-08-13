@@ -1,7 +1,7 @@
 use crate::application::{
-    CheckOperation, ContractOperation, EnvRunOperation, ExecutionMode, ImpactOperation, Operation,
-    OutputFormat, RepositoryOperation, ResultsCompareOperation, ResultsShowOperation,
-    VerifyOperation,
+    CheckOperation, ContractOperation, EnvRunOperation, EnvShowOperation, ExecutionMode,
+    ImpactOperation, Operation, OutputFormat, RepositoryOperation, ResultsCompareOperation,
+    ResultsShowOperation, VerifyOperation,
 };
 use ayni_core::{Language, SignalKind};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -87,7 +87,7 @@ impl Commands {
 #[derive(Subcommand, Debug)]
 enum EnvCommands {
     /// Explain the resolved environment plan without modifying state.
-    Show(RepositoryOptions),
+    Show(EnvShowOptions),
     /// Diagnose missing, conflicting, unsupported, or stale environment state.
     Doctor(RepositoryOptions),
     /// Resolve exact environment requirements into the committed lock.
@@ -103,7 +103,7 @@ enum EnvCommands {
 impl EnvCommands {
     fn into_operation(self) -> Operation {
         match self {
-            Self::Show(options) => Operation::EnvShow(options.into()),
+            Self::Show(options) => Operation::EnvShow(options.into_operation()),
             Self::Doctor(options) => Operation::EnvDoctor(options.into()),
             Self::Lock(options) => Operation::EnvLock(options.into()),
             Self::Build(options) => Operation::EnvBuild(options.into()),
@@ -254,6 +254,29 @@ impl From<RepositoryOptions> for RepositoryOperation {
     fn from(options: RepositoryOptions) -> Self {
         Self {
             repo_root: options.repo_root,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct EnvShowOptions {
+    /// Policy configuration file, resolved under the repository root.
+    #[arg(long, default_value = DEFAULT_CONFIG)]
+    config: PathBuf,
+    /// Repository root that contains the policy and configured targets.
+    #[arg(long, default_value = ".")]
+    repo_root: PathBuf,
+    /// Render a human-readable plan or one JSON document.
+    #[arg(long, value_enum, default_value_t)]
+    output: DataOutputArg,
+}
+
+impl EnvShowOptions {
+    fn into_operation(self) -> EnvShowOperation {
+        EnvShowOperation {
+            config: self.config,
+            repo_root: self.repo_root,
+            output: self.output.into(),
         }
     }
 }

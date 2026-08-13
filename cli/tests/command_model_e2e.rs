@@ -6,15 +6,21 @@ fn ayni() -> Command {
 
 #[test]
 fn unavailable_greenfield_operations_use_incomplete_exit_and_clean_stdout() {
-    let output = ayni().args(["env", "show"]).output().expect("launch ayni");
-
-    assert_eq!(output.status.code(), Some(4));
-    assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("is not implemented yet"),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    for arguments in [
+        ["env", "doctor"],
+        ["env", "lock"],
+        ["env", "build"],
+        ["env", "shell"],
+    ] {
+        let output = ayni().args(arguments).output().expect("launch ayni");
+        assert_eq!(output.status.code(), Some(4));
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("is not implemented yet"),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]

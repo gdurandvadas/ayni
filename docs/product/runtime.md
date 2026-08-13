@@ -47,10 +47,12 @@ Every analyzed root records:
 
 ## Environment provisioning status
 
-The clean-slate `init` and `env` command vocabulary is active, but repository
-initialization, environment planning, readiness diagnosis, locking, and managed
-environment builds are not implemented yet. These commands return an explicit
-unavailable result and do not reuse the removed `install` behavior.
+The clean-slate `init` and `env` command vocabulary is active. `env show` now
+builds a read-only, deterministic environment plan for configured Rust and Node
+targets. Repository initialization, readiness diagnosis, locking, managed
+environment builds, and environment support for Go, Python, and Kotlin are not
+implemented yet. Those unavailable operations do not reuse the removed
+`install` behavior.
 
 Until the environment projects are complete, quality execution requires the
 explicit `--host` escape hatch. Host mode retains adapter-owned runner

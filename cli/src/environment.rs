@@ -1,0 +1,516 @@
+use crate::application::{EnvShowOperation, OutputFormat};
+use ayni_core::{
+    AdapterRegistry, Architecture, AyniPolicy, EnvironmentDiscoveryRequest, EnvironmentPlan, Libc,
+    OperatingSystem, RepositoryIdentity, TargetIdentity, TargetPlatform,
+};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
+use std::fmt::Write;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+#[derive(Debug)]
+struct ShowError {
+    code: u8,
+    message: String,
+}
+
+impl ShowError {
+    fn input(message: impl Into<String>) -> Self {
+        Self {
+            code: 2,
+            message: message.into(),
+        }
+    }
+
+    fn environment(message: impl Into<String>) -> Self {
+        Self {
+            code: 3,
+            message: message.into(),
+        }
+    }
+}
+
+pub(crate) fn show(operation: EnvShowOperation, registry: &AdapterRegistry) -> ExitCode {
+    match build_plan(&operation, registry) {
+        Ok(plan) => {
+            match operation.output {
+                OutputFormat::Json => match serde_json::to_string_pretty(&plan) {
+                    Ok(output) => println!("{output}"),
+                    Err(error) => {
+                        eprintln!("failed to render environment plan: {error}");
+                        return ExitCode::from(4);
+                    }
+                },
+                OutputFormat::Human => print_human(&plan),
+                OutputFormat::Markdown => unreachable!("env show does not accept markdown output"),
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{}", error.message);
+            ExitCode::from(error.code)
+        }
+    }
+}
+
+fn build_plan(
+    operation: &EnvShowOperation,
+    registry: &AdapterRegistry,
+) -> Result<EnvironmentPlan, ShowError> {
+    let (repo_root, config, config_bytes, policy) = load_context(operation)?;
+    let platforms = default_platforms();
+    let (targets, warnings, conflicts) =
+        discover_targets(&repo_root, &policy, &platforms, registry)?;
+    EnvironmentPlan::new(
+        repository_identity(&repo_root, &config_bytes)?,
+        platforms,
+        targets,
+        warnings,
+        conflicts,
+    )
+    .map_err(|error| {
+        ShowError::environment(format!(
+            "failed to aggregate environment plan from {}: {error}",
+            config.display()
+        ))
+    })
+}
+
+fn load_context(
+    operation: &EnvShowOperation,
+) -> Result<(PathBuf, PathBuf, Vec<u8>, AyniPolicy), ShowError> {
+    let repo_root = operation.repo_root.canonicalize().map_err(|error| {
+        ShowError::input(format!(
+            "failed to establish repository root {}: {error}",
+            operation.repo_root.display()
+        ))
+    })?;
+    if !repo_root.is_dir() {
+        return Err(ShowError::input(format!(
+            "repository root is not a directory: {}",
+            repo_root.display()
+        )));
+    }
+    let config = resolve_config_path(&repo_root, &operation.config)?;
+    let config_bytes = fs::read(&config).map_err(|error| {
+        ShowError::input(format!("failed to read {}: {error}", config.display()))
+    })?;
+    let config_content = std::str::from_utf8(&config_bytes).map_err(|error| {
+        ShowError::input(format!(
+            "failed to parse {} as UTF-8: {error}",
+            config.display()
+        ))
+    })?;
+    let policy = AyniPolicy::parse(config_content).map_err(|error| {
+        ShowError::input(format!(
+            "failed to load environment configuration {}: {error}",
+            config.display()
+        ))
+    })?;
+    Ok((repo_root, config, config_bytes, policy))
+}
+
+type DiscoveryParts = (
+    Vec<ayni_core::TargetEnvironment>,
+    Vec<ayni_core::EnvironmentWarning>,
+    Vec<ayni_core::EnvironmentConflict>,
+);
+
+fn discover_targets(
+    repo_root: &Path,
+    policy: &AyniPolicy,
+    platforms: &[TargetPlatform],
+    registry: &AdapterRegistry,
+) -> Result<DiscoveryParts, ShowError> {
+    let enabled_signals = policy.enabled_signals();
+    let mut seen = BTreeSet::new();
+    let mut targets = Vec::new();
+    let mut warnings = Vec::new();
+    let mut conflicts = Vec::new();
+    for language in policy
+        .enabled_languages()
+        .map_err(|error| ShowError::input(format!("invalid environment configuration: {error}")))?
+    {
+        reject_tool_overrides(policy, language, &enabled_signals)?;
+        let adapter = registry
+            .adapters()
+            .iter()
+            .find(|adapter| adapter.language() == language)
+            .ok_or_else(|| {
+                ShowError::environment(format!(
+                    "{language} adapter is not registered for environment discovery"
+                ))
+            })?;
+        for root in policy.roots_for(language) {
+            let identity = TargetIdentity::new(language, root).map_err(|error| {
+                ShowError::input(format!(
+                    "invalid environment target {language}:{root}: {error}"
+                ))
+            })?;
+            if !seen.insert(identity.clone()) {
+                continue;
+            }
+            ensure_detected(repo_root, root, adapter.as_ref())?;
+            let request = EnvironmentDiscoveryRequest::new(
+                repo_root.to_path_buf(),
+                identity,
+                enabled_signals.iter().copied(),
+                platforms.to_vec(),
+            )
+            .map_err(|error| ShowError::environment(error.to_string()))?;
+            let contribution = adapter
+                .discover_environment(&request)
+                .map_err(|error| ShowError::environment(error.to_string()))?;
+            let (target, contribution_warnings, contribution_conflicts) = contribution.into_parts();
+            targets.push(target);
+            warnings.extend(contribution_warnings);
+            conflicts.extend(contribution_conflicts);
+        }
+    }
+    Ok((targets, warnings, conflicts))
+}
+
+fn reject_tool_overrides(
+    policy: &AyniPolicy,
+    language: ayni_core::Language,
+    signals: &[ayni_core::SignalKind],
+) -> Result<(), ShowError> {
+    if let Some(signal) = signals
+        .iter()
+        .find(|signal| policy.tool_override_for(language, **signal).is_some())
+    {
+        return Err(ShowError::environment(format!(
+            "environment planning does not yet support the configured {language} {signal:?} tool override"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_detected(
+    repo_root: &Path,
+    root: &str,
+    adapter: &dyn ayni_core::LanguageAdapter,
+) -> Result<(), ShowError> {
+    let target_root = if root == "." {
+        repo_root.to_path_buf()
+    } else {
+        repo_root.join(root)
+    };
+    let detection = adapter.detect(&target_root);
+    if detection.detected {
+        return Ok(());
+    }
+    Err(ShowError::environment(detection.reason.unwrap_or_else(
+        || {
+            format!(
+                "configured {} target {root} was not detected at {}",
+                adapter.language(),
+                target_root.display()
+            )
+        },
+    )))
+}
+
+fn repository_identity(
+    repo_root: &Path,
+    config_bytes: &[u8],
+) -> Result<RepositoryIdentity, ShowError> {
+    let name = repo_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            ShowError::input(format!(
+                "repository root has no usable final component: {}",
+                repo_root.display()
+            ))
+        })?
+        .to_owned();
+    Ok(RepositoryIdentity {
+        name,
+        contract_digest: format!("{:x}", Sha256::digest(config_bytes)),
+    })
+}
+
+fn resolve_config_path(repo_root: &Path, configured: &Path) -> Result<PathBuf, ShowError> {
+    let candidate = if configured.is_absolute() {
+        configured.to_path_buf()
+    } else {
+        repo_root.join(configured)
+    };
+    let config = candidate.canonicalize().map_err(|error| {
+        ShowError::input(format!(
+            "failed to resolve config {}: {error}",
+            candidate.display()
+        ))
+    })?;
+    if !config.starts_with(repo_root) {
+        return Err(ShowError::input(format!(
+            "config {} escapes repository root {}",
+            config.display(),
+            repo_root.display()
+        )));
+    }
+    if !config.is_file() {
+        return Err(ShowError::input(format!(
+            "config is not a file: {}",
+            config.display()
+        )));
+    }
+    Ok(config)
+}
+
+fn default_platforms() -> Vec<TargetPlatform> {
+    vec![
+        TargetPlatform {
+            os: OperatingSystem::Linux,
+            architecture: Architecture::Amd64,
+            libc: Libc::Glibc,
+        },
+        TargetPlatform {
+            os: OperatingSystem::Linux,
+            architecture: Architecture::Arm64,
+            libc: Libc::Glibc,
+        },
+    ]
+}
+
+fn print_human(plan: &EnvironmentPlan) {
+    let mut output = String::new();
+    writeln!(output, "environment plan {}", plan.repository().name).expect("string write");
+    writeln!(
+        output,
+        "contract digest: {}",
+        plan.repository().contract_digest
+    )
+    .expect("string write");
+    render_platforms(&mut output, plan);
+    render_targets(&mut output, plan);
+    render_diagnostics(&mut output, plan);
+    print!("{output}");
+}
+
+fn render_platforms(output: &mut String, plan: &EnvironmentPlan) {
+    writeln!(output, "platforms:").expect("string write");
+    for platform in plan.platforms() {
+        writeln!(
+            output,
+            "  - {:?}/{:?}/{:?}",
+            platform.os, platform.architecture, platform.libc
+        )
+        .expect("string write");
+    }
+}
+
+fn render_targets(output: &mut String, plan: &EnvironmentPlan) {
+    writeln!(output, "targets:").expect("string write");
+    for target in plan.targets() {
+        writeln!(
+            output,
+            "  - {}:{}",
+            target.target.language, target.target.root
+        )
+        .expect("string write");
+        render_target_context(output, target);
+        render_target_requirements(output, target);
+    }
+}
+
+fn render_target_context(output: &mut String, target: &ayni_core::TargetEnvironment) {
+    if let Some(workspace) = &target.workspace {
+        writeln!(output, "    workspace: {workspace}").expect("string write");
+    }
+    if let Some(package) = &target.package {
+        writeln!(output, "    package: {package}").expect("string write");
+    }
+}
+
+fn render_target_requirements(output: &mut String, target: &ayni_core::TargetEnvironment) {
+    for runtime in &target.runtimes {
+        writeln!(
+            output,
+            "    runtime: {} {:?} [{} {} {:?}]",
+            runtime.runtime,
+            runtime.version,
+            runtime.source.kind,
+            runtime.source.path,
+            runtime.source.confidence
+        )
+        .expect("string write");
+        if !runtime.components.is_empty() {
+            writeln!(
+                output,
+                "      components: {}",
+                runtime.components.join(", ")
+            )
+            .expect("string write");
+        }
+        if !runtime.targets.is_empty() {
+            writeln!(output, "      targets: {}", runtime.targets.join(", "))
+                .expect("string write");
+        }
+    }
+    render_package_manager(output, target.package_manager.as_ref());
+    for tool in &target.signal_tools {
+        writeln!(
+            output,
+            "    tool: {} {:?} provider={} scope={:?} provisioning={:?} modifies_checkout={} signals={:?} [{} {} {:?}]",
+            tool.tool,
+            tool.version,
+            tool.provider,
+            tool.scope,
+            tool.provisioning,
+            tool.modifies_checkout,
+            tool.signals,
+            tool.source.kind,
+            tool.source.path,
+            tool.source.confidence
+        )
+        .expect("string write");
+    }
+    for requirement in &target.system_requirements {
+        writeln!(
+            output,
+            "    system: {:?} {} provisioning={:?} [{} {} {:?}]",
+            requirement.kind,
+            requirement.name,
+            requirement.provisioning,
+            requirement.source.kind,
+            requirement.source.path,
+            requirement.source.confidence
+        )
+        .expect("string write");
+    }
+    for lock in &target.dependency_locks {
+        writeln!(
+            output,
+            "    dependency lock: {} {} owner={} [{} {} {:?}]",
+            lock.path,
+            lock.digest,
+            lock.owner_root,
+            lock.source.kind,
+            lock.source.path,
+            lock.source.confidence
+        )
+        .expect("string write");
+    }
+}
+
+fn render_package_manager(
+    output: &mut String,
+    manager: Option<&ayni_core::PackageManagerRequirement>,
+) {
+    let Some(manager) = manager else {
+        return;
+    };
+    writeln!(
+        output,
+        "    package manager: {} {:?} owner={} [{} {} {:?}]",
+        manager.family,
+        manager.version,
+        manager.ownership_root,
+        manager.source.kind,
+        manager.source.path,
+        manager.source.confidence
+    )
+    .expect("string write");
+}
+
+fn render_diagnostics(output: &mut String, plan: &EnvironmentPlan) {
+    if !plan.warnings().is_empty() {
+        writeln!(output, "warnings:").expect("string write");
+        for warning in plan.warnings() {
+            writeln!(output, "  - {}: {}", warning.code, warning.message).expect("string write");
+        }
+    }
+    if !plan.conflicts().is_empty() {
+        writeln!(output, "conflicts:").expect("string write");
+        for conflict in plan.conflicts() {
+            writeln!(output, "  - {}: {}", conflict.code, conflict.message).expect("string write");
+            for source in &conflict.sources {
+                let detail = source
+                    .detail
+                    .as_deref()
+                    .map(|detail| format!(" ({detail})"))
+                    .unwrap_or_default();
+                writeln!(
+                    output,
+                    "      source: {} {} {:?}{detail}",
+                    source.kind, source.path, source.confidence
+                )
+                .expect("string write");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ayni_adapters_node::NodeAdapter;
+    use ayni_adapters_rust::RustAdapter;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn registry() -> AdapterRegistry {
+        let mut registry = AdapterRegistry::new();
+        registry.register(Arc::new(RustAdapter::new()));
+        registry.register(Arc::new(NodeAdapter::new()));
+        registry
+    }
+
+    #[test]
+    fn aggregates_mixed_targets_deterministically_without_writes() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join(".ayni.toml"), "[checks]\ntest = true\n[languages]\nenabled = [\"node\", \"rust\", \"node\"]\n[rust]\nroots = [\"rust\"]\n[node]\nroots = [\"node\"]\n").unwrap();
+        fs::create_dir(temp.path().join("rust")).unwrap();
+        fs::write(
+            temp.path().join("rust/Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::create_dir(temp.path().join("node")).unwrap();
+        fs::write(
+            temp.path().join("node/package.json"),
+            "{\"name\":\"x\",\"engines\":{\"node\":\">=20\"}} ",
+        )
+        .unwrap();
+        let operation = EnvShowOperation {
+            config: PathBuf::from(".ayni.toml"),
+            repo_root: temp.path().to_path_buf(),
+            output: OutputFormat::Json,
+        };
+        let one = build_plan(&operation, &registry()).unwrap();
+        let two = build_plan(&operation, &registry()).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&one).unwrap(),
+            serde_json::to_vec(&two).unwrap()
+        );
+        assert_eq!(one.targets().len(), 2);
+        assert!(!temp.path().join(".ayni").exists());
+    }
+
+    #[test]
+    fn rejects_config_escape() {
+        let temp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        fs::write(
+            outside.path().join("policy.toml"),
+            "[languages]\nenabled = [\"rust\"]",
+        )
+        .unwrap();
+        let operation = EnvShowOperation {
+            config: outside.path().join("policy.toml"),
+            repo_root: temp.path().to_path_buf(),
+            output: OutputFormat::Human,
+        };
+        assert!(
+            build_plan(&operation, &registry())
+                .unwrap_err()
+                .message
+                .contains("escapes repository root")
+        );
+    }
+}

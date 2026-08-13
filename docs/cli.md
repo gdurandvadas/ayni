@@ -91,9 +91,22 @@ Explain the resolved environment plan without modifying state
 
 ###### **Options:**
 
-* `--repo-root <REPO_ROOT>`
+* `--config <CONFIG>` — Policy configuration file, resolved under the repository root
+
+  Default value: `./.ayni.toml`
+* `--repo-root <REPO_ROOT>` — Repository root that contains the policy and configured targets
 
   Default value: `.`
+* `--output <OUTPUT>` — Render a human-readable plan or one JSON document
+
+  Default value: `human`
+
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+
 
 
 

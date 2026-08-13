@@ -10,6 +10,7 @@ use ayni_core::{
     ProvisioningSupport, RequirementConfidence, RequirementSource, RuntimeRequirement, SignalKind,
     SignalToolRequirement, TargetEnvironment, ToolInstallationScope, VersionRequirement,
 };
+use glob::Pattern;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -257,8 +258,13 @@ fn workspace_root(repo_root: &Path, target_root: &Path) -> Result<PathBuf, Adapt
     let mut current = target_root;
     loop {
         let manifest = current.join("Cargo.toml");
-        if manifest.is_file() && read_toml(repo_root, &manifest)?.get("workspace").is_some() {
-            return Ok(current.to_path_buf());
+        if manifest.is_file() {
+            let value = read_toml(repo_root, &manifest)?;
+            if let Some(workspace) = value.get("workspace")
+                && workspace_contains_target(workspace, current, target_root, &manifest)?
+            {
+                return Ok(current.to_path_buf());
+            }
         }
         if current == repo_root {
             return Ok(target_root.to_path_buf());
@@ -270,6 +276,65 @@ fn workspace_root(repo_root: &Path, target_root: &Path) -> Result<PathBuf, Adapt
                 adapter_error("Rust target has no repository-contained workspace ancestor")
             })?;
     }
+}
+
+fn workspace_contains_target(
+    workspace: &toml::Value,
+    workspace_root: &Path,
+    target_root: &Path,
+    manifest: &Path,
+) -> Result<bool, AdapterError> {
+    if workspace_root == target_root {
+        return Ok(true);
+    }
+    let relative_target = target_root
+        .strip_prefix(workspace_root)
+        .map_err(|_| adapter_error("Rust target escapes workspace root"))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let members = workspace_patterns(workspace.get("members"), manifest, "members")?;
+    let excludes = workspace_patterns(workspace.get("exclude"), manifest, "exclude")?;
+    if excludes
+        .iter()
+        .any(|pattern| pattern.matches(&relative_target))
+    {
+        return Ok(false);
+    }
+    Ok(members
+        .iter()
+        .any(|pattern| pattern.matches(&relative_target)))
+}
+
+fn workspace_patterns(
+    value: Option<&toml::Value>,
+    manifest: &Path,
+    field: &str,
+) -> Result<Vec<Pattern>, AdapterError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let values = value.as_array().ok_or_else(|| {
+        adapter_error(format!(
+            "{} workspace.{field} must be an array of strings",
+            manifest.display()
+        ))
+    })?;
+    values
+        .iter()
+        .map(|value| {
+            let pattern = value.as_str().ok_or_else(|| {
+                adapter_error(format!(
+                    "{} workspace.{field} must contain only strings",
+                    manifest.display()
+                ))
+            })?;
+            Pattern::new(pattern).map_err(|error| {
+                adapter_error(format!(
+                    "invalid Cargo workspace {field} pattern {pattern}: {error}"
+                ))
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -669,6 +734,28 @@ mod tests {
             VersionRequirement::minimum("1.78").expect("minimum")
         );
         assert_eq!(contribution.target().runtimes[0].source.path, "Cargo.toml");
+    }
+
+    #[test]
+    fn excluded_or_unlisted_package_is_not_claimed_by_workspace() {
+        for workspace in [
+            "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"crates/app\"]\n[workspace.package]\nrust-version = \"1.78\"\n",
+            "[workspace]\nmembers = [\"crates/other\"]\n[workspace.package]\nrust-version = \"1.78\"\n",
+        ] {
+            let fixture = TempDir::new().expect("fixture");
+            manifest(fixture.path(), workspace);
+            fs::create_dir_all(fixture.path().join("crates/app")).expect("package directory");
+            manifest(
+                &fixture.path().join("crates/app"),
+                "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+            );
+            let contribution = discover(fixture.path(), "crates/app", Vec::new());
+            assert_eq!(contribution.target().workspace, None);
+            assert!(matches!(
+                contribution.target().runtimes[0].version,
+                VersionRequirement::Unresolved { .. }
+            ));
+        }
     }
 
     #[test]
