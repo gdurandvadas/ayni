@@ -10,8 +10,10 @@ has `[package]`. Cargo commands for a member run from its workspace root.
 `cargo` and a Rust toolchain remain user-owned prerequisites for `--host`
 execution. `ayni env show` discovers Rust requirements and `ayni env lock`
 resolves exact runtime and Cargo catalog-tool versions through `mise`; locking
-does not install tools or modify the checkout. Managed environment builds are
-not implemented yet.
+does not install tools or modify the checkout. `env build`, `env doctor`, `env
+shell`, and `env run` consume the lock through the OCI backend. Native Cargo
+dependency warming and managed quality execution remain deferred, so `check`
+and `verify` still require `--host`.
 
 ## Signal Coverage
 

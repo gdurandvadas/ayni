@@ -1,6 +1,6 @@
 use crate::{BackendError, concise_output};
 use ayni_adapters_common::exec::run_command;
-use ayni_core::{Architecture, EnvironmentLock, ProvisioningBase};
+use ayni_core::{Architecture, EnvironmentLock, EnvironmentPlan, ProvisioningBase};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::env;
@@ -84,6 +84,62 @@ fn inspect_remote_digest(reference: &str) -> Result<String, BackendError> {
     Ok(digest.to_ascii_lowercase())
 }
 
+/// Compare current adapter discovery with a validated lock without requiring
+/// unresolved selectors to equal their locked exact versions.
+pub fn plan_matches_lock(plan: &EnvironmentPlan, lock: &EnvironmentLock) -> bool {
+    plan.repository().contract_digest == lock.repository().contract_digest
+        && plan.targets().len() == lock.targets().len()
+        && plan
+            .targets()
+            .iter()
+            .zip(lock.targets())
+            .all(|(plan, locked)| {
+                plan.target == locked.target
+                    && plan.runtimes.len() == locked.runtimes.len()
+                    && plan
+                        .runtimes
+                        .iter()
+                        .zip(&locked.runtimes)
+                        .all(|(left, right)| {
+                            left.runtime == right.runtime
+                                && left.components == right.components
+                                && left.targets == right.targets
+                                && left.source.path == right.source.path
+                        })
+                    && match (&plan.package_manager, &locked.package_manager) {
+                        (None, None) => true,
+                        (Some(left), Some(right)) => {
+                            left.family == right.family
+                                && left.ownership_root == right.ownership_root
+                                && left.source.path == right.source.path
+                        }
+                        _ => false,
+                    }
+                    && plan.signal_tools.len() == locked.signal_tools.len()
+                    && plan
+                        .signal_tools
+                        .iter()
+                        .zip(&locked.signal_tools)
+                        .all(|(left, right)| {
+                            left.tool == right.tool
+                                && left.provider == right.provider
+                                && left.scope == right.scope
+                                && left.signals == right.signals
+                                && left.source.path == right.source.path
+                        })
+                    && plan.dependency_locks.len() == locked.dependency_locks.len()
+                    && plan
+                        .dependency_locks
+                        .iter()
+                        .zip(&locked.dependency_locks)
+                        .all(|(left, right)| {
+                            left.path == right.path
+                                && left.digest == right.digest
+                                && left.owner_root == right.owner_root
+                        })
+            })
+}
+
 pub fn read_lock(repo_root: &Path) -> Result<EnvironmentLock, BackendError> {
     let path = repo_root.join(LOCK_FILE);
     let metadata = fs::symlink_metadata(&path).map_err(|error| {
@@ -152,14 +208,15 @@ fn validate_lock(repo_root: &Path, lock: &EnvironmentLock) -> Result<(), Backend
             }
         }
     }
+    let host_architecture = host_architecture()?;
     if !lock
         .platforms()
         .iter()
-        .any(|platform| platform.architecture == host_architecture())
+        .any(|platform| platform.architecture == host_architecture)
     {
         return Err(BackendError::environment(format!(
             "environment lock does not support the host architecture {}",
-            platform_architecture(host_architecture())
+            platform_architecture(host_architecture)
         )));
     }
     Ok(())
@@ -198,14 +255,17 @@ fn digest_contained_file(repo_root: &Path, path: &Path) -> Result<String, Backen
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
-pub(crate) fn host_architecture() -> Architecture {
-    #[cfg(target_arch = "aarch64")]
-    {
-        Architecture::Arm64
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        Architecture::Amd64
+pub(crate) fn host_architecture() -> Result<Architecture, BackendError> {
+    architecture_from_name(env::consts::ARCH)
+}
+
+fn architecture_from_name(value: &str) -> Result<Architecture, BackendError> {
+    match value {
+        "x86_64" => Ok(Architecture::Amd64),
+        "aarch64" => Ok(Architecture::Arm64),
+        unsupported => Err(BackendError::environment(format!(
+            "unsupported host architecture {unsupported}; managed environments support x86_64 and aarch64"
+        ))),
     }
 }
 
@@ -238,5 +298,29 @@ fn validate_digest(digest: &str) -> Result<(), BackendError> {
         Err(BackendError::input(
             "OCI base digest must be sha256 followed by 64 hexadecimal characters",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_architecture_mapping_rejects_unsupported_targets() {
+        assert_eq!(
+            architecture_from_name("x86_64").expect("amd64"),
+            Architecture::Amd64
+        );
+        assert_eq!(
+            architecture_from_name("aarch64").expect("arm64"),
+            Architecture::Arm64
+        );
+        let error = architecture_from_name("riscv64").expect_err("unsupported architecture");
+        assert_eq!(error.code, 3);
+        assert!(
+            error
+                .message
+                .contains("unsupported host architecture riscv64")
+        );
     }
 }

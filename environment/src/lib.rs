@@ -8,7 +8,10 @@ mod lock;
 mod runtime;
 
 pub use image::{ImagePlan, image_plan};
-pub use lock::{BASE_MISE_VERSION, BASE_VARIANT, LOCK_FILE, read_lock, resolve_provisioning_base};
+pub use lock::{
+    BASE_MISE_VERSION, BASE_VARIANT, LOCK_FILE, plan_matches_lock, read_lock,
+    resolve_provisioning_base,
+};
 pub use runtime::{Engine, TargetSelection, build, detect_engine, doctor, launch};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

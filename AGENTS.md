@@ -41,13 +41,13 @@ cargo doc-cli > docs/cli.md
 
 ## Invariants
 
-- Keep one-way dependency flow: `core` <- `adapters/common` <- `adapters/<lang>` <- `cli`.
+- Keep one-way dependency flow: `core` <- `adapters/common` <- `adapters/<lang>` <- `cli`, with the parallel backend path `core` <- `adapters/common` <- `environment` <- `cli`.
 - Keep language-specific detection, root discovery, package-manager resolution,
   tool catalogs, and collector behavior inside the owning language adapter.
   The CLI may orchestrate adapters but must not hard-code language-specific
   root markers, lockfiles, package managers, or tool behavior.
-- Keep `install` and `analyze` runnable from the repository checkout with local
-  artifacts.
+- Keep `env` lifecycle commands and `check --host` runnable from the repository
+  checkout with local artifacts.
 - Keep the repository-agent quality contract in `.ayni.toml` at repo root.
 - Keep `.ayni/` generated artifacts out of source control.
 - Keep workspace checks runnable from repository root.

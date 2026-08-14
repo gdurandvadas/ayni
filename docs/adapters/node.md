@@ -7,14 +7,17 @@ manager, and signal tools when using `--host`. `ayni env show` discovers Node
 requirements, and `ayni env lock` resolves runtime/package-manager ranges using
 `mise` candidates while reading exact project-tool versions from
 `package-lock.json`. Locking does not install dependencies or modify the
-checkout; managed environment builds are not implemented yet.
+checkout. `env build`, `env doctor`, `env shell`, and `env run` consume the lock
+through the OCI backend. Native package-store warming, offline dependency
+materialization, and managed quality execution remain deferred, so `check` and
+`verify` still require `--host`.
 
 ## Signal Coverage
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | `vitest` | pinned to 3.2.4 when Ayni installs it |
-| `coverage` | `vitest`; `@vitest/coverage-v8` | each package pinned to 3.2.4 when Ayni installs it |
+| `test` | `vitest` | exact project version is read from `package-lock.json` during environment locking; no host version enforced |
+| `coverage` | `vitest`; `@vitest/coverage-v8` | exact project versions are read from `package-lock.json` during environment locking; no host version enforced |
 | `size` | built-in Node source scan | no version enforced |
 | `complexity` | `eslint`; `@stylistic/eslint-plugin` | no version enforced |
 | `deps` | package and workspace manifest graph | no version enforced |

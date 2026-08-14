@@ -1,7 +1,7 @@
 use crate::application::{
     EnvRunOperation, EnvShellOperation, EnvShowOperation, OutputFormat, RepositoryOperation,
 };
-use ayni_core::{AdapterRegistry, EnvironmentLock};
+use ayni_core::AdapterRegistry;
 use ayni_environment::TargetSelection;
 use std::path::Path;
 use std::process::ExitCode;
@@ -98,7 +98,7 @@ fn ensure_current_plan(
             ),
         }
     })?;
-    if plan.conflicts().is_empty() && plan_matches_lock(&plan, &lock) {
+    if plan.conflicts().is_empty() && ayni_environment::plan_matches_lock(&plan, &lock) {
         Ok(())
     } else {
         Err(ayni_environment::BackendError {
@@ -108,60 +108,6 @@ fn ensure_current_plan(
             ),
         })
     }
-}
-
-fn plan_matches_lock(plan: &ayni_core::EnvironmentPlan, lock: &EnvironmentLock) -> bool {
-    if plan.targets().len() != lock.targets().len() {
-        return false;
-    }
-    plan.targets()
-        .iter()
-        .zip(lock.targets())
-        .all(|(plan, locked)| {
-            plan.target == locked.target
-                && plan.runtimes.len() == locked.runtimes.len()
-                && plan
-                    .runtimes
-                    .iter()
-                    .zip(&locked.runtimes)
-                    .all(|(left, right)| {
-                        left.runtime == right.runtime
-                            && left.components == right.components
-                            && left.targets == right.targets
-                            && left.source.path == right.source.path
-                    })
-                && match (&plan.package_manager, &locked.package_manager) {
-                    (None, None) => true,
-                    (Some(left), Some(right)) => {
-                        left.family == right.family
-                            && left.ownership_root == right.ownership_root
-                            && left.source.path == right.source.path
-                    }
-                    _ => false,
-                }
-                && plan.signal_tools.len() == locked.signal_tools.len()
-                && plan
-                    .signal_tools
-                    .iter()
-                    .zip(&locked.signal_tools)
-                    .all(|(left, right)| {
-                        left.tool == right.tool
-                            && left.provider == right.provider
-                            && left.scope == right.scope
-                            && left.signals == right.signals
-                            && left.source.path == right.source.path
-                    })
-                && plan.dependency_locks.len() == locked.dependency_locks.len()
-                && plan
-                    .dependency_locks
-                    .iter()
-                    .zip(&locked.dependency_locks)
-                    .all(|(left, right)| {
-                        left.path == right.path
-                            && left.digest == right.digest
-                            && left.owner_root == right.owner_root
-                    })
-        })
 }
 
 fn launch(repo_root: &Path, target: TargetSelection, command: &[String], shell: bool) -> ExitCode {

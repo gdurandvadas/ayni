@@ -34,17 +34,18 @@ struct ProvisioningInventory {
 /// lock. Project-scoped tools remain native dependencies and are deliberately
 /// not translated into mise providers by this generic backend.
 pub fn image_plan(lock: &EnvironmentLock) -> Result<ImagePlan, BackendError> {
-    let platform = format!("linux/{}", platform_architecture(host_architecture()));
+    let architecture = host_architecture()?;
+    let platform = format!("linux/{}", platform_architecture(architecture));
     let inventory = provisioning_inventory(lock)?;
     Ok(ImagePlan {
-        tag: image_tag(lock),
+        tag: image_tag(lock, architecture),
         dockerfile: dockerfile(lock, &platform, &inventory),
         mise_toml: mise_toml(inventory.tools),
         platform,
     })
 }
 
-fn image_tag(lock: &EnvironmentLock) -> String {
+fn image_tag(lock: &EnvironmentLock, architecture: ayni_core::Architecture) -> String {
     let fingerprint = lock
         .fingerprint()
         .strip_prefix("sha256:")
@@ -52,7 +53,7 @@ fn image_tag(lock: &EnvironmentLock) -> String {
     format!(
         "ayni-env:lock-{}-linux-{}",
         &fingerprint[..16.min(fingerprint.len())],
-        platform_architecture(host_architecture())
+        platform_architecture(architecture)
     )
 }
 

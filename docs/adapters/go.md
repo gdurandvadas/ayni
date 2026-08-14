@@ -6,9 +6,10 @@ Go roots are directories containing `go.mod`; discovery excludes VCS and
 `vendor` directories. A repository `go.work` marks a workspace controller, and
 the repository root is analyzed only when it contains `go.mod`.
 
-The Go toolchain is a user-owned prerequisite. Ayni uses it for built-in Go
-operations and can install `gocyclo` with `go install` when complexity is
-enabled and installation is applied.
+The Go toolchain and `gocyclo` are user-owned prerequisites for `--host`
+execution. Go environment discovery and locking are not implemented yet, so
+`env show` and `env lock` fail explicitly for configured Go targets rather than
+installing tools or changing the checkout.
 
 ## Signal Coverage
 

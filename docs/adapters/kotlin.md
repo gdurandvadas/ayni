@@ -7,21 +7,21 @@ contains `build.gradle.kts`, `build.gradle`, `settings.gradle.kts`, or
 `settings.gradle`; configure analysis roots in `[kotlin].roots`. The Gradle
 runner precedence is `./gradlew`, `gradlew.bat`, then `gradle` on `PATH`.
 
-The Gradle runner and JDK are user-owned prerequisites. Applied installation
-can add missing plugins only to supported direct `plugins { }` blocks in
-`build.gradle.kts` or `build.gradle`; unsupported build shapes report setup
-errors. Existing JaCoCo coverage is retained; otherwise installation adds Kover.
+The Gradle runner, JDK, and required analysis plugins are user-owned
+prerequisites for `--host` execution. Kotlin environment discovery and locking
+are not implemented yet, and the clean-slate CLI does not edit Gradle build
+files. Existing JaCoCo or Kover configuration remains repository-owned.
 
 ## Signal Coverage
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
 | `test` | Gradle `test` task and JUnit XML | no version enforced |
-| `coverage` | Gradle `koverXmlReport` or `jacocoTestReport` | Kover 0.9.8 when Ayni adds it; JaCoCo: no version enforced |
+| `coverage` | Gradle `koverXmlReport` or `jacocoTestReport` | no version enforced |
 | `size` | built-in Kotlin source scan | no version enforced |
-| `complexity` | Gradle `detekt` task | Detekt 1.23.8 when Ayni adds it |
+| `complexity` | Gradle `detekt` task | no version enforced |
 | `deps` | Gradle `dependencies` project edges | no version enforced |
-| `mutation` | Gradle `pitest` task (opt-in) | PIT plugin 1.19.0 when Ayni adds it |
+| `mutation` | Gradle `pitest` task (opt-in) | no version enforced |
 
 ## Focused verification
 
