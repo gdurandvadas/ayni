@@ -159,26 +159,28 @@ The first lock-driven OCI backend establishes these rules:
   matching Ayni binary built against Debian Bookworm, checksum-verified `mise`
   2025.2.4, essential build utilities, and a non-root `ayni` user, but no
   language runtime.
-- `.ayni.lock` schema `0.2.0` records the base reference, immutable manifest
+- `.ayni.lock` schema `0.3.0` records the base reference, immutable manifest
   digest, variant, and image `mise` version. Locking resolves the default base
   through Docker Buildx or accepts an explicit digest-qualified base.
 - Repository images use clone-independent, platform-specific tags derived from
   the full lock fingerprint. The fingerprint, base digest, Ayni/mise versions,
   platform, and environment-image schema are repeated as OCI labels and
   validated by `env doctor` and before launch.
-- Generated build context contains only a Dockerfile and deterministic
-  `mise.toml`; repository source, native manifests, locks, and credentials are
-  not copied. Project-scoped Node tools therefore remain native dependencies
-  rather than being translated into invented `mise` providers.
+- Generated build context contains a Dockerfile, deterministic `mise.toml`, and
+  only adapter-declared inputs whose digests are present in the lock. Repository
+  source and credentials are never copied. Project-scoped Node tools remain
+  native dependencies rather than being translated into invented `mise`
+  providers.
 - `env shell` and `env run` require an explicit language/root when the lock has
   multiple matching targets. Launch selects exact locked tool versions, mounts
   the canonical checkout at `/workspace`, disables networking and mise
   auto-installation, drops capabilities, and uses generated state below
   `.ayni/environment/` for the container home.
-- Native dependency-store warming and offline materialization are not yet
-  available through the generic backend. They require adapter-owned typed
-  preparation contracts; execution fails rather than silently downloading or
-  mutating dependency manifests.
+- Adapter-owned preparation contracts provide deterministic staged argv for
+  Rust Cargo and Node npm. The generic backend verifies every staged digest,
+  warms Cargo/npm caches during build, retains npm dependencies as an image
+  seed, and materializes/rebuilds them below `.ayni/environment/` with no
+  network and a read-only checkout. Unsupported managers fail explicitly.
 
 ## Non-goals
 

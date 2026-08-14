@@ -230,6 +230,54 @@ fn visit(
     Ok(())
 }
 
+/// Run shared conformance checks for a dependency-preparation capability.
+/// Planning must be deterministic and read-only; commands are validated by the
+/// core contract and are deliberately not executed by this harness.
+pub fn assert_dependency_preparation_conformance(
+    capability: &dyn ayni_core::DependencyPreparationCapability,
+    request: &ayni_core::DependencyPreparationRequest,
+) -> Result<ayni_core::DependencyPreparationPlan, AdapterError> {
+    if capability.language() != request.target().target.language {
+        return Err(AdapterError::new(
+            capability.language(),
+            "dependency preparation request language does not match capability language",
+        ));
+    }
+    let before = snapshot(request.repo_root()).map_err(|error| {
+        AdapterError::new(
+            capability.language(),
+            format!("failed to snapshot preparation fixture: {error}"),
+        )
+    })?;
+    let first = capability.prepare(request)?;
+    let after = snapshot(request.repo_root()).map_err(|error| {
+        AdapterError::new(
+            capability.language(),
+            format!("failed to snapshot preparation fixture after planning: {error}"),
+        )
+    })?;
+    if before != after {
+        return Err(AdapterError::new(
+            capability.language(),
+            "dependency preparation planning mutated the repository",
+        ));
+    }
+    let second = capability.prepare(request)?;
+    if first != second {
+        return Err(AdapterError::new(
+            capability.language(),
+            "dependency preparation planning is not deterministic",
+        ));
+    }
+    if first.target != request.target().target {
+        return Err(AdapterError::new(
+            capability.language(),
+            "dependency preparation target does not match the requested target",
+        ));
+    }
+    Ok(first)
+}
+
 #[cfg(test)]
 mod tests {
     use super::assert_environment_capability_conformance;

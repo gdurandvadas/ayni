@@ -12,6 +12,8 @@ use ayni_core::{
 };
 use glob::Pattern;
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeSet, VecDeque};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default)]
@@ -51,7 +53,11 @@ fn discover(
             runtimes: vec![runtime],
             package_manager: None,
             system_requirements: Vec::new(),
-            dependency_locks: dependency_locks(request.repo_root(), &ownership.workspace_root)?,
+            dependency_locks: dependency_locks(
+                request.repo_root(),
+                &ownership.workspace_root,
+                &target_root,
+            )?,
         },
         warnings,
         conflicts,
@@ -255,6 +261,9 @@ fn workspace_rust_version(
 }
 
 fn workspace_root(repo_root: &Path, target_root: &Path) -> Result<PathBuf, AdapterError> {
+    if let Some(root) = explicit_workspace_root(repo_root, target_root)? {
+        return Ok(root);
+    }
     let mut current = target_root;
     loop {
         let manifest = current.join("Cargo.toml");
@@ -276,6 +285,51 @@ fn workspace_root(repo_root: &Path, target_root: &Path) -> Result<PathBuf, Adapt
                 adapter_error("Rust target has no repository-contained workspace ancestor")
             })?;
     }
+}
+
+fn explicit_workspace_root(
+    repo_root: &Path,
+    target_root: &Path,
+) -> Result<Option<PathBuf>, AdapterError> {
+    let manifest_path = target_root.join("Cargo.toml");
+    let manifest = read_toml(repo_root, &manifest_path)?;
+    let Some(workspace) = manifest
+        .get("package")
+        .and_then(|package| package.get("workspace"))
+    else {
+        return Ok(None);
+    };
+    let workspace = workspace.as_str().ok_or_else(|| {
+        adapter_error(format!(
+            "{} package.workspace must be a string",
+            manifest_path.display()
+        ))
+    })?;
+    let candidate = target_root
+        .join(workspace)
+        .canonicalize()
+        .map_err(|error| {
+            adapter_error(format!(
+                "failed to resolve explicit Cargo workspace {workspace}: {error}"
+            ))
+        })?;
+    if !candidate.starts_with(repo_root) {
+        return Err(adapter_error("explicit Cargo workspace escapes repository"));
+    }
+    if !target_root.starts_with(&candidate) {
+        return Err(adapter_error(
+            "non-ancestor package.workspace is not supported by the environment ownership contract",
+        ));
+    }
+    let workspace_manifest = candidate.join("Cargo.toml");
+    let value = read_toml(repo_root, &workspace_manifest)?;
+    if value.get("workspace").is_none() {
+        return Err(adapter_error(format!(
+            "explicit Cargo workspace has no [workspace] table: {}",
+            workspace_manifest.display()
+        )));
+    }
+    Ok(Some(candidate))
 }
 
 fn workspace_contains_target(
@@ -569,23 +623,233 @@ fn tool(
     }
 }
 
+fn cargo_manifest_inputs(
+    repo_root: &Path,
+    owner_root: &Path,
+    target_root: &Path,
+) -> Result<Vec<PathBuf>, AdapterError> {
+    let owner_manifest = owner_root.join("Cargo.toml");
+    let mut selected = BTreeSet::from([owner_manifest.clone(), target_root.join("Cargo.toml")]);
+    add_workspace_member_manifests(repo_root, owner_root, &owner_manifest, &mut selected)?;
+    add_path_dependency_manifests(repo_root, owner_root, &mut selected)?;
+    Ok(selected.into_iter().collect())
+}
+
+fn add_workspace_member_manifests(
+    repo_root: &Path,
+    owner_root: &Path,
+    owner_manifest: &Path,
+    selected: &mut BTreeSet<PathBuf>,
+) -> Result<(), AdapterError> {
+    let owner_value = read_toml(repo_root, owner_manifest)?;
+    let Some(workspace) = owner_value.get("workspace") else {
+        return Ok(());
+    };
+    let members = workspace_patterns(workspace.get("members"), owner_manifest, "members")?;
+    let excludes = workspace_patterns(workspace.get("exclude"), owner_manifest, "exclude")?;
+    for manifest in all_cargo_manifests(repo_root, owner_root)? {
+        let relative = cargo_member_path(owner_root, &manifest)?;
+        if matches_workspace_member(&relative, &members, &excludes) {
+            selected.insert(manifest);
+        }
+    }
+    Ok(())
+}
+
+fn cargo_member_path(owner_root: &Path, manifest: &Path) -> Result<String, AdapterError> {
+    manifest
+        .parent()
+        .unwrap_or(owner_root)
+        .strip_prefix(owner_root)
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .map_err(|_| adapter_error("Cargo workspace member escapes its owner"))
+}
+
+fn matches_workspace_member(relative: &str, members: &[Pattern], excludes: &[Pattern]) -> bool {
+    members.iter().any(|pattern| pattern.matches(relative))
+        && !excludes.iter().any(|pattern| pattern.matches(relative))
+}
+
+fn add_path_dependency_manifests(
+    repo_root: &Path,
+    owner_root: &Path,
+    selected: &mut BTreeSet<PathBuf>,
+) -> Result<(), AdapterError> {
+    let mut queue = selected.iter().cloned().collect::<VecDeque<_>>();
+    while let Some(manifest) = queue.pop_front() {
+        let value = read_toml(repo_root, &manifest)?;
+        let parent = manifest.parent().unwrap_or(owner_root);
+        for dependency in cargo_path_dependencies(&value) {
+            let canonical = resolve_path_dependency(repo_root, parent, dependency)?;
+            if selected.insert(canonical.clone()) {
+                queue.push_back(canonical);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_path_dependency(
+    repo_root: &Path,
+    parent: &Path,
+    dependency: &str,
+) -> Result<PathBuf, AdapterError> {
+    let path = parent.join(dependency).join("Cargo.toml");
+    let canonical = path.canonicalize().map_err(|error| {
+        adapter_error(format!(
+            "failed to resolve Cargo path dependency {}: {error}",
+            path.display()
+        ))
+    })?;
+    if canonical.starts_with(repo_root) && canonical.is_file() {
+        Ok(canonical)
+    } else {
+        Err(adapter_error(format!(
+            "Cargo path dependency escapes the repository or has no manifest: {}",
+            path.display()
+        )))
+    }
+}
+
+fn all_cargo_manifests(repo_root: &Path, owner_root: &Path) -> Result<Vec<PathBuf>, AdapterError> {
+    let mut manifests = Vec::new();
+    let mut stack = vec![owner_root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        let entries = fs::read_dir(&directory).map_err(|error| {
+            adapter_error(format!(
+                "failed to inspect Cargo workspace {}: {error}",
+                directory.display()
+            ))
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                adapter_error(format!("failed to inspect Cargo workspace entry: {error}"))
+            })?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                adapter_error(format!(
+                    "failed to inspect Cargo workspace path {}: {error}",
+                    path.display()
+                ))
+            })?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        matches!(name, ".git" | ".ayni" | "target" | "node_modules")
+                    })
+                {
+                    continue;
+                }
+                let canonical = path.canonicalize().map_err(|error| {
+                    adapter_error(format!(
+                        "failed to validate Cargo workspace directory {}: {error}",
+                        path.display()
+                    ))
+                })?;
+                if !canonical.starts_with(repo_root) {
+                    return Err(adapter_error(format!(
+                        "Cargo workspace directory escapes repository: {}",
+                        path.display()
+                    )));
+                }
+                stack.push(path);
+            } else if metadata.is_file()
+                && path.file_name().and_then(|name| name.to_str()) == Some("Cargo.toml")
+            {
+                manifests.push(path);
+            }
+        }
+    }
+    Ok(manifests)
+}
+
+fn cargo_path_dependencies(value: &toml::Value) -> Vec<&str> {
+    let mut paths = Vec::new();
+    collect_dependency_paths(value, &mut paths);
+    if let Some(targets) = value.get("target").and_then(toml::Value::as_table) {
+        for target in targets.values() {
+            collect_dependency_paths(target, &mut paths);
+        }
+    }
+    if let Some(workspace) = value.get("workspace") {
+        collect_dependency_paths(workspace, &mut paths);
+    }
+    if let Some(patches) = value.get("patch").and_then(toml::Value::as_table) {
+        for registry in patches.values() {
+            collect_dependency_table(registry, &mut paths);
+        }
+    }
+    if let Some(replacements) = value.get("replace") {
+        collect_dependency_table(replacements, &mut paths);
+    }
+    paths
+}
+
+fn collect_dependency_paths<'a>(value: &'a toml::Value, paths: &mut Vec<&'a str>) {
+    for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        let Some(dependencies) = value.get(section) else {
+            continue;
+        };
+        collect_dependency_table(dependencies, paths);
+    }
+}
+
+fn collect_dependency_table<'a>(value: &'a toml::Value, paths: &mut Vec<&'a str>) {
+    let Some(dependencies) = value.as_table() else {
+        return;
+    };
+    paths.extend(dependencies.values().filter_map(|dependency| {
+        dependency
+            .as_table()
+            .and_then(|table| table.get("path"))
+            .and_then(toml::Value::as_str)
+    }));
+}
+
 fn dependency_locks(
     repo_root: &Path,
     owner_root: &Path,
+    target_root: &Path,
 ) -> Result<Vec<DependencyLockRequirement>, AdapterError> {
+    let mut paths = cargo_manifest_inputs(repo_root, owner_root, target_root)?;
+    let target_manifest = target_root.join("Cargo.toml");
+    if !paths.contains(&target_manifest) {
+        paths.push(target_manifest);
+    }
     let lock = owner_root.join("Cargo.lock");
-    let Some(content) = read_optional_contained_bytes(repo_root, &lock).map_err(adapter_error)?
-    else {
-        return Ok(Vec::new());
-    };
-    let path = relative(repo_root, &lock)?;
-    let digest = format!("sha256:{:x}", Sha256::digest(content));
-    Ok(vec![DependencyLockRequirement {
-        path: path.clone(),
-        digest,
-        owner_root: relative(repo_root, owner_root)?,
-        source: source("cargo_lock", &path, None, RequirementConfidence::Exact)?,
-    }])
+    if read_optional_contained_bytes(repo_root, &lock)
+        .map_err(adapter_error)?
+        .is_some()
+    {
+        paths.push(lock);
+    }
+    paths
+        .into_iter()
+        .map(|path| {
+            let content = read_optional_contained_bytes(repo_root, &path)
+                .map_err(adapter_error)?
+                .ok_or_else(|| {
+                    adapter_error(format!("missing required Cargo input {}", path.display()))
+                })?;
+            let path = relative(repo_root, &path)?;
+            let kind = if path.ends_with("Cargo.lock") {
+                "cargo_lock"
+            } else {
+                "cargo_manifest"
+            };
+            Ok(DependencyLockRequirement {
+                path: path.clone(),
+                digest: format!("sha256:{:x}", Sha256::digest(content)),
+                owner_root: relative(repo_root, owner_root)?,
+                source: source(kind, &path, None, RequirementConfidence::Exact)?,
+            })
+        })
+        .collect()
 }
 fn read_toml(repo_root: &Path, path: &Path) -> Result<toml::Value, AdapterError> {
     let content = read_contained_string(repo_root, path).map_err(adapter_error)?;
@@ -759,6 +1023,26 @@ mod tests {
     }
 
     #[test]
+    fn explicit_non_ancestor_package_workspace_fails_closed() {
+        let fixture = TempDir::new().expect("fixture");
+        fs::create_dir_all(fixture.path().join("workspace")).expect("workspace");
+        fs::create_dir_all(fixture.path().join("packages/app")).expect("package");
+        manifest(
+            &fixture.path().join("workspace"),
+            "[workspace]\n[workspace.package]\nrust-version = \"1.81\"\n",
+        );
+        fs::write(fixture.path().join("workspace/Cargo.lock"), "version = 4\n").expect("lock");
+        manifest(
+            &fixture.path().join("packages/app"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nworkspace = \"../../workspace\"\nrust-version.workspace = true\n",
+        );
+        let error = RustEnvironmentCapability
+            .discover(&request(fixture.path(), "packages/app", Vec::new()))
+            .expect_err("non-ancestor workspace must fail closed");
+        assert!(error.to_string().contains("non-ancestor package.workspace"));
+    }
+
+    #[test]
     fn malformed_or_missing_inherited_rust_version_fails_closed() {
         for workspace in [
             "[workspace]\nmembers = [\"crates/app\"]\n",
@@ -850,9 +1134,14 @@ mod tests {
         let fixture = TempDir::new().expect("fixture");
         manifest(
             fixture.path(),
-            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n[dependencies]\npath-dependency = { path = \"path-dependency\" }\n",
         );
         fs::write(fixture.path().join("Cargo.lock"), "version = 3\n").expect("lock");
+        fs::create_dir(fixture.path().join("path-dependency")).expect("path dependency");
+        manifest(
+            &fixture.path().join("path-dependency"),
+            "[package]\nname = \"path-dependency\"\nversion = \"0.1.0\"\n",
+        );
         let contribution = discover(fixture.path(), ".", vec![]);
         let lock = &contribution.target().dependency_locks[0];
         assert_eq!(lock.path, "Cargo.lock");
@@ -862,6 +1151,62 @@ mod tests {
             lock.digest,
             "sha256:a6302849064e016e520e513a22aef99a2d874333e7fcbf0b2c2260cb6ffb42f6"
         );
+        assert!(
+            contribution.target().dependency_locks.iter().any(|input| {
+                input.path == "Cargo.toml" && input.source.kind == "cargo_manifest"
+            })
+        );
+        assert!(contribution.target().dependency_locks.iter().any(|input| {
+            input.path == "path-dependency/Cargo.toml" && input.source.kind == "cargo_manifest"
+        }));
+    }
+
+    #[test]
+    fn hashes_only_workspace_members_and_path_dependencies() {
+        let fixture = TempDir::new().expect("fixture");
+        manifest(
+            fixture.path(),
+            "[workspace]\nmembers = [\"crates/app\"]\nexclude = [\"examples/*\"]\n[workspace.dependencies]\nshared = { path = \"shared\" }\n[patch.crates-io]\npatched = { path = \"patched\" }\n[replace]\n\"legacy:0.1.0\" = { path = \"replacement\" }\n",
+        );
+        fs::write(fixture.path().join("Cargo.lock"), "version = 4\n").expect("lock");
+        for (path, body) in [
+            (
+                "crates/app",
+                "[package]\nname = \"app\"\nversion = \"0.1.0\"\n[dependencies]\nshared.workspace = true\n",
+            ),
+            (
+                "shared",
+                "[package]\nname = \"shared\"\nversion = \"0.1.0\"\n",
+            ),
+            (
+                "patched",
+                "[package]\nname = \"patched\"\nversion = \"0.1.0\"\n",
+            ),
+            (
+                "replacement",
+                "[package]\nname = \"legacy\"\nversion = \"0.1.0\"\n",
+            ),
+            (
+                "examples/unrelated",
+                "[package]\nname = \"unrelated\"\nversion = \"0.1.0\"\n",
+            ),
+        ] {
+            fs::create_dir_all(fixture.path().join(path)).expect("package directory");
+            manifest(&fixture.path().join(path), body);
+        }
+        let contribution = discover(fixture.path(), "crates/app", Vec::new());
+        let paths = contribution
+            .target()
+            .dependency_locks
+            .iter()
+            .map(|input| input.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&"Cargo.toml"));
+        assert!(paths.contains(&"crates/app/Cargo.toml"));
+        assert!(paths.contains(&"shared/Cargo.toml"));
+        assert!(paths.contains(&"patched/Cargo.toml"));
+        assert!(paths.contains(&"replacement/Cargo.toml"));
+        assert!(!paths.contains(&"examples/unrelated/Cargo.toml"));
     }
 
     #[cfg(unix)]

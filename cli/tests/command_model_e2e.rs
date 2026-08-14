@@ -15,17 +15,19 @@ fn environment_operations_require_a_valid_lock_without_implicit_provisioning() {
 }
 
 #[test]
-fn managed_quality_commands_use_environment_exit_and_suggest_host() {
-    for arguments in [vec!["check"], vec!["verify", "test"]] {
-        let output = ayni().args(&arguments).output().expect("launch ayni");
-        assert_eq!(output.status.code(), Some(3), "{arguments:?}");
-        assert!(output.stdout.is_empty(), "{arguments:?}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("rerun with --host"),
-            "{arguments:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
+fn managed_check_requires_a_lock_while_verify_still_suggests_host() {
+    let check = ayni().arg("check").output().expect("launch ayni");
+    assert_eq!(check.status.code(), Some(3));
+    assert!(check.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&check.stderr).contains("environment lock"));
+
+    let verify = ayni()
+        .args(["verify", "test"])
+        .output()
+        .expect("launch ayni");
+    assert_eq!(verify.status.code(), Some(3));
+    assert!(verify.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&verify.stderr).contains("rerun with --host"));
 }
 
 #[test]

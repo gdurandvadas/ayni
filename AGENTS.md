@@ -88,7 +88,7 @@ cargo doc-cli > docs/cli.md
   creates or refreshes the Ayni-managed `AGENTS.md` block.
 - `cargo test -p <pkg>` runs package-scoped tests.
 - `cargo run -p ayni-cli -- check --host --config ./.ayni.toml`
-  runs repository completion analysis until managed environments are available.
+  runs repository completion analysis for this checkout, which does not commit an environment lock.
 - Artifact output: `.ayni/last/signals.json`.
 
 <!-- AYNI:BEGIN -->

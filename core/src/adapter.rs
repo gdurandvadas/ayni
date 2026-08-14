@@ -281,6 +281,43 @@ pub trait LanguageAdapter: Send + Sync {
         None
     }
 
+    /// Optional native dependency preparation capability. The returned commands
+    /// are semantic, structured argv and are intended for an isolated staged
+    /// workspace; adapters never execute them through this wrapper.
+    fn dependency_preparation_capability(
+        &self,
+    ) -> Option<&dyn crate::DependencyPreparationCapability> {
+        None
+    }
+
+    fn prepare_dependencies(
+        &self,
+        request: &crate::DependencyPreparationRequest,
+    ) -> Result<crate::DependencyPreparationPlan, AdapterError> {
+        let capability = self.dependency_preparation_capability().ok_or_else(|| {
+            AdapterError::new(
+                self.language(),
+                "dependency preparation capability is unsupported",
+            )
+        })?;
+        if request.target().target.language != self.language()
+            || capability.language() != self.language()
+        {
+            return Err(AdapterError::new(
+                self.language(),
+                "dependency preparation language does not match adapter language",
+            ));
+        }
+        let plan = capability.prepare(request)?;
+        if plan.target != request.target().target {
+            return Err(AdapterError::new(
+                self.language(),
+                "dependency preparation target does not match the requested target",
+            ));
+        }
+        Ok(plan)
+    }
+
     /// Optional exact-resolution capability used only by explicit environment locking.
     fn environment_resolution_capability(
         &self,

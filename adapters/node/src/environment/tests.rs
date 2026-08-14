@@ -107,6 +107,45 @@ fn direct_member_evidence_precedes_workspace_defaults() {
         contribution.target().dependency_locks[0].path,
         "packages/app/yarn.lock"
     );
+    assert!(contribution.target().dependency_locks.iter().any(|input| {
+        input.path == "packages/app/package.json" && input.source.kind == "node_manifest"
+    }));
+}
+
+#[test]
+fn hashes_only_declared_node_workspace_manifests() {
+    let fixture = TempDir::new().expect("fixture");
+    for path in ["packages/app", "packages/lib", "examples/unrelated"] {
+        fs::create_dir_all(fixture.path().join(path)).expect("package");
+        fs::write(
+            fixture.path().join(path).join("package.json"),
+            format!(r#"{{"name":"{}"}}"#, path.replace('/', "-")),
+        )
+        .expect("manifest");
+    }
+    fs::write(
+        fixture.path().join("package.json"),
+        r#"{"workspaces":["packages/*"],"packageManager":"npm@10.9.0","engines":{"node":"22.x"}}"#,
+    )
+    .expect("workspace manifest");
+    fs::write(
+        fixture.path().join("package-lock.json"),
+        r#"{"lockfileVersion":3,"packages":{}}"#,
+    )
+    .expect("lock");
+    let contribution = NodeEnvironmentCapability
+        .discover(&request(fixture.path(), "packages/app", Vec::new()))
+        .expect("discovery");
+    let paths = contribution
+        .target()
+        .dependency_locks
+        .iter()
+        .map(|input| input.path.as_str())
+        .collect::<Vec<_>>();
+    assert!(paths.contains(&"package.json"));
+    assert!(paths.contains(&"packages/app/package.json"));
+    assert!(paths.contains(&"packages/lib/package.json"));
+    assert!(!paths.contains(&"examples/unrelated/package.json"));
 }
 
 #[test]

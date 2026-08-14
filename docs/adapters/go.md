@@ -43,7 +43,7 @@ combined with `--package`. Unsupported or ambiguous selectors are rejected
 before `go` runs.
 
 Verification commands carry their originating contract and target, for example:
-`ayni verify test --config './.ayni.toml' --language go --root 'services/api'
+`ayni verify test --host --config './.ayni.toml' --language go --root 'services/api'
 --package './internal/api' --name 'TestCreate'`. Use only the selectors marked
 above; copy the exact command in an artifact finding rather than synthesizing one.
 

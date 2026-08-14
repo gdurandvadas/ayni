@@ -34,8 +34,9 @@ and payload shapes are version-specific; use the selected version reference.
 
 ## Version selection and compatibility
 
-`ayni check --host` writes `.ayni/last/signals.json`; `ayni check --host --output json` and
-`ayni check --host --output json` print the same artifact. Current output uses
+`ayni check` and the explicit `ayni check --host` path both write
+`.ayni/last/signals.json`; adding `--output json` prints the same artifact.
+Current output uses
 schema `0.3.0`. Consumers must inspect `schema_version` and use the matching
 version page rather than assuming fields from another envelope.
 

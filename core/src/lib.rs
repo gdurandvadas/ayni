@@ -6,6 +6,7 @@ pub mod comparison;
 pub mod environment;
 pub mod environment_adapter;
 mod environment_lock;
+pub mod environment_preparation;
 pub mod environment_resolution;
 pub mod finding;
 pub mod language;
@@ -43,6 +44,10 @@ pub use environment_lock::{
     ENVIRONMENT_LOCK_SCHEMA_VERSION, EnvironmentLock, LockedDependencyLock, LockedPackageManager,
     LockedRepositoryIdentity, LockedRequirementSource, LockedRuntime, LockedSignalTool,
     LockedTargetEnvironment, ProvisioningBase,
+};
+pub use environment_preparation::{
+    DependencyPreparationCapability, DependencyPreparationPlan, DependencyPreparationRequest,
+    PreparationCommand, PreparationInput, PreparationOutput, PreparationScaffold,
 };
 pub use environment_resolution::{EnvironmentResolutionCapability, EnvironmentResolutionRequest};
 pub use language::Language;

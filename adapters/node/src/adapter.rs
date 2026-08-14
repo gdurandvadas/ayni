@@ -4,6 +4,7 @@ use crate::discovery;
 use crate::environment::NodeEnvironmentCapability;
 use crate::environment_resolution::NodeEnvironmentResolutionCapability;
 use crate::package_manager;
+use crate::preparation::NodeDependencyPreparationCapability;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
     CatalogEntry, CatalogRuntime, ComplexityThresholdKind, DetectResult, ExecutionResolution,
@@ -104,6 +105,14 @@ impl LanguageAdapter for NodeAdapter {
 
     fn environment_capability(&self) -> Option<&dyn ayni_core::EnvironmentCapability> {
         static CAPABILITY: NodeEnvironmentCapability = NodeEnvironmentCapability;
+        Some(&CAPABILITY)
+    }
+
+    fn dependency_preparation_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::DependencyPreparationCapability> {
+        static CAPABILITY: NodeDependencyPreparationCapability =
+            NodeDependencyPreparationCapability;
         Some(&CAPABILITY)
     }
 

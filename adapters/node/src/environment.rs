@@ -15,6 +15,7 @@ use ayni_core::{
 use glob::Pattern;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default)]
@@ -78,7 +79,7 @@ fn discover(
         &workspace_manifest
     };
     let (mut package_manager, locks, manager_conflicts, mut warnings) =
-        package_manager_requirement(request, &manager_root, manager_manifest)?;
+        package_manager_requirement(request, &manager_root, &target_root, manager_manifest)?;
     preserve_manager_owner_provenance(request, &manager_root, &mut package_manager)?;
     conflicts.extend(manager_conflicts);
 
@@ -347,9 +348,10 @@ fn package_manager_owner(
 fn package_manager_requirement(
     request: &EnvironmentDiscoveryRequest,
     owner: &Path,
+    target_root: &Path,
     manifest: &serde_json::Value,
 ) -> Result<PackageManagerDiscovery, AdapterError> {
-    let locks = dependency_locks(request.repo_root(), owner)?;
+    let locks = dependency_locks(request.repo_root(), owner, target_root)?;
     let families = lock_families(&locks);
     let declared = declared_package_manager(manifest)?;
     let conflicts = package_manager_conflicts(request, owner, &locks, &families, &declared)?;
@@ -361,9 +363,16 @@ fn package_manager_requirement(
 
 type DeclaredPackageManager<'a> = (String, VersionRequirement, &'a str);
 
-fn lock_families(locks: &[DependencyLockRequirement]) -> BTreeSet<&'static str> {
+fn native_locks(
+    locks: &[DependencyLockRequirement],
+) -> impl Iterator<Item = &DependencyLockRequirement> {
     locks
         .iter()
+        .filter(|lock| lock.source.kind == "node_dependency_lock")
+}
+
+fn lock_families(locks: &[DependencyLockRequirement]) -> BTreeSet<&'static str> {
+    native_locks(locks)
         .filter_map(|lock| lock_family(&lock.path))
         .collect()
 }
@@ -390,7 +399,7 @@ fn package_manager_conflicts(
     declared: &Option<DeclaredPackageManager<'_>>,
 ) -> Result<Vec<EnvironmentConflict>, AdapterError> {
     let mut conflicts = Vec::new();
-    if locks.is_empty() {
+    if native_locks(locks).next().is_none() {
         conflicts.push(missing_lock_conflict(request, owner)?);
     }
     if let Some((family, _, raw)) = declared
@@ -408,7 +417,9 @@ fn package_manager_conflicts(
                 families.iter().copied().collect::<Vec<_>>().join(", ")
             ),
             target: Some(request.target().clone()),
-            sources: locks.iter().map(|lock| lock.source.clone()).collect(),
+            sources: native_locks(locks)
+                .map(|lock| lock.source.clone())
+                .collect(),
         });
     }
     Ok(conflicts)
@@ -449,7 +460,7 @@ fn lock_declaration_conflict(
         Some(raw),
         RequirementConfidence::Declared,
     )?];
-    sources.extend(locks.iter().map(|lock| lock.source.clone()));
+    sources.extend(native_locks(locks).map(|lock| lock.source.clone()));
     Ok(EnvironmentConflict {
         code: String::from("node_package_manager_lock_conflict"),
         message: format!(
@@ -509,7 +520,10 @@ fn lock_package_manager(
         ownership_root: relative(request.repo_root(), owner)?,
         source: locks
             .iter()
-            .find(|lock| lock_family(&lock.path) == Some(family))
+            .find(|lock| {
+                lock.source.kind == "node_dependency_lock"
+                    && lock_family(&lock.path) == Some(family)
+            })
             .expect("family lock")
             .source
             .clone(),
@@ -694,11 +708,100 @@ fn workspace_matches(patterns: &[String], target: &str) -> Result<bool, AdapterE
     Ok(included)
 }
 
+fn node_manifest_inputs(
+    repo_root: &Path,
+    owner: &Path,
+    target_root: &Path,
+) -> Result<Vec<PathBuf>, AdapterError> {
+    let owner_manifest = owner.join("package.json");
+    let manifest = read_manifest(repo_root, &owner_manifest, true)?
+        .ok_or_else(|| adapter_error(format!("missing {}", owner_manifest.display())))?;
+    let patterns = workspace_patterns(&manifest, &owner_manifest)?;
+    let mut manifests = vec![owner_manifest, target_root.join("package.json")];
+    if !patterns.is_empty() {
+        for candidate in all_node_manifests(repo_root, owner)? {
+            let relative = candidate
+                .parent()
+                .unwrap_or(owner)
+                .strip_prefix(owner)
+                .map_err(|_| adapter_error("Node workspace member escapes its owner"))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if workspace_matches(&patterns, &relative)? {
+                manifests.push(candidate);
+            }
+        }
+    }
+    manifests.sort();
+    manifests.dedup();
+    Ok(manifests)
+}
+
+fn all_node_manifests(repo_root: &Path, owner: &Path) -> Result<Vec<PathBuf>, AdapterError> {
+    let mut manifests = Vec::new();
+    let mut stack = vec![owner.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        let entries = fs::read_dir(&directory).map_err(|error| {
+            adapter_error(format!(
+                "failed to inspect Node workspace {}: {error}",
+                directory.display()
+            ))
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                adapter_error(format!("failed to inspect Node workspace entry: {error}"))
+            })?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                adapter_error(format!(
+                    "failed to inspect Node workspace path {}: {error}",
+                    path.display()
+                ))
+            })?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        matches!(name, ".git" | ".ayni" | "node_modules" | "target")
+                    })
+                {
+                    continue;
+                }
+                let canonical = path.canonicalize().map_err(|error| {
+                    adapter_error(format!(
+                        "failed to validate Node workspace directory {}: {error}",
+                        path.display()
+                    ))
+                })?;
+                if !canonical.starts_with(repo_root) {
+                    return Err(adapter_error(format!(
+                        "Node workspace directory escapes repository: {}",
+                        path.display()
+                    )));
+                }
+                stack.push(path);
+            } else if metadata.is_file()
+                && path.file_name().and_then(|name| name.to_str()) == Some("package.json")
+            {
+                manifests.push(path);
+            }
+        }
+    }
+    manifests.sort();
+    manifests.dedup();
+    Ok(manifests)
+}
+
 fn dependency_locks(
     repo_root: &Path,
     owner: &Path,
+    target_root: &Path,
 ) -> Result<Vec<DependencyLockRequirement>, AdapterError> {
-    lock_paths(repo_root, owner)?
+    let mut inputs = lock_paths(repo_root, owner)?
         .into_iter()
         .map(|path| {
             let bytes = read_optional_contained_bytes(repo_root, &path)
@@ -724,7 +827,32 @@ fn dependency_locks(
                 )?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, AdapterError>>()?;
+    let manifests = node_manifest_inputs(repo_root, owner, target_root)?;
+    for manifest in manifests {
+        let manifest_bytes = read_optional_contained_bytes(repo_root, &manifest)
+            .map_err(adapter_error)?
+            .ok_or_else(|| {
+                adapter_error(format!(
+                    "missing required Node input {}",
+                    manifest.display()
+                ))
+            })?;
+        let manifest_path = relative(repo_root, &manifest)?;
+        inputs.push(DependencyLockRequirement {
+            path: manifest_path.clone(),
+            digest: format!("sha256:{:x}", Sha256::digest(manifest_bytes)),
+            owner_root: relative(repo_root, owner)?,
+            source: source(
+                repo_root,
+                &manifest,
+                "node_manifest",
+                None,
+                RequirementConfidence::Exact,
+            )?,
+        });
+    }
+    Ok(inputs)
 }
 
 fn lock_paths(repo_root: &Path, owner: &Path) -> Result<Vec<PathBuf>, AdapterError> {

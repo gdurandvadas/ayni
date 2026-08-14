@@ -19,7 +19,8 @@ dependency restrictions, and explicit tool overrides. Both formats include
 advisory effectiveness warnings with stable codes; warnings do not make a valid
 policy fail. It does not discover
 projects, inspect or invoke tools, run adapters, analyze code, or write
-artifacts. Use `ayni check --host` for measured results and completion evidence.
+artifacts. Use `ayni check` for managed measured results and completion
+evidence, or `ayni check --host` for the explicit host path.
 
 For the signal vocabulary and schema selection, see [`signals.md`](signals.md);
 for current JSON artifact fields, see [schema v3](signals/v3.md).

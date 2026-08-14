@@ -692,7 +692,15 @@ fn normalize_dependency_locks(
             validate_digest("dependency-lock digest", dependency_lock.digest.clone())?;
         normalize_source(&mut dependency_lock.source)?;
     }
-    dependency_locks.sort();
+    // Native locks lead manifest preparation inputs so legacy consumers retain
+    // their lock-first ordering while the order remains deterministic.
+    dependency_locks.sort_by(|left, right| {
+        let left_is_lock = left.source.kind.ends_with("_lock");
+        let right_is_lock = right.source.kind.ends_with("_lock");
+        right_is_lock
+            .cmp(&left_is_lock)
+            .then_with(|| left.cmp(right))
+    });
     dependency_locks.dedup();
     Ok(())
 }

@@ -2,8 +2,8 @@ use crate::BackendError;
 use crate::lock::{host_architecture, platform_architecture};
 use crate::runtime::WORKSPACE;
 use ayni_core::{
-    EnvironmentLock, LockedRuntime, LockedSignalTool, LockedTargetEnvironment,
-    ToolInstallationScope,
+    DependencyPreparationPlan, EnvironmentLock, LockedRuntime, LockedSignalTool,
+    LockedTargetEnvironment, ToolInstallationScope,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,7 +13,8 @@ pub(crate) const IMAGE_SCHEMA_LABEL: &str = "dev.ayni.environment.schema";
 pub(crate) const IMAGE_AYNI_LABEL: &str = "dev.ayni.environment.ayni-version";
 pub(crate) const IMAGE_MISE_LABEL: &str = "dev.ayni.environment.mise-version";
 pub(crate) const IMAGE_PLATFORM_LABEL: &str = "dev.ayni.environment.platform";
-pub(crate) const IMAGE_SCHEMA_VERSION: &str = "0.2.0";
+pub(crate) const IMAGE_PREPARATION_LABEL: &str = "dev.ayni.environment.preparation-digest";
+pub(crate) const IMAGE_SCHEMA_VERSION: &str = "0.3.0";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImagePlan {
@@ -21,6 +22,7 @@ pub struct ImagePlan {
     pub dockerfile: String,
     pub mise_toml: String,
     pub platform: String,
+    pub preparation_digest: String,
 }
 
 #[derive(Default)]
@@ -34,25 +36,48 @@ struct ProvisioningInventory {
 /// lock. Project-scoped tools remain native dependencies and are deliberately
 /// not translated into mise providers by this generic backend.
 pub fn image_plan(lock: &EnvironmentLock) -> Result<ImagePlan, BackendError> {
+    image_plan_with_preparation(lock, &[])
+}
+
+pub fn image_plan_with_preparation(
+    lock: &EnvironmentLock,
+    preparations: &[DependencyPreparationPlan],
+) -> Result<ImagePlan, BackendError> {
     let architecture = host_architecture()?;
     let platform = format!("linux/{}", platform_architecture(architecture));
     let inventory = provisioning_inventory(lock)?;
+    let preparation_digest = crate::preparation::preparation_digest(preparations)?;
     Ok(ImagePlan {
-        tag: image_tag(lock, architecture),
-        dockerfile: dockerfile(lock, &platform, &inventory),
+        tag: image_tag(lock, &preparation_digest, architecture),
+        dockerfile: dockerfile(
+            lock,
+            &platform,
+            &inventory,
+            preparations,
+            &preparation_digest,
+        )?,
         mise_toml: mise_toml(inventory.tools),
         platform,
+        preparation_digest,
     })
 }
 
-fn image_tag(lock: &EnvironmentLock, architecture: ayni_core::Architecture) -> String {
+fn image_tag(
+    lock: &EnvironmentLock,
+    preparation_digest: &str,
+    architecture: ayni_core::Architecture,
+) -> String {
     let fingerprint = lock
         .fingerprint()
         .strip_prefix("sha256:")
         .unwrap_or(lock.fingerprint());
+    let preparation = preparation_digest
+        .strip_prefix("sha256:")
+        .unwrap_or(preparation_digest);
     format!(
-        "ayni-env:lock-{}-linux-{}",
+        "ayni-env:lock-{}-prep-{}-linux-{}",
         &fingerprint[..16.min(fingerprint.len())],
+        &preparation[..16.min(preparation.len())],
         platform_architecture(architecture)
     )
 }
@@ -152,11 +177,18 @@ fn mise_toml(tools: BTreeMap<String, BTreeSet<String>>) -> String {
     output
 }
 
-fn dockerfile(lock: &EnvironmentLock, platform: &str, inventory: &ProvisioningInventory) -> String {
+fn dockerfile(
+    lock: &EnvironmentLock,
+    platform: &str,
+    inventory: &ProvisioningInventory,
+    preparations: &[DependencyPreparationPlan],
+    preparation_digest: &str,
+) -> Result<String, BackendError> {
     let provisioning_env = rust_provisioning_env(inventory);
     let base = lock.provisioning_base();
-    format!(
-        "FROM {}@{}\nUSER ayni\nCOPY --chown=10001:10001 mise.toml /etc/ayni/mise.toml\nRUN chmod 0444 /etc/ayni/mise.toml\nENV MISE_CONFIG_FILE=/etc/ayni/mise.toml MISE_TRUSTED_CONFIG_PATHS=/etc/ayni\n{provisioning_env}RUN mise trust /etc/ayni/mise.toml && mise install --yes && mise reshim\nENV MISE_AUTO_INSTALL=0 MISE_CONFIG_FILE=/etc/ayni/mise.toml\nLABEL {IMAGE_SCHEMA_LABEL}=\"{IMAGE_SCHEMA_VERSION}\" {IMAGE_LOCK_LABEL}=\"{}\" {IMAGE_BASE_LABEL}=\"{}\" {IMAGE_AYNI_LABEL}=\"{}\" {IMAGE_MISE_LABEL}=\"{}\" {IMAGE_PLATFORM_LABEL}=\"{}\"\nWORKDIR {WORKSPACE}\n",
+    let preparation = crate::preparation::dockerfile_fragment(lock, preparations)?;
+    Ok(format!(
+        "FROM {}@{} AS ayni-runtime\nUSER ayni\nCOPY --chown=10001:10001 mise.toml /etc/ayni/mise.toml\nRUN chmod 0444 /etc/ayni/mise.toml\nENV MISE_CONFIG_FILE=/etc/ayni/mise.toml MISE_TRUSTED_CONFIG_PATHS=/etc/ayni\n{provisioning_env}RUN mise trust /etc/ayni/mise.toml && mise install --yes && mise reshim\nENV MISE_AUTO_INSTALL=0 MISE_CONFIG_FILE=/etc/ayni/mise.toml\n{preparation}LABEL {IMAGE_SCHEMA_LABEL}=\"{IMAGE_SCHEMA_VERSION}\" {IMAGE_LOCK_LABEL}=\"{}\" {IMAGE_BASE_LABEL}=\"{}\" {IMAGE_AYNI_LABEL}=\"{}\" {IMAGE_MISE_LABEL}=\"{}\" {IMAGE_PLATFORM_LABEL}=\"{}\" {IMAGE_PREPARATION_LABEL}=\"{}\"\nWORKDIR {WORKSPACE}\n",
         base.reference,
         base.digest,
         lock.fingerprint(),
@@ -164,7 +196,8 @@ fn dockerfile(lock: &EnvironmentLock, platform: &str, inventory: &ProvisioningIn
         lock.ayni_version(),
         base.mise_version,
         platform,
-    )
+        preparation_digest,
+    ))
 }
 
 fn rust_provisioning_env(inventory: &ProvisioningInventory) -> String {

@@ -108,7 +108,7 @@ The typed plan should contain:
 - runtime components and targets;
 - package-manager family, version, and ownership scope;
 - signal-tool requirements and installation scope;
-- native dependency-lock paths and digests;
+- native dependency-lock and preparation-manifest paths and digests;
 - platform requirements;
 - warnings and blocking conflicts.
 
@@ -178,7 +178,7 @@ requirement with the old Ayni artifact schemas.
 
 ### Initial Rust and Node locking decisions
 
-- `.ayni.lock` schema `0.2.0` is canonical JSON with exact requirements,
+- `.ayni.lock` schema `0.3.0` is canonical JSON with exact requirements,
   deterministic ordering, and a SHA-256 fingerprint calculated without the
   fingerprint field itself. Repository identity uses the contract digest and
   excludes the checkout directory name so equivalent clones remain byte-stable.
@@ -206,6 +206,23 @@ requirement with the old Ayni artifact schemas.
   identity participates in the canonical lock fingerprint.
 - Lock replacement is atomic. Malformed existing locks and failed discovery or
   resolution leave the previous bytes untouched.
+
+### Native dependency preparation decisions
+
+- Preparation is an optional adapter capability that returns typed, deterministic
+  structured argv, repository-relative cwd, explicit environment, and
+  digest-tracked inputs. Core and adapters never describe shell fragments, OCI,
+  Docker, or provider execution.
+- Preparation commands are for an isolated staged copy of their recorded inputs,
+  never the checkout. The future backend must create that stage before invoking
+  them and must reject untracked or changed inputs.
+- Rust preparation is `cargo fetch --locked` at the Cargo workspace owner and
+  fails explicitly without `Cargo.lock`. Its tracked inputs include the owner
+  manifest, the target manifest when different, and the lockfile.
+- Node preparation currently supports npm with `package-lock.json` only and
+  plans `npm ci --ignore-scripts --no-audit --no-fund`. Other Node managers and
+  a missing npm lockfile fail explicitly. The owning `package.json` and
+  `package-lock.json` are digest-tracked.
 
 ## Security boundary
 

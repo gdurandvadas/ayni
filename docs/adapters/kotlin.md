@@ -45,7 +45,7 @@ cannot be combined with `--package`; unsupported or ambiguous selectors are
 rejected before Gradle runs.
 
 Verification commands carry their originating contract and target, for example:
-`ayni verify test --config './.ayni.toml' --language kotlin --root '.' --package
+`ayni verify test --host --config './.ayni.toml' --language kotlin --root '.' --package
 'com.example.ApiTest' --name 'createsUser'`. Use only the selectors marked
 above; copy the exact command in an artifact finding rather than synthesizing one.
 

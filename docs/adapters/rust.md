@@ -10,10 +10,13 @@ has `[package]`. Cargo commands for a member run from its workspace root.
 `cargo` and a Rust toolchain remain user-owned prerequisites for `--host`
 execution. `ayni env show` discovers Rust requirements and `ayni env lock`
 resolves exact runtime and Cargo catalog-tool versions through `mise`; locking
-does not install tools or modify the checkout. `env build`, `env doctor`, `env
-shell`, and `env run` consume the lock through the OCI backend. Native Cargo
-dependency warming and managed quality execution remain deferred, so `check`
-and `verify` still require `--host`.
+does not install tools or modify the checkout. `env build` stages the locked
+Cargo manifests, requires `Cargo.lock`, and runs `cargo fetch --locked` inside
+the image build. `env doctor`, `env shell`, `env run`, and managed `check`
+consume that image with networking and Cargo online access disabled. Cargo
+`package.workspace` values that point to a non-ancestor workspace fail closed
+because the current environment ownership contract is ancestry-based. Focused
+`verify` still requires `--host`.
 
 ## Signal Coverage
 
@@ -47,7 +50,7 @@ combined with `--package`. Unsupported or ambiguous selectors are rejected
 before Cargo or another tool runs.
 
 Verification commands carry their originating contract and target, for example:
-`ayni verify test --config './.ayni.toml' --language rust --root '.' --package
+`ayni verify test --host --config './.ayni.toml' --language rust --root '.' --package
 'my-crate' --name 'my_test'`. Use only the selectors marked above; copy the
 exact command in an artifact finding rather than synthesizing one.
 

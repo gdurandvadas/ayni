@@ -5,6 +5,7 @@
 
 mod image;
 mod lock;
+mod preparation;
 mod runtime;
 
 pub use image::{ImagePlan, image_plan};
@@ -12,7 +13,10 @@ pub use lock::{
     BASE_MISE_VERSION, BASE_VARIANT, LOCK_FILE, plan_matches_lock, read_lock,
     resolve_provisioning_base,
 };
-pub use runtime::{Engine, TargetSelection, build, detect_engine, doctor, launch};
+pub use runtime::{
+    Engine, TargetSelection, build, build_prepared, detect_engine, doctor, doctor_prepared, launch,
+    launch_prepared, launch_repository, launch_repository_prepared,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendError {

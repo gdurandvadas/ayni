@@ -10,6 +10,26 @@ fn write_executable(path: &std::path::Path, body: &str) {
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).unwrap();
 }
+fn contains_materialized_dependency(path: &std::path::Path) -> bool {
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.file_name().and_then(|name| name.to_str()) == Some("content")
+            && path.ancestors().any(|ancestor| {
+                ancestor.file_name().and_then(|name| name.to_str()) == Some("dependencies")
+            })
+        {
+            return true;
+        }
+        if path.is_dir() && contains_materialized_dependency(&path) {
+            return true;
+        }
+    }
+    false
+}
+
 fn fixture() -> TempDir {
     let root = TempDir::new().unwrap();
     let bin = root.path().join("bin");
@@ -30,6 +50,7 @@ fn fixture() -> TempDir {
             format!("[toolchain]\nchannel = \"{version}\"\n"),
         )
         .unwrap();
+        fs::write(target.join("Cargo.lock"), "version = 4\n").unwrap();
     }
     write_executable(
         &bin.join("mise"),
@@ -68,7 +89,7 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     let fingerprint = lock["fingerprint"].as_str().unwrap();
     let base_digest = lock["provisioning_base"]["digest"].as_str().unwrap();
     let labels = serde_json::json!({
-        "dev.ayni.environment.schema": "0.2.0",
+        "dev.ayni.environment.schema": "0.3.0",
         "dev.ayni.environment.lock-fingerprint": fingerprint,
         "dev.ayni.environment.base-digest": base_digest,
         "dev.ayni.environment.ayni-version": env!("CARGO_PKG_VERSION"),
@@ -78,14 +99,18 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         } else {
             "linux/amd64"
         },
+        "dev.ayni.environment.preparation-digest": "PREPARATION_DIGEST",
     });
     let record = root.path().join("record");
     write_executable(
         &root.path().join("bin/docker"),
         &format!(
-            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; printf '%s\\n' '{}' ;;\nbuild) printf '%s\\n' \"$@\" > '{}' ; context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; cat \"$context/mise.toml\" > '{}.mise'; touch '{}.built';;\nrun) printf '%s\\n' \"$@\" > '{}.run'; exit 7;;\nesac",
+            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) printf '%s\\n' \"$@\" > '{}' ; context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; cat \"$context/mise.toml\" > '{}.mise'; find \"$context/repository\" -type f | sed \"s|$context/repository/||\" | sort > '{}.inputs'; touch '{}.built';;\nrun) printf '%s\\n' \"$@\" > '{}.run'; printf '%s\\n' \"$@\" | grep -qx cp && exit 0; exit 7;;\nesac",
+            record.display(),
             record.display(),
             labels,
+            record.display(),
+            record.display(),
             record.display(),
             record.display(),
             record.display(),
@@ -114,7 +139,23 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     let dockerfile = fs::read_to_string(format!("{}.dockerfile", record.display())).unwrap();
     assert!(dockerfile.contains("MISE_AUTO_INSTALL=0"));
     assert!(dockerfile.contains("MISE_RUSTUP_COMPONENTS=\"llvm-tools-preview\""));
+    assert!(dockerfile.contains("FROM ayni-runtime AS ayni-preparation"));
+    assert!(dockerfile.contains("\"cargo\",\"fetch\",\"--locked\""));
     assert!(!dockerfile.contains(&root.path().display().to_string()));
+    let inputs = fs::read_to_string(format!("{}.inputs", record.display())).unwrap();
+    assert_eq!(
+        inputs.lines().collect::<Vec<_>>(),
+        [
+            "one/Cargo.lock",
+            "one/Cargo.toml",
+            "one/src/lib.rs",
+            "one/src/main.rs",
+            "two/Cargo.lock",
+            "two/Cargo.toml",
+            "two/src/lib.rs",
+            "two/src/main.rs"
+        ]
+    );
     let mise = fs::read_to_string(format!("{}.mise", record.display())).unwrap();
     assert!(mise.starts_with("[tools]\n"));
     assert!(mise.contains("\"rust\" = [\"1.92.0\", \"1.93.0\"]"));
@@ -144,7 +185,7 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         .args(["--language", "rust", "--root", "one", "--", "echo", "ok"])
         .output()
         .unwrap();
-    assert_eq!(run.status.code(), Some(4));
+    assert_eq!(run.status.code(), Some(7));
     assert!(String::from_utf8_lossy(&run.stderr).contains("exited with code 7"));
     let recorded = fs::read_to_string(format!("{}.run", record.display())).unwrap();
     assert!(recorded.contains("--network\nnone"));
@@ -155,13 +196,60 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         "/workspace/.ayni/environment/{}/home",
         &fingerprint[..16.min(fingerprint.len())]
     );
-    assert!(recorded.contains(&format!("CARGO_HOME={state_home}/.cache/cargo")));
-    assert!(recorded.contains(&format!("MISE_CACHE_DIR={state_home}/.cache/mise")));
+    assert!(!recorded.contains("CARGO_HOME="));
+    assert!(!recorded.contains("MISE_CACHE_DIR="));
+    assert!(recorded.contains("target=/home/ayni/.cache"));
+    assert!(recorded.contains(&format!("CARGO_TARGET_DIR={state_home}/targets/")));
     assert!(recorded.contains("MISE_RUST_VERSION=1.93.0"));
     assert!(recorded.contains("--workdir\n/workspace/one"));
     assert!(recorded.contains("RUSTUP_HOME=/home/ayni/.rustup"));
     assert!(recorded.contains("--entrypoint\necho"));
     assert!(recorded.contains("--read-only"));
+
+    let preparation = fs::read_to_string(format!("{}.preparation", record.display())).unwrap();
+    let preparation = preparation.trim();
+    let preparation = preparation.strip_prefix("sha256:").unwrap_or(preparation);
+    let cache_marker = root
+        .path()
+        .join(".ayni/environment")
+        .join(&fingerprint[..16.min(fingerprint.len())])
+        .join(&preparation[..16.min(preparation.len())])
+        .join("cache.complete");
+    fs::remove_file(&cache_marker).unwrap();
+    let redirected_marker = root.path().join("redirected-marker");
+    fs::write(&redirected_marker, "unchanged").unwrap();
+    symlink(&redirected_marker, &cache_marker).unwrap();
+    let unsafe_marker = command(&root, &["env", "run", "--repo-root"])
+        .arg(root.path())
+        .args(["--language", "rust", "--root", "one", "--", "echo", "ok"])
+        .output()
+        .unwrap();
+    assert_eq!(unsafe_marker.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&unsafe_marker.stderr).contains("without following symlinks"));
+    assert_eq!(fs::read_to_string(&redirected_marker).unwrap(), "unchanged");
+    fs::remove_file(&cache_marker).unwrap();
+    fs::write(&cache_marker, format!("sha256:{preparation}")).unwrap();
+
+    write_executable(
+        &root.path().join("bin/docker"),
+        &format!(
+            "case \"$1\" in\nversion) echo fake;;\nimage) preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nrun) printf '%s\\n' \"$@\" > '{}.check'; exit 1;;\nesac",
+            record.display(),
+            labels,
+            record.display()
+        ),
+    );
+    let managed = command(&root, &["check", "--config"])
+        .arg(root.path().join(".ayni.toml"))
+        .output()
+        .unwrap();
+    assert_eq!(managed.status.code(), Some(1));
+    let managed_args = fs::read_to_string(format!("{}.check", record.display())).unwrap();
+    assert!(managed_args.contains("AYNI_MANAGED_TARGET_ENVIRONMENTS="));
+    assert!(managed_args.contains("rust:one"));
+    assert!(managed_args.contains("rust:two"));
+    assert!(managed_args.ends_with("--output\nhuman\n"));
+    assert!(!managed_args.contains("--entrypoint"));
 
     fs::write(root.path().join("one/rust-toolchain"), "stable\n").unwrap();
     let stale = command(&root, &["env", "doctor", "--repo-root"])
@@ -170,4 +258,113 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         .unwrap();
     assert_eq!(stale.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&stale.stderr).contains("stale"));
+}
+
+#[test]
+fn npm_dependencies_are_staged_materialized_offline_and_mounted_for_managed_check() {
+    let root = TempDir::new().unwrap();
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::write(
+        root.path().join(".ayni.toml"),
+        "[checks]\ntest = false\ncoverage = false\nsize = true\ncomplexity = false\ndeps = false\nmutation = false\n[languages]\nenabled = [\"node\"]\n[node.size]\n\"**/*.js\" = { warn = 100, fail = 200 }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("package.json"),
+        r#"{"name":"fixture","version":"1.0.0","packageManager":"npm@10.9.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.path().join(".node-version"), "22.12.0\n").unwrap();
+    fs::write(
+        root.path().join("package-lock.json"),
+        r#"{"name":"fixture","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"fixture","version":"1.0.0"}}}"#,
+    )
+    .unwrap();
+    write_executable(
+        &bin.join("mise"),
+        "while [ \"$1\" = \"--no-config\" ] || [ \"$1\" = \"--no-env\" ] || [ \"$1\" = \"--no-hooks\" ]; do shift; done\n[ \"$1\" = \"version\" ] && echo '2026.8.7 linux-x64' && exit 0\nexit 1",
+    );
+    write_executable(
+        &bin.join("docker"),
+        "[ \"$1\" = \"buildx\" ] && printf '{\"digest\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}\\n' && exit 0\nexit 1",
+    );
+    let locked = command(&root, &["env", "lock", "--repo-root"])
+        .arg(root.path())
+        .output()
+        .unwrap();
+    assert!(
+        locked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&locked.stderr)
+    );
+    let lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
+    let labels = serde_json::json!({
+        "dev.ayni.environment.schema": "0.3.0",
+        "dev.ayni.environment.lock-fingerprint": lock["fingerprint"],
+        "dev.ayni.environment.base-digest": lock["provisioning_base"]["digest"],
+        "dev.ayni.environment.ayni-version": env!("CARGO_PKG_VERSION"),
+        "dev.ayni.environment.mise-version": "2025.2.4",
+        "dev.ayni.environment.platform": if cfg!(target_arch = "aarch64") { "linux/arm64" } else { "linux/amd64" },
+        "dev.ayni.environment.preparation-digest": "PREPARATION_DIGEST",
+    });
+    let record = root.path().join("node-record");
+    write_executable(
+        &bin.join("docker"),
+        &format!(
+            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; find \"$context/repository\" -type f | sed \"s|$context/repository/||\" | sort > '{}.inputs'; touch '{}.built';;\nrun) printf '%s\\n' \"$@\" >> '{}.runs'; if printf '%s\\n' \"$@\" | grep -qx npm && [ ! -f '{}.rebuild-failed' ]; then touch '{}.rebuild-failed'; exit 9; fi; printf '%s\\n' \"$@\" | grep -q -- '--entrypoint' && exit 0; exit 1;;\nesac",
+            record.display(),
+            record.display(),
+            labels,
+            record.display(),
+            record.display(),
+            record.display(),
+            record.display(),
+            record.display(),
+            record.display(),
+            record.display()
+        ),
+    );
+    let built = command(&root, &["env", "build", "--repo-root"])
+        .arg(root.path())
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let dockerfile = fs::read_to_string(format!("{}.dockerfile", record.display())).unwrap();
+    assert!(dockerfile.contains("\"npm\",\"ci\",\"--ignore-scripts\""));
+    assert!(dockerfile.contains("/opt/ayni/dependencies/"));
+    let inputs = fs::read_to_string(format!("{}.inputs", record.display())).unwrap();
+    assert_eq!(
+        inputs.lines().collect::<Vec<_>>(),
+        ["package-lock.json", "package.json"]
+    );
+
+    let failed_materialization = command(&root, &["check", "--config"])
+        .arg(root.path().join(".ayni.toml"))
+        .output()
+        .unwrap();
+    assert_eq!(failed_materialization.status.code(), Some(4));
+    assert!(
+        String::from_utf8_lossy(&failed_materialization.stderr)
+            .contains("offline dependency materialization failed")
+    );
+    assert!(!contains_materialized_dependency(
+        &root.path().join(".ayni/environment")
+    ));
+    let managed = command(&root, &["check", "--config"])
+        .arg(root.path().join(".ayni.toml"))
+        .output()
+        .unwrap();
+    assert_eq!(managed.status.code(), Some(1));
+    let runs = fs::read_to_string(format!("{}.runs", record.display())).unwrap();
+    assert!(runs.contains("npm\nrebuild\n--offline"));
+    assert!(runs.contains("target=/workspace/node_modules"));
+    assert!(runs.contains("AYNI_MANAGED_TARGET_ENVIRONMENTS="));
+    assert!(runs.contains("npm_config_offline"));
+    assert!(runs.contains("type=bind"));
 }

@@ -85,7 +85,8 @@ fn dispatch_analysis(operation: application::Operation) -> ExitCode {
         Operation::Verify(operation) if operation.execution_mode == ExecutionMode::Host => {
             run_verify_operation(operation)
         }
-        Operation::Check(_) | Operation::Verify(_) => environment_unavailable(),
+        Operation::Check(operation) => environment_backend::check(operation, &build_registry()),
+        Operation::Verify(_) => environment_unavailable(),
         _ => unreachable!("dispatch_analysis received a non-analysis operation"),
     }
 }
@@ -1202,7 +1203,10 @@ fn build_analyze_targets(
     for configured_target in configured {
         let language = configured_target.language;
         let root = configured_target.configured_root;
-        if let Some(execution) = configured_target.execution {
+        if let Some(mut execution) = configured_target.execution {
+            if let Some(environment) = managed_target_environment(language, &root)? {
+                execution.environment.extend(environment);
+            }
             let workdir = repo_root.join(&root);
             let scope = Scope {
                 workspace_root: repo_root.to_string_lossy().into_owned(),
@@ -1236,6 +1240,24 @@ fn build_analyze_targets(
         detected_targets,
         issues,
     })
+}
+
+fn managed_target_environment(
+    language: Language,
+    root: &str,
+) -> Result<Option<BTreeMap<String, String>>, String> {
+    let Some(serialized) = std::env::var_os("AYNI_MANAGED_TARGET_ENVIRONMENTS") else {
+        return Ok(None);
+    };
+    let environments: BTreeMap<String, BTreeMap<String, String>> =
+        serde_json::from_str(&serialized.to_string_lossy())
+            .map_err(|error| format!("managed target environments are invalid: {error}"))?;
+    let key = format!("{language}:{root}");
+    environments
+        .get(&key)
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| format!("managed environment has no locked activation for target {key}"))
 }
 
 fn canonicalize_relative_posix(value: &str) -> String {

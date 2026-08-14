@@ -7,10 +7,13 @@ manager, and signal tools when using `--host`. `ayni env show` discovers Node
 requirements, and `ayni env lock` resolves runtime/package-manager ranges using
 `mise` candidates while reading exact project-tool versions from
 `package-lock.json`. Locking does not install dependencies or modify the
-checkout. `env build`, `env doctor`, `env shell`, and `env run` consume the lock
-through the OCI backend. Native package-store warming, offline dependency
-materialization, and managed quality execution remain deferred, so `check` and
-`verify` still require `--host`.
+checkout. For npm with `package-lock.json`, `env build` stages only locked
+manifests, runs `npm ci --ignore-scripts`, and stores `node_modules` as an image
+seed. Shell, run, and managed check copy the seed below `.ayni/environment/`,
+mount it over the target, and run `npm rebuild --offline` with the checkout
+read-only. npm `file:` and `link:` dependencies are rejected because their
+referenced content is not part of the staged input contract. pnpm, Yarn, Bun,
+and managed `verify` remain unsupported; use `--host` for those paths.
 
 ## Signal Coverage
 
@@ -43,7 +46,7 @@ path. `--name` is test-only, and `--file` cannot be combined with `--package`.
 Unsupported or ambiguous selectors are rejected before a tool runs.
 
 Verification commands carry their originating contract and target, for example:
-`ayni verify test --config './.ayni.toml' --language node --root 'apps/web'
+`ayni verify test --host --config './.ayni.toml' --language node --root 'apps/web'
 --file 'src/example.test.ts' --name 'renders'`. Use only the selectors marked
 above; copy the exact command in an artifact finding rather than synthesizing one.
 

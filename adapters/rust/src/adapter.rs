@@ -3,6 +3,7 @@ use crate::collectors::RustCollector;
 use crate::discovery;
 use crate::environment::RustEnvironmentCapability;
 use crate::environment_resolution::RustEnvironmentResolutionCapability;
+use crate::preparation::RustDependencyPreparationCapability;
 use ayni_adapters_common::catalog::GENERIC_CATALOG_RUNTIME;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
@@ -95,6 +96,12 @@ impl LanguageAdapter for RustAdapter {
 
     fn environment_capability(&self) -> Option<&dyn ayni_core::EnvironmentCapability> {
         Some(&RustEnvironmentCapability)
+    }
+
+    fn dependency_preparation_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::DependencyPreparationCapability> {
+        Some(&RustDependencyPreparationCapability)
     }
 
     fn environment_resolution_capability(

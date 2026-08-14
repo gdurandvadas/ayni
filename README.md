@@ -66,25 +66,30 @@ cargo install --path cli
 ## Quick Start
 
 The clean-slate command model is now active. Repository initialization remains
-unavailable. Rust and Node repositories can inspect, lock, diagnose, build, and
-enter a managed OCI environment, while quality execution still uses explicit
-host mode until the new execution engine is complete:
+unavailable. Rust and npm-based Node repositories can lock and build a managed
+OCI environment, warm locked native dependencies, and run the repository gate
+offline by default:
 
 ```sh
 ayni contract show
 ayni agents sync
-ayni check --host
+ayni env lock
+ayni env build
+ayni check
 ```
+
+Use `check --host` as the explicit escape hatch for repositories whose language
+or package manager does not yet support managed preparation.
 
 Use focused verification for the inner TDD loop. `check` evaluates the configured
 repository and is the only completion gate and writer of `.ayni/last/signals.json`:
 
 ```sh
-ayni verify test --language rust --package my-crate --name test_filter
-ayni verify test --language node --file apps/web/src/example.test.ts
-ayni verify test --language go --package ./internal/api --name TestCreate
-ayni verify test --language python --file tests/test_api.py --name test_create
-ayni verify test --language kotlin --package com.example.ApiTest --name createsUser
+ayni verify test --host --language rust --package my-crate --name test_filter
+ayni verify test --host --language node --file apps/web/src/example.test.ts
+ayni verify test --host --language go --package ./internal/api --name TestCreate
+ayni verify test --host --language python --file tests/test_api.py --name test_create
+ayni verify test --host --language kotlin --package com.example.ApiTest --name createsUser
 ```
 
 Focused evidence is written to `.ayni/verify/last/signals.json` and never
@@ -104,7 +109,8 @@ ayni contract show --config path/to/.ayni.toml
 
 This human-readable view shows enabled-language roots, all six signal states,
 configured thresholds and rules, and explicit tool overrides. It writes no
-artifact; use `ayni check --host` for measured results.
+artifact; use `ayni check` for managed measured results or `ayni check --host`
+for the explicit host path.
 
 Managed environment setup is owned by the explicit `env` lifecycle:
 
@@ -119,10 +125,15 @@ ayni env run -- cargo test
 Locking may query `mise` for exact Rust/Node versions and Docker Buildx for the
 published base-image digest. `--base <reference>@sha256:<digest>` supplies an
 explicit base instead. Node project tools must already be represented in
-`package-lock.json`. Doctor, build, shell, and run consume the validated lock
-without creating or refreshing it. Multi-target shell/run requests use
-`--language` and `--root`. Native dependency cache warming remains adapter-owned
-and deferred, so managed quality execution is not enabled yet.
+`package-lock.json`. Doctor, build, shell, run, and managed check consume the
+validated lock without creating or refreshing it. Multi-target shell/run
+requests use `--language` and `--root`. Environment builds stage only
+digest-verified Cargo/npm manifests and locks, warm provider caches, and retain
+npm `node_modules` as an image seed. Launch materializes that seed below
+`.ayni/environment/`, mounts it over the target without writing dependencies to
+the checkout, and runs lifecycle rebuilds with networking disabled and the
+checkout read-only. pnpm, Yarn, Bun, managed verification, and Go/Python/Kotlin
+environments remain explicitly unsupported.
 
 `ayni init` will own repository bootstrap without installation or agent-guidance
 mutation. Run `ayni agents sync` explicitly when you want the managed guidance
@@ -131,13 +142,13 @@ block created or refreshed.
 Generate Markdown output:
 
 ```sh
-ayni check --host --output markdown
+ayni check --output markdown
 ```
 
 Emit the schema-v3 artifact for scripts:
 
 ```sh
-ayni check --host --output json
+ayni check --output json
 ``` JSON is written to stdout and progress to stderr.
 
 Compare two already-produced complete schema-v3 artifacts explicitly. This

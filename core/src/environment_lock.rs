@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 /// Version of the committed, deterministic environment lock document.
-pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.2.0";
+pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.3.0";
 
 /// Immutable OCI base selected by the environment backend. The reference is
 /// human-readable while the digest is the authoritative image identity.

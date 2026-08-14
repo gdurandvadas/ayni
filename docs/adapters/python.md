@@ -38,7 +38,7 @@ combined with `--package`. Unsupported or ambiguous selectors are rejected
 before a tool runs.
 
 Verification commands carry their originating contract and target, for example:
-`ayni verify test --config './.ayni.toml' --language python --root '.' --file
+`ayni verify test --host --config './.ayni.toml' --language python --root '.' --file
 'tests/test_api.py' --name 'test_create'`. Use only the selectors marked above;
 copy the exact command in an artifact finding rather than synthesizing one.
 
