@@ -102,6 +102,7 @@ impl LanguageAdapter for KotlinAdapter {
             ambiguous: false,
             install_cwd: root.to_path_buf(),
             exec_cwd: root.to_path_buf(),
+            environment: std::collections::BTreeMap::new(),
         })
     }
 

@@ -120,6 +120,7 @@ fn resolution(
         ambiguous: false,
         install_cwd: resolved_from,
         exec_cwd: exec_root.to_path_buf(),
+        environment: std::collections::BTreeMap::new(),
     }
 }
 

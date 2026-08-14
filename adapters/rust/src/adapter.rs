@@ -59,6 +59,7 @@ impl LanguageAdapter for RustAdapter {
                 ambiguous: false,
                 install_cwd: workspace.clone(),
                 exec_cwd: workspace,
+                environment: std::collections::BTreeMap::new(),
             });
         }
         Some(ExecutionResolution::direct(

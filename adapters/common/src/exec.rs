@@ -4,6 +4,7 @@
 //! Gradle daemon, a wedged test run) can never block an analyze run forever.
 
 use ayni_core::RunContext;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -134,12 +135,31 @@ pub fn run_command_streaming_structured(
     program: &str,
     args: &[String],
     timeout: Duration,
+    on_line: impl FnMut(&str),
+) -> ExecutionResult {
+    run_command_streaming_structured_with_environment(
+        workdir,
+        program,
+        args,
+        timeout,
+        &BTreeMap::new(),
+        on_line,
+    )
+}
+
+fn run_command_streaming_structured_with_environment(
+    workdir: &Path,
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+    environment: &BTreeMap<String, String>,
     mut on_line: impl FnMut(&str),
 ) -> ExecutionResult {
     let command_text = format_command(program, args);
     let mut command = Command::new(program);
     command
         .args(args.iter().map(String::as_str))
+        .envs(environment)
         .current_dir(workdir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -269,11 +289,12 @@ pub fn run_command_for_context_streaming_structured(
     args: &[String],
     on_line: impl FnMut(&str),
 ) -> ExecutionResult {
-    let output = run_command_streaming_structured(
+    let output = run_command_streaming_structured_with_environment(
         &context.execution.exec_cwd,
         program,
         args,
         context_timeout(context),
+        &context.execution.environment,
         on_line,
     )?;
     debug_output(context, program, args, &output);
@@ -530,9 +551,10 @@ fn append_detail(detail: &mut String, addition: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecutionErrorKind, format_command, run_command, run_command_streaming,
-        run_command_streaming_structured, run_command_structured,
+        ExecutionErrorKind, format_command, run_command, run_command_for_context_structured,
+        run_command_streaming, run_command_streaming_structured, run_command_structured,
     };
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use std::fs;
     use std::io::{self, Write};
     use std::path::Path;
@@ -562,6 +584,30 @@ mod tests {
             format_command("cargo", &[String::from("test")]),
             "cargo test"
         );
+    }
+
+    #[test]
+    fn context_environment_is_applied_only_to_the_child() {
+        const NAME: &str = "AYNI_TEST_CONTEXT_ENVIRONMENT";
+        let cwd = std::env::current_dir().expect("current directory");
+        let mut execution = ExecutionResolution::direct("runner", cwd.clone(), "test", 100);
+        execution
+            .environment
+            .insert(NAME.to_owned(), "target-value".to_owned());
+        let context = RunContext {
+            repo_root: cwd.clone(),
+            target_root: cwd.clone(),
+            workdir: cwd,
+            policy: AyniPolicy::default(),
+            scope: Scope::default(),
+            execution,
+            debug: false,
+        };
+        let (program, args) = test_child("fixture_prints_context_environment", &[]);
+        let output = run_command_for_context_structured(&context, &program, &args)
+            .expect("context command runs");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("target-value"));
+        assert!(std::env::var_os(NAME).is_none());
     }
 
     #[test]
@@ -733,6 +779,16 @@ mod tests {
         loop {
             std::thread::park();
         }
+    }
+
+    #[test]
+    #[ignore]
+    fn fixture_prints_context_environment() {
+        print!(
+            "{}",
+            std::env::var("AYNI_TEST_CONTEXT_ENVIRONMENT").unwrap_or_default()
+        );
+        io::stdout().flush().expect("flush fixture stdout");
     }
 
     #[test]

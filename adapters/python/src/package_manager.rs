@@ -142,6 +142,7 @@ fn resolution(
             exec_root.to_path_buf()
         },
         exec_cwd: exec_root.to_path_buf(),
+        environment: std::collections::BTreeMap::new(),
     }
 }
 
