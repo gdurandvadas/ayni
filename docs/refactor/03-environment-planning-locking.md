@@ -178,7 +178,7 @@ requirement with the old Ayni artifact schemas.
 
 ### Initial Rust and Node locking decisions
 
-- `.ayni.lock` schema `0.1.0` is canonical JSON with exact requirements,
+- `.ayni.lock` schema `0.2.0` is canonical JSON with exact requirements,
   deterministic ordering, and a SHA-256 fingerprint calculated without the
   fingerprint field itself. Repository identity uses the contract digest and
   excludes the checkout directory name so equivalent clones remain byte-stable.
@@ -199,9 +199,11 @@ requirement with the old Ayni artifact schemas.
   missing locked tool fails rather than changing repository dependencies.
   Other Node lock formats remain unsupported for exact tool extraction in this
   first locking slice.
-- The lock records Ayni and observed `mise` versions while marking the
-  provisioning base as `deferred`. Immutable base-image selection belongs to
-  the environment-image milestone; the lock does not invent an image digest.
+- The lock records Ayni and resolver `mise` versions plus the selected base
+  variant, its pinned image `mise` version, and an immutable OCI manifest
+  digest. `env lock` resolves the release base through Docker Buildx, or accepts
+  an explicit `<reference>@sha256:<digest>` for compatible runtimes. Base
+  identity participates in the canonical lock fingerprint.
 - Lock replacement is atomic. Malformed existing locks and failed discovery or
   resolution leave the previous bytes untouched.
 

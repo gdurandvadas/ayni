@@ -65,10 +65,10 @@ cargo install --path cli
 
 ## Quick Start
 
-The clean-slate command model is now active. Repository initialization and managed
-environment provisioning are planned commands and currently return an explicit
-unavailable result. For an already configured repository, use host mode until the
-managed environment projects are complete:
+The clean-slate command model is now active. Repository initialization remains
+unavailable. Rust and Node repositories can inspect, lock, diagnose, build, and
+enter a managed OCI environment, while quality execution still uses explicit
+host mode until the new execution engine is complete:
 
 ```sh
 ayni contract show
@@ -106,18 +106,23 @@ This human-readable view shows enabled-language roots, all six signal states,
 configured thresholds and rules, and explicit tool overrides. It writes no
 artifact; use `ayni check --host` for measured results.
 
-Managed environment setup is owned by the explicit `env` lifecycle. `env show`
-builds a read-only Rust/Node environment plan, and `env lock` resolves exact
-requirements into a deterministic `.ayni.lock`:
+Managed environment setup is owned by the explicit `env` lifecycle:
 
 ```sh
 ayni env show
 ayni env lock
+ayni env doctor
+ayni env build
+ayni env run -- cargo test
 ```
 
-Locking may query `mise` for exact Rust/Node versions; Node project tools must
-already be represented in `package-lock.json`. `env build` and the remaining
-managed provisioning lifecycle are not implemented yet.
+Locking may query `mise` for exact Rust/Node versions and Docker Buildx for the
+published base-image digest. `--base <reference>@sha256:<digest>` supplies an
+explicit base instead. Node project tools must already be represented in
+`package-lock.json`. Doctor, build, shell, and run consume the validated lock
+without creating or refreshing it. Multi-target shell/run requests use
+`--language` and `--root`. Native dependency cache warming remains adapter-owned
+and deferred, so managed quality execution is not enabled yet.
 
 `ayni init` will own repository bootstrap without installation or agent-guidance
 mutation. Run `ayni agents sync` explicitly when you want the managed guidance

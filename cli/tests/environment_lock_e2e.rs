@@ -35,7 +35,7 @@ fn fixture() -> TempDir {
     .unwrap();
     fake_mise(
         &root,
-        r#"if [ "$1" = "--version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
+        r#"if [ "$1" = "version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
 exit 1"#,
     );
     root
@@ -117,6 +117,15 @@ fn fake_mise(root: &TempDir, body: &str) -> std::path::PathBuf {
     let mut permissions = fs::metadata(&executable).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(executable, permissions).unwrap();
+    let docker = bin.join("docker");
+    fs::write(
+        &docker,
+        "#!/bin/sh\nif [ \"$1\" = \"buildx\" ]; then printf '{\"digest\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}\\n'; exit 0; fi\nexit 1\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&docker).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(docker, permissions).unwrap();
     bin
 }
 
@@ -137,7 +146,7 @@ fn node_range_resolution_selects_the_highest_matching_exact_version() {
     .unwrap();
     let bin = fake_mise(
         &root,
-        r#"if [ "$1" = "--version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
+        r#"if [ "$1" = "version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
 if [ "$1" = "ls-remote" ] && [ "$2" = "node" ]; then printf '18.20.0\n20.15.1\n22.12.0\n23.1.0\n'; exit 0; fi
 exit 1"#,
     );
@@ -173,7 +182,7 @@ fn provider_failure_uses_execution_exit_code_and_preserves_existing_bytes() {
     .unwrap();
     let bin = fake_mise(
         &root,
-        r#"if [ "$1" = "--version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
+        r#"if [ "$1" = "version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
 exit 1"#,
     );
     let inherited = std::env::var_os("PATH").unwrap_or_default();
@@ -196,7 +205,7 @@ fn unresolved_rust_catalog_tool_is_resolved_to_an_exact_version() {
     fs::write(root.path().join(".ayni.toml"), "[checks]\ntest = false\ncoverage = false\nsize = false\ncomplexity = true\ndeps = false\nmutation = false\n[languages]\nenabled = [\"rust\"]\n[rust.complexity]\nfn_cyclomatic = { warn = 10, fail = 15 }\n").unwrap();
     let bin = fake_mise(
         &root,
-        r#"if [ "$1" = "--version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
+        r#"if [ "$1" = "version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
 if [ "$1" = "latest" ] && [ "$2" = "rust@1.93.0" ]; then echo "1.93.0"; exit 0; fi
 if [ "$1" = "latest" ] && [ "$2" = "cargo:rust-code-analysis-cli" ]; then echo "0.6.19"; exit 0; fi
 exit 1"#,
@@ -246,7 +255,7 @@ fn node_workspace_uses_non_hoisted_package_lock_tool_resolution() {
     .unwrap();
     fake_mise(
         &root,
-        r#"if [ "$1" = "--version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
+        r#"if [ "$1" = "version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
 if [ "$1" = "ls-remote" ] && [ "$2" = "node" ]; then echo "22.12.0"; exit 0; fi
 exit 1"#,
     );
@@ -301,7 +310,7 @@ fn concurrent_source_change_fails_without_replacing_existing_lock() {
   echo "1.94.0"
   exit 0
 fi
-if [ "$1" = "--version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
+if [ "$1" = "version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
 exit 1"#,
     );
     let output = lock(&root);

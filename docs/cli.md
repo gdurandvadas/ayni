@@ -138,6 +138,7 @@ Resolve exact environment requirements into the committed lock
 * `--repo-root <REPO_ROOT>` — Repository root where `.ayni.lock` will be written
 
   Default value: `.`
+* `--base <BASE>` — Exact environment base as `<reference>@sha256:<digest>`; otherwise resolve the release base with Docker Buildx
 
 
 
@@ -166,6 +167,11 @@ Enter the managed environment with the checkout mounted
 * `--repo-root <REPO_ROOT>`
 
   Default value: `.`
+* `--language <LANGUAGE>` — Select a locked language target; required with --root and when otherwise ambiguous
+
+  Possible values: `rust`, `go`, `node`, `python`, `kotlin`
+
+* `--root <ROOT>` — Select one normalized locked root
 
 
 
@@ -184,6 +190,11 @@ Run an arbitrary command inside the managed environment
 * `--repo-root <REPO_ROOT>`
 
   Default value: `.`
+* `--language <LANGUAGE>` — Select a locked language target; required with --root and when otherwise ambiguous
+
+  Possible values: `rust`, `go`, `node`, `python`, `kotlin`
+
+* `--root <ROOT>` — Select one normalized locked root
 
 
 

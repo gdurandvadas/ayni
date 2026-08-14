@@ -42,7 +42,7 @@ pub use environment_adapter::{EnvironmentCapability, EnvironmentDiscoveryRequest
 pub use environment_lock::{
     ENVIRONMENT_LOCK_SCHEMA_VERSION, EnvironmentLock, LockedDependencyLock, LockedPackageManager,
     LockedRepositoryIdentity, LockedRequirementSource, LockedRuntime, LockedSignalTool,
-    LockedTargetEnvironment, ProvisioningBaseState,
+    LockedTargetEnvironment, ProvisioningBase,
 };
 pub use environment_resolution::{EnvironmentResolutionCapability, EnvironmentResolutionRequest};
 pub use language::Language;

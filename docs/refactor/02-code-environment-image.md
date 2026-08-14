@@ -32,10 +32,10 @@ versions. It is universally capable, not universally preloaded.
 ### Repository environment
 
 `ayni env build` derives an image from the committed environment lock. A local
-tag may look like:
+tag is clone-independent and platform-specific:
 
 ```text
-ayni-env:<repository>-<lock-fingerprint>
+ayni-env:lock-<fingerprint-prefix>-linux-<architecture>
 ```
 
 The repository image contains:
@@ -149,6 +149,36 @@ changes, including:
 - an Ayni or catalog version that participates in provisioning.
 
 Ordinary source edits do not invalidate the image.
+
+## Initial environment-image decisions
+
+The first lock-driven OCI backend establishes these rules:
+
+- The universal base is published as a Debian AMD64/ARM64 manifest at
+  `ghcr.io/gdurandvadas/ayni-env:<ayni-version>-debian`. It contains the
+  matching Ayni binary built against Debian Bookworm, checksum-verified `mise`
+  2025.2.4, essential build utilities, and a non-root `ayni` user, but no
+  language runtime.
+- `.ayni.lock` schema `0.2.0` records the base reference, immutable manifest
+  digest, variant, and image `mise` version. Locking resolves the default base
+  through Docker Buildx or accepts an explicit digest-qualified base.
+- Repository images use clone-independent, platform-specific tags derived from
+  the full lock fingerprint. The fingerprint, base digest, Ayni/mise versions,
+  platform, and environment-image schema are repeated as OCI labels and
+  validated by `env doctor` and before launch.
+- Generated build context contains only a Dockerfile and deterministic
+  `mise.toml`; repository source, native manifests, locks, and credentials are
+  not copied. Project-scoped Node tools therefore remain native dependencies
+  rather than being translated into invented `mise` providers.
+- `env shell` and `env run` require an explicit language/root when the lock has
+  multiple matching targets. Launch selects exact locked tool versions, mounts
+  the canonical checkout at `/workspace`, disables networking and mise
+  auto-installation, drops capabilities, and uses generated state below
+  `.ayni/environment/` for the container home.
+- Native dependency-store warming and offline materialization are not yet
+  available through the generic backend. They require adapter-owned typed
+  preparation contracts; execution fails rather than silently downloading or
+  mutating dependency manifests.
 
 ## Non-goals
 

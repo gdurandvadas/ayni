@@ -8,15 +8,17 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 /// Version of the committed, deterministic environment lock document.
-pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.1.0";
+pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.2.0";
 
-/// The provisioning base is deliberately deferred until Milestone 5 owns image
-/// selection. A lock records this explicit state rather than inventing a host
-/// image reference or provider command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProvisioningBaseState {
-    Deferred,
+/// Immutable OCI base selected by the environment backend. The reference is
+/// human-readable while the digest is the authoritative image identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvisioningBase {
+    pub reference: String,
+    pub digest: String,
+    pub variant: String,
+    pub mise_version: String,
 }
 
 /// Portable provenance retained by a lock. Free-form source detail is omitted
@@ -104,6 +106,7 @@ pub struct LockedTargetEnvironment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LockedRepositoryIdentity {
+    pub contract_path: String,
     pub contract_digest: String,
 }
 
@@ -117,7 +120,7 @@ pub struct EnvironmentLock {
     repository: LockedRepositoryIdentity,
     ayni_version: String,
     mise_version: String,
-    provisioning_base: ProvisioningBaseState,
+    provisioning_base: ProvisioningBase,
     platforms: Vec<TargetPlatform>,
     targets: Vec<LockedTargetEnvironment>,
     fingerprint: String,
@@ -135,7 +138,7 @@ impl<'de> Deserialize<'de> for EnvironmentLock {
             repository: LockedRepositoryIdentity,
             ayni_version: String,
             mise_version: String,
-            provisioning_base: ProvisioningBaseState,
+            provisioning_base: ProvisioningBase,
             platforms: Vec<TargetPlatform>,
             targets: Vec<LockedTargetEnvironment>,
             fingerprint: String,
@@ -159,7 +162,7 @@ struct EnvironmentLockParts {
     repository: LockedRepositoryIdentity,
     ayni_version: String,
     mise_version: String,
-    provisioning_base: ProvisioningBaseState,
+    provisioning_base: ProvisioningBase,
     platforms: Vec<TargetPlatform>,
     targets: Vec<LockedTargetEnvironment>,
     fingerprint: String,
@@ -167,15 +170,26 @@ struct EnvironmentLockParts {
 }
 
 impl EnvironmentLock {
-    /// Projects a fully resolved plan into a lock. Image/base selection remains
-    /// explicitly deferred until the provisioning milestone.
+    /// Projects a fully resolved plan and immutable provisioning base into a lock.
     pub fn from_resolved_plan(
         plan: &ResolvedEnvironmentPlan,
         ayni_version: impl Into<String>,
         mise_version: impl Into<String>,
+        provisioning_base: ProvisioningBase,
+        contract_path: impl AsRef<str>,
         source_digests: &BTreeMap<String, String>,
     ) -> Result<Self, EnvironmentPlanError> {
         let plan = plan.plan();
+        if let Some(target) = plan
+            .targets()
+            .iter()
+            .find(|target| !target.system_requirements.is_empty())
+        {
+            return Err(EnvironmentPlanError::UnsupportedProvisioning {
+                target: target.target.clone(),
+                item: String::from("locked system requirements"),
+            });
+        }
         let targets = plan
             .targets()
             .iter()
@@ -235,11 +249,12 @@ impl EnvironmentLock {
             .collect();
         Self::from_parts(EnvironmentLockParts {
             repository: LockedRepositoryIdentity {
+                contract_path: contract_path.as_ref().to_owned(),
                 contract_digest: plan.repository().contract_digest.clone(),
             },
             ayni_version: ayni_version.into(),
             mise_version: mise_version.into(),
-            provisioning_base: ProvisioningBaseState::Deferred,
+            provisioning_base,
             platforms: plan.platforms().to_vec(),
             targets,
             fingerprint: String::new(),
@@ -252,7 +267,7 @@ impl EnvironmentLock {
             mut repository,
             mut ayni_version,
             mut mise_version,
-            provisioning_base,
+            mut provisioning_base,
             mut platforms,
             mut targets,
             fingerprint,
@@ -264,6 +279,7 @@ impl EnvironmentLock {
         {
             return Err(EnvironmentPlanError::UnsupportedLockSchema(schema_version));
         }
+        normalize_provisioning_base(&mut provisioning_base)?;
         normalize_lock_header(
             &mut repository,
             &mut ayni_version,
@@ -307,7 +323,7 @@ impl EnvironmentLock {
             repository: &'a LockedRepositoryIdentity,
             ayni_version: &'a str,
             mise_version: &'a str,
-            provisioning_base: ProvisioningBaseState,
+            provisioning_base: &'a ProvisioningBase,
             platforms: &'a [TargetPlatform],
             targets: &'a [LockedTargetEnvironment],
         }
@@ -316,7 +332,7 @@ impl EnvironmentLock {
             repository: &self.repository,
             ayni_version: &self.ayni_version,
             mise_version: &self.mise_version,
-            provisioning_base: self.provisioning_base,
+            provisioning_base: &self.provisioning_base,
             platforms: &self.platforms,
             targets: &self.targets,
         };
@@ -350,9 +366,23 @@ impl EnvironmentLock {
         &self.targets
     }
     #[must_use]
-    pub const fn provisioning_base(&self) -> ProvisioningBaseState {
-        self.provisioning_base
+    pub fn provisioning_base(&self) -> &ProvisioningBase {
+        &self.provisioning_base
     }
+}
+
+fn normalize_provisioning_base(base: &mut ProvisioningBase) -> Result<(), EnvironmentPlanError> {
+    base.reference = lock_required_label("provisioning-base reference", base.reference.clone())?;
+    if base.reference.contains(char::is_whitespace) || base.reference.contains('@') {
+        return Err(EnvironmentPlanError::EmptyField(
+            "provisioning-base reference",
+        ));
+    }
+    base.digest = lock_validate_digest("provisioning-base digest", base.digest.clone())?;
+    base.variant = lock_required_label("provisioning-base variant", base.variant.clone())?;
+    base.mise_version =
+        normalize_exact_lock_version("provisioning-base mise version", base.mise_version.clone())?;
+    Ok(())
 }
 
 fn normalize_lock_header(
@@ -361,6 +391,8 @@ fn normalize_lock_header(
     mise_version: &mut String,
     platforms: &mut Vec<TargetPlatform>,
 ) -> Result<(), EnvironmentPlanError> {
+    repository.contract_path =
+        lock_normalize_repository_path("contract path", &repository.contract_path)?;
     repository.contract_digest =
         lock_validate_digest("contract digest", repository.contract_digest.clone())?;
     *ayni_version = normalize_exact_lock_version("ayni version", ayni_version.clone())?;
@@ -596,6 +628,15 @@ mod tests {
         format!("sha256:{}", character.to_string().repeat(64))
     }
 
+    fn base() -> ProvisioningBase {
+        ProvisioningBase {
+            reference: "ghcr.io/gdurandvadas/ayni-env:0.8.1-debian".to_owned(),
+            digest: digest('b'),
+            variant: "debian".to_owned(),
+            mise_version: "2025.2.4".to_owned(),
+        }
+    }
+
     fn target(language: Language, root: &str) -> LockedTargetEnvironment {
         LockedTargetEnvironment {
             target: TargetIdentity::new(language, root).expect("target identity"),
@@ -620,11 +661,12 @@ mod tests {
     fn lock(targets: Vec<LockedTargetEnvironment>) -> EnvironmentLock {
         EnvironmentLock::from_parts(EnvironmentLockParts {
             repository: LockedRepositoryIdentity {
+                contract_path: ".ayni.toml".to_owned(),
                 contract_digest: digest('a'),
             },
             ayni_version: "0.8.1".to_owned(),
             mise_version: "2026.8.7".to_owned(),
-            provisioning_base: ProvisioningBaseState::Deferred,
+            provisioning_base: base(),
             platforms: vec![TargetPlatform {
                 os: OperatingSystem::Linux,
                 architecture: Architecture::Amd64,
@@ -652,6 +694,32 @@ mod tests {
     }
 
     #[test]
+    fn construction_rejects_non_immutable_provisioning_base() {
+        let mut base = base();
+        base.digest = "latest".to_owned();
+        assert!(
+            EnvironmentLock::from_parts(EnvironmentLockParts {
+                repository: LockedRepositoryIdentity {
+                    contract_path: ".ayni.toml".to_owned(),
+                    contract_digest: digest('a')
+                },
+                ayni_version: "0.8.1".to_owned(),
+                mise_version: "2026.8.7".to_owned(),
+                provisioning_base: base,
+                platforms: vec![TargetPlatform {
+                    os: OperatingSystem::Linux,
+                    architecture: Architecture::Amd64,
+                    libc: Libc::Glibc
+                }],
+                targets: vec![target(Language::Rust, ".")],
+                fingerprint: String::new(),
+                schema_version: None,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
     fn deserialization_rejects_fingerprint_tampering() {
         let serialized = lock(vec![target(Language::Rust, ".")])
             .canonical_json()
@@ -669,11 +737,12 @@ mod tests {
         assert!(
             EnvironmentLock::from_parts(EnvironmentLockParts {
                 repository: LockedRepositoryIdentity {
+                    contract_path: ".ayni.toml".to_owned(),
                     contract_digest: digest('a'),
                 },
                 ayni_version: "0.8.1".to_owned(),
                 mise_version: "2026.8.7".to_owned(),
-                provisioning_base: ProvisioningBaseState::Deferred,
+                provisioning_base: base(),
                 platforms: vec![TargetPlatform {
                     os: OperatingSystem::Linux,
                     architecture: Architecture::Amd64,

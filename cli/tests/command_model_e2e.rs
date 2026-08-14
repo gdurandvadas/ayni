@@ -5,16 +5,12 @@ fn ayni() -> Command {
 }
 
 #[test]
-fn unavailable_greenfield_operations_use_incomplete_exit_and_clean_stdout() {
+fn environment_operations_require_a_valid_lock_without_implicit_provisioning() {
     for arguments in [["env", "doctor"], ["env", "build"], ["env", "shell"]] {
         let output = ayni().args(arguments).output().expect("launch ayni");
-        assert_eq!(output.status.code(), Some(4));
+        assert_eq!(output.status.code(), Some(3));
         assert!(output.stdout.is_empty());
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("is not implemented yet"),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("environment lock"));
     }
 }
 

@@ -55,11 +55,25 @@ byte-stable output across equivalent checkout directory names, and failed
 resolution preserves the previous lock. Rust selectors and Cargo catalog tools
 resolve through `mise`; Node ranges use `mise` candidates with npm-compatible
 semver selection, while Node project tools must already be present in
-`package-lock.json`. Provisioning-base selection remains explicitly deferred
-until environment image support exists. Repository initialization, readiness diagnosis, managed
-environment builds, and environment support for Go, Python, and Kotlin are not
-implemented yet. Those unavailable operations do not reuse the removed
-`install` behavior.
+`package-lock.json`. A lock now contains a validated immutable OCI base
+reference and SHA-256 digest. The default release-base digest is resolved with
+Docker Buildx; `env lock --base <reference>@sha256:<digest>` accepts an explicit
+base. `env doctor`, `env build`, `env shell`, and `env run` use Docker first and
+compatible Podman second. They derive image identity and generic mise input only
+from the validated lock and never implicitly create a lock or image. The build
+context contains no checkout source or credentials. Image labels are checked
+before reuse and launch.
+
+Launch mounts the canonical checkout at `/workspace`, selects one locked target,
+uses the invoking identity, disables mise auto-install and networking, mounts a
+writable generated home, and applies read-only-root and privilege restrictions.
+Multi-target shell/run requests require `--language` and `--root`.
+
+Native dependency cache warming and offline dependency materialization remain
+adapter-owned and are intentionally not implemented by this generic backend:
+missing artifacts fail rather than downloading. Environment resolution remains
+Rust/Node-only; Go, Python, and Kotlin provisioning are unavailable. No
+operation reuses the removed `install` behavior.
 
 Until the environment projects are complete, quality execution requires the
 explicit `--host` escape hatch. Host mode retains adapter-owned runner

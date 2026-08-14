@@ -15,6 +15,7 @@ mod completion;
 mod contract;
 mod discovery;
 mod environment;
+mod environment_backend;
 mod environment_lock;
 mod ui;
 mod verification_command;
@@ -43,7 +44,35 @@ fn main() -> ExitCode {
 }
 
 fn dispatch(operation: application::Operation) -> ExitCode {
-    use application::{ExecutionMode, Operation, OutputFormat};
+    use application::Operation;
+
+    match operation {
+        operation @ (Operation::Check(_) | Operation::Verify(_)) => dispatch_analysis(operation),
+        operation @ (Operation::EnvShow(_)
+        | Operation::EnvLock(_)
+        | Operation::EnvDoctor(_)
+        | Operation::EnvBuild(_)
+        | Operation::EnvShell(_)
+        | Operation::EnvRun(_)) => dispatch_environment(operation),
+        operation @ (Operation::ContractShow(_) | Operation::ContractValidate(_)) => {
+            dispatch_contract(operation)
+        }
+        Operation::AgentsSync(operation) => agents_sync(&operation.repo_root),
+        Operation::ResultsCompare(operation) => artifact_compare::run(
+            &operation.baseline,
+            &operation.candidate,
+            operation.output == application::OutputFormat::Json,
+        ),
+        Operation::GenerateDocs => {
+            print!("{}", clap_markdown::help_markdown::<args::Cli>());
+            ExitCode::SUCCESS
+        }
+        operation => not_implemented(&operation),
+    }
+}
+
+fn dispatch_analysis(operation: application::Operation) -> ExitCode {
+    use application::{ExecutionMode, Operation};
 
     match operation {
         Operation::Check(operation) if operation.execution_mode == ExecutionMode::Host => analyze(
@@ -56,25 +85,36 @@ fn dispatch(operation: application::Operation) -> ExitCode {
         Operation::Verify(operation) if operation.execution_mode == ExecutionMode::Host => {
             run_verify_operation(operation)
         }
+        Operation::Check(_) | Operation::Verify(_) => environment_unavailable(),
+        _ => unreachable!("dispatch_analysis received a non-analysis operation"),
+    }
+}
+
+fn dispatch_environment(operation: application::Operation) -> ExitCode {
+    use application::Operation;
+
+    let registry = build_registry();
+    match operation {
+        Operation::EnvShow(operation) => environment::show(operation, &registry),
+        Operation::EnvLock(operation) => environment_lock::run(operation, &registry),
+        Operation::EnvDoctor(operation) => environment_backend::doctor(operation, &registry),
+        Operation::EnvBuild(operation) => environment_backend::build(operation, &registry),
+        Operation::EnvShell(operation) => environment_backend::shell(operation, &registry),
+        Operation::EnvRun(operation) => environment_backend::run(operation, &registry),
+        _ => unreachable!("dispatch_environment received a non-environment operation"),
+    }
+}
+
+fn dispatch_contract(operation: application::Operation) -> ExitCode {
+    use application::{Operation, OutputFormat};
+
+    match operation {
         Operation::ContractShow(operation) => contract_display(
             operation.config.to_string_lossy().as_ref(),
             operation.output == OutputFormat::Json,
         ),
         Operation::ContractValidate(operation) => contract_validate(&operation.config),
-        Operation::AgentsSync(operation) => agents_sync(&operation.repo_root),
-        Operation::EnvShow(operation) => environment::show(operation, &build_registry()),
-        Operation::EnvLock(operation) => environment_lock::run(operation, &build_registry()),
-        Operation::ResultsCompare(operation) => artifact_compare::run(
-            &operation.baseline,
-            &operation.candidate,
-            operation.output == OutputFormat::Json,
-        ),
-        Operation::Check(_) | Operation::Verify(_) => environment_unavailable(),
-        Operation::GenerateDocs => {
-            print!("{}", clap_markdown::help_markdown::<args::Cli>());
-            ExitCode::SUCCESS
-        }
-        operation => not_implemented(&operation),
+        _ => unreachable!("dispatch_contract received a non-contract operation"),
     }
 }
 

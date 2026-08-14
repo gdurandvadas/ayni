@@ -46,7 +46,11 @@ pub(crate) fn run(operation: EnvLockOperation, registry: &AdapterRegistry) -> Ex
             );
             println!("fingerprint: {}", lock.fingerprint());
             println!("targets: {}", lock.targets().len());
-            println!("provisioning base: deferred until env build support");
+            println!(
+                "provisioning base: {}@{}",
+                lock.provisioning_base().reference,
+                lock.provisioning_base().digest
+            );
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -60,6 +64,47 @@ fn lock(
     operation: &EnvLockOperation,
     registry: &AdapterRegistry,
 ) -> Result<(PathBuf, EnvironmentLock, bool), LockError> {
+    let prepared = prepare_lock(operation, registry)?;
+    let resolved_plan = resolve_plan(&prepared.plan, &prepared.repo_root, registry)?;
+    let mise_version = mise_version(&prepared.repo_root)?;
+    ensure_prepared_snapshot(&prepared, registry)?;
+    let source_digests = merge_source_digests(
+        &resolved_plan,
+        &prepared.repo_root,
+        prepared.source_snapshot.clone(),
+    )?;
+    let lock = create_lock(
+        operation,
+        &prepared.repo_root,
+        &resolved_plan,
+        mise_version,
+        &source_digests,
+    )?;
+    let serialized = lock
+        .canonical_json()
+        .map_err(|error| LockError::execution(error.to_string()))?;
+    ensure_prepared_snapshot(&prepared, registry)?;
+    let changed = persist_if_changed(
+        &prepared.destination,
+        prepared.existing.as_deref(),
+        &serialized,
+    )?;
+    Ok((prepared.destination, lock, changed))
+}
+
+struct PreparedLock {
+    show: EnvShowOperation,
+    plan: EnvironmentPlan,
+    repo_root: PathBuf,
+    destination: PathBuf,
+    existing: Option<String>,
+    source_snapshot: BTreeMap<String, String>,
+}
+
+fn prepare_lock(
+    operation: &EnvLockOperation,
+    registry: &AdapterRegistry,
+) -> Result<PreparedLock, LockError> {
     let show = EnvShowOperation {
         config: operation.config.clone(),
         repo_root: operation.repo_root.clone(),
@@ -74,24 +119,54 @@ fn lock(
     let destination = repo_root.join(LOCK_FILE);
     let existing = validate_existing_lock(&destination)?;
     let source_snapshot = capture_source_snapshot(&show, registry, &plan, &repo_root)?;
-    let resolved_plan = resolve_plan(&plan, &repo_root, registry)?;
-    let mise_version = mise_version(&repo_root)?;
-    ensure_plan_snapshot(&show, registry, &plan, &repo_root, &source_snapshot)?;
-    let locked_source_digests =
-        merge_source_digests(&resolved_plan, &repo_root, source_snapshot.clone())?;
-    let lock = EnvironmentLock::from_resolved_plan(
-        &resolved_plan,
+    Ok(PreparedLock {
+        show,
+        plan,
+        repo_root,
+        destination,
+        existing,
+        source_snapshot,
+    })
+}
+
+fn ensure_prepared_snapshot(
+    prepared: &PreparedLock,
+    registry: &AdapterRegistry,
+) -> Result<(), LockError> {
+    ensure_plan_snapshot(
+        &prepared.show,
+        registry,
+        &prepared.plan,
+        &prepared.repo_root,
+        &prepared.source_snapshot,
+    )
+}
+
+fn create_lock(
+    operation: &EnvLockOperation,
+    repo_root: &Path,
+    resolved_plan: &ayni_core::ResolvedEnvironmentPlan,
+    mise_version: String,
+    source_digests: &BTreeMap<String, String>,
+) -> Result<EnvironmentLock, LockError> {
+    let provisioning_base = ayni_environment::resolve_provisioning_base(
+        env!("CARGO_PKG_VERSION"),
+        operation.base.as_deref(),
+    )
+    .map_err(|error| LockError {
+        code: error.code,
+        message: error.message,
+    })?;
+    let contract_path = contract_path(operation, repo_root)?;
+    EnvironmentLock::from_resolved_plan(
+        resolved_plan,
         env!("CARGO_PKG_VERSION"),
         mise_version,
-        &locked_source_digests,
+        provisioning_base,
+        contract_path,
+        source_digests,
     )
-    .map_err(|error| LockError::environment(error.to_string()))?;
-    let serialized = lock
-        .canonical_json()
-        .map_err(|error| LockError::execution(error.to_string()))?;
-    ensure_plan_snapshot(&show, registry, &plan, &repo_root, &source_snapshot)?;
-    let changed = persist_if_changed(&destination, existing.as_deref(), &serialized)?;
-    Ok((destination, lock, changed))
+    .map_err(|error| LockError::environment(error.to_string()))
 }
 
 fn ensure_no_conflicts(plan: &EnvironmentPlan) -> Result<(), LockError> {
@@ -111,6 +186,33 @@ fn canonical_repo_root(operation: &EnvLockOperation) -> Result<PathBuf, LockErro
             "failed to establish repository root {}: {error}",
             operation.repo_root.display()
         ))
+    })
+}
+
+fn contract_path(operation: &EnvLockOperation, repo_root: &Path) -> Result<String, LockError> {
+    let candidate = if operation.config.is_absolute() {
+        operation.config.clone()
+    } else {
+        repo_root.join(&operation.config)
+    };
+    let canonical = candidate.canonicalize().map_err(|error| {
+        LockError::input(format!(
+            "failed to resolve environment contract {}: {error}",
+            candidate.display()
+        ))
+    })?;
+    let relative = canonical.strip_prefix(repo_root).map_err(|_| {
+        LockError::input(format!(
+            "environment contract {} escapes repository root {}",
+            canonical.display(),
+            repo_root.display()
+        ))
+    })?;
+    let value = relative.to_string_lossy().replace('\\', "/");
+    Ok(if value.is_empty() {
+        ".".to_owned()
+    } else {
+        value
     })
 }
 
@@ -312,7 +414,7 @@ fn mise_version(repo_root: &Path) -> Result<String, LockError> {
         "--no-config".to_owned(),
         "--no-env".to_owned(),
         "--no-hooks".to_owned(),
-        "--version".to_owned(),
+        "version".to_owned(),
     ];
     let output = ayni_adapters_common::exec::run_command(
         repo_root,

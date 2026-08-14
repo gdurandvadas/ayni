@@ -1,6 +1,6 @@
 use crate::application::{
-    CheckOperation, ContractOperation, EnvLockOperation, EnvRunOperation, EnvShowOperation,
-    ExecutionMode, ImpactOperation, Operation, OutputFormat, RepositoryOperation,
+    CheckOperation, ContractOperation, EnvLockOperation, EnvRunOperation, EnvShellOperation,
+    EnvShowOperation, ExecutionMode, ImpactOperation, Operation, OutputFormat, RepositoryOperation,
     ResultsCompareOperation, ResultsShowOperation, VerifyOperation,
 };
 use ayni_core::{Language, SignalKind};
@@ -95,7 +95,7 @@ enum EnvCommands {
     /// Build the repository code-environment image from a current lock.
     Build(RepositoryOptions),
     /// Enter the managed environment with the checkout mounted.
-    Shell(RepositoryOptions),
+    Shell(EnvShellOptions),
     /// Run an arbitrary command inside the managed environment.
     Run(EnvRunOptions),
 }
@@ -107,9 +107,15 @@ impl EnvCommands {
             Self::Doctor(options) => Operation::EnvDoctor(options.into()),
             Self::Lock(options) => Operation::EnvLock(options.into_operation()),
             Self::Build(options) => Operation::EnvBuild(options.into()),
-            Self::Shell(options) => Operation::EnvShell(options.into()),
+            Self::Shell(options) => Operation::EnvShell(EnvShellOperation {
+                repo_root: options.repo_root,
+                language: options.target.language.map(LanguageArg::into_language),
+                root: options.target.root,
+            }),
             Self::Run(options) => Operation::EnvRun(EnvRunOperation {
                 repo_root: options.repo_root,
+                language: options.target.language.map(LanguageArg::into_language),
+                root: options.target.root,
                 command: options.command,
             }),
         }
@@ -289,6 +295,9 @@ struct EnvLockOptions {
     /// Repository root where `.ayni.lock` will be written.
     #[arg(long, default_value = ".")]
     repo_root: PathBuf,
+    /// Exact environment base as `<reference>@sha256:<digest>`; otherwise resolve the release base with Docker Buildx.
+    #[arg(long)]
+    base: Option<String>,
 }
 
 impl EnvLockOptions {
@@ -296,14 +305,35 @@ impl EnvLockOptions {
         EnvLockOperation {
             config: self.config,
             repo_root: self.repo_root,
+            base: self.base,
         }
     }
+}
+
+#[derive(Args, Debug)]
+struct EnvironmentTargetOptions {
+    /// Select a locked language target; required with --root and when otherwise ambiguous.
+    #[arg(long, value_enum)]
+    language: Option<LanguageArg>,
+    /// Select one normalized locked root.
+    #[arg(long)]
+    root: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct EnvShellOptions {
+    #[arg(long, default_value = ".")]
+    repo_root: PathBuf,
+    #[command(flatten)]
+    target: EnvironmentTargetOptions,
 }
 
 #[derive(Args, Debug)]
 struct EnvRunOptions {
     #[arg(long, default_value = ".")]
     repo_root: PathBuf,
+    #[command(flatten)]
+    target: EnvironmentTargetOptions,
     #[arg(required = true, last = true, allow_hyphen_values = true)]
     command: Vec<String>,
 }
@@ -637,6 +667,10 @@ mod tests {
             "run",
             "--repo-root",
             "fixture",
+            "--language",
+            "rust",
+            "--root",
+            "crates/app",
             "--",
             "cargo",
             "test",
@@ -648,6 +682,8 @@ mod tests {
             panic!("env run operation");
         };
         assert_eq!(operation.repo_root, PathBuf::from("fixture"));
+        assert_eq!(operation.language, Some(Language::Rust));
+        assert_eq!(operation.root.as_deref(), Some("crates/app"));
         assert_eq!(operation.command, ["cargo", "test", "--workspace"]);
     }
 

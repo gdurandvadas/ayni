@@ -188,6 +188,7 @@ dependencies = [
  "ayni-adapters-python",
  "ayni-adapters-rust",
  "ayni-core",
+ "ayni-environment",
  "clap",
  "clap-markdown",
  "crossterm",
@@ -213,6 +214,17 @@ dependencies = [
  "tempfile",
  "toml",
  "walkdir",
+]
+
+[[package]]
+name = "ayni-environment"
+version = "0.8.1"
+dependencies = [
+ "ayni-adapters-common",
+ "ayni-core",
+ "libc",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

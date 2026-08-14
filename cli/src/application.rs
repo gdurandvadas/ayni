@@ -21,7 +21,7 @@ pub(crate) enum Operation {
     EnvDoctor(RepositoryOperation),
     EnvLock(EnvLockOperation),
     EnvBuild(RepositoryOperation),
-    EnvShell(RepositoryOperation),
+    EnvShell(EnvShellOperation),
     EnvRun(EnvRunOperation),
     ContractShow(ContractOperation),
     ContractValidate(ContractOperation),
@@ -51,11 +51,21 @@ pub(crate) struct EnvShowOperation {
 pub(crate) struct EnvLockOperation {
     pub config: PathBuf,
     pub repo_root: PathBuf,
+    pub base: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct EnvShellOperation {
+    pub repo_root: PathBuf,
+    pub language: Option<Language>,
+    pub root: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct EnvRunOperation {
     pub repo_root: PathBuf,
+    pub language: Option<Language>,
+    pub root: Option<String>,
     pub command: Vec<String>,
 }
 
