@@ -55,7 +55,7 @@ pub(crate) fn dockerfile_fragment(
         }
     }
     output.push_str(
-        "FROM ayni-runtime\nCOPY --from=ayni-preparation /home/ayni/.cache /home/ayni/.cache\n",
+        "FROM ayni-runtime\nCOPY --from=ayni-preparation /home/ayni/.cache /home/ayni/.cache\nRUN chmod -R a+rX /home/ayni/.cache\n",
     );
     for plan in ordered_plans(plans) {
         for prepared in &plan.outputs {

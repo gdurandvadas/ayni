@@ -4,7 +4,7 @@ use crate::image::{
     image_plan_with_preparation,
 };
 use crate::{BackendError, concise_output, read_lock};
-use ayni_adapters_common::exec::{DEFAULT_TOOL_TIMEOUT, run_command};
+use ayni_adapters_common::exec::{DEFAULT_TOOL_TIMEOUT, run_command, run_command_streaming};
 use ayni_core::{
     DependencyPreparationPlan, EnvironmentLock, Language, LockedTargetEnvironment, TargetIdentity,
 };
@@ -129,11 +129,12 @@ pub fn build_prepared(
         input.path.join("Dockerfile").to_string_lossy().into_owned(),
         input.path.to_string_lossy().into_owned(),
     ];
-    let output = run_command(
+    let output = run_command_streaming(
         &input.path,
         engine_name(engine),
         &args,
         DEFAULT_TOOL_TIMEOUT,
+        |line| eprintln!("{line}"),
     )
     .map_err(|error| {
         BackendError::execution(format!(
