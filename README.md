@@ -124,7 +124,10 @@ ayni env run -- cargo test
 
 Locking may query `mise` for exact Rust/Node versions and Docker Buildx for the
 published base-image digest. `--base <reference>@sha256:<digest>` supplies an
-explicit base instead. Node project tools must already be represented in
+explicit base instead. If the published base is unavailable, run
+`scripts/build-local-environment-image.sh`; it compiles Ayni inside a Linux
+container and prints the exact local `env lock --base` command. Node project
+tools must already be represented in
 `package-lock.json`. Doctor, build, shell, run, and managed check consume the
 validated lock without creating or refreshing it. Multi-target shell/run
 requests use `--language` and `--root`. Environment builds stage only
