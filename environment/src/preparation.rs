@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const INPUT_ROOT: &str = "/tmp/ayni/repository";
 pub(crate) const SEED_ROOT: &str = "/opt/ayni/dependencies";
+const PREPARATION_IMPLEMENTATION_VERSION: &str = "2";
 
 pub(crate) fn dockerfile_fragment(
     lock: &EnvironmentLock,
@@ -55,7 +56,7 @@ pub(crate) fn dockerfile_fragment(
         }
     }
     output.push_str(
-        "FROM ayni-runtime\nCOPY --from=ayni-preparation /home/ayni/.cache /home/ayni/.cache\nRUN chmod -R a+rX /home/ayni/.cache\n",
+        "FROM ayni-runtime\nUSER root\nCOPY --from=ayni-preparation /home/ayni/.cache /home/ayni/.cache\nRUN chmod -R a+rX /home/ayni/.cache\nUSER ayni\n",
     );
     for plan in ordered_plans(plans) {
         for prepared in &plan.outputs {
@@ -230,11 +231,12 @@ pub(crate) fn preparation_digest(
     plans: &[DependencyPreparationPlan],
 ) -> Result<String, BackendError> {
     let plans = ordered_plans(plans);
-    let bytes = serde_json::to_vec(&plans).map_err(|error| {
-        BackendError::execution(format!(
-            "failed to serialize dependency preparation: {error}"
-        ))
-    })?;
+    let bytes =
+        serde_json::to_vec(&(PREPARATION_IMPLEMENTATION_VERSION, plans)).map_err(|error| {
+            BackendError::execution(format!(
+                "failed to serialize dependency preparation: {error}"
+            ))
+        })?;
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
