@@ -78,19 +78,17 @@ def validate_artifact(
         fail(f"schema_version must be {SCHEMA_VERSION!r}")
 
     # Ayni preserves the normalized lexical parent of the supplied config path.
-    # Do not resolve this path: CI intentionally analyzes fixtures through a
+    # Do not resolve this path: CI intentionally checks fixtures through a
     # repository-relative config path, and the artifact records that same root.
     expected_repository_root = repository_root
     if document.get("repository_root") != expected_repository_root:
         fail(
-            "repository_root does not identify the analyzed fixture: "
+            "repository_root does not identify the checked fixture: "
             f"expected {expected_repository_root!r}, got {document.get('repository_root')!r}"
         )
     invocation = require_object(document.get("invocation"), "invocation")
-    if invocation.get("command") != "analyze" or invocation.get("languages") != [
-        language
-    ]:
-        fail(f"invocation must be repository analyze for language {language!r}")
+    if invocation.get("command") != "check" or invocation.get("languages") != [language]:
+        fail(f"invocation must be repository check for language {language!r}")
 
     roots = list(expected_roots)
     if not roots or len(set(roots)) != len(roots):
@@ -239,7 +237,7 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument(
         "--repository-root",
         required=True,
-        help="Normalized lexical fixture root supplied to analyze",
+        help="Normalized lexical fixture root supplied to check",
     )
     return cli
 
