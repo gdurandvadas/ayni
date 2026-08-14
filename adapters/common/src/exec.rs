@@ -15,6 +15,10 @@ use std::time::{Duration, Instant};
 /// How often the runner checks a live child when no output arrives.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+/// Maximum time spent draining child pipes after the direct process exits or
+/// is terminated. Descendants must not be able to retain a pipe indefinitely.
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Fallback timeout for invocations that have no `RunContext` (and therefore
 /// no policy) available. Matches the `execution.tool_timeout_seconds` default.
 pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(1800);
@@ -140,6 +144,11 @@ pub fn run_command_streaming_structured(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = command.spawn().map_err(|error| {
         Box::new(ExecutionError {
             kind: ExecutionErrorKind::Spawn,
@@ -189,7 +198,7 @@ pub fn run_command_streaming_structured(
 
     if let Some((kind, mut detail)) = execution_failure {
         let cleanup_status = terminate_and_reap(&mut child, &mut detail);
-        capture.drain_to_end(&receiver, &mut on_line, &mut detail);
+        capture.drain_to_end(&receiver, &mut on_line, &mut detail, OUTPUT_DRAIN_TIMEOUT);
         return Err(Box::new(ExecutionError {
             kind,
             command: command_text,
@@ -203,7 +212,7 @@ pub fn run_command_streaming_structured(
     }
 
     let mut detail = String::new();
-    capture.drain_to_end(&receiver, &mut on_line, &mut detail);
+    capture.drain_to_end(&receiver, &mut on_line, &mut detail, OUTPUT_DRAIN_TIMEOUT);
     if !detail.is_empty() {
         return Err(Box::new(ExecutionError {
             kind: ExecutionErrorKind::Wait,
@@ -430,9 +439,16 @@ impl Capture {
         receiver: &mpsc::Receiver<ReaderEvent>,
         on_line: &mut impl FnMut(&str),
         detail: &mut String,
+        timeout: Duration,
     ) {
+        let started = Instant::now();
         while !self.stdout.done || !self.stderr.done {
-            match receiver.recv() {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                append_detail(detail, "timed out while draining child output pipes");
+                break;
+            }
+            match receiver.recv_timeout(remaining) {
                 Ok(event) => {
                     let mut failure = None;
                     self.handle(event, on_line, &mut failure);
@@ -440,8 +456,12 @@ impl Capture {
                         append_detail(detail, &error);
                     }
                 }
-                Err(error) => {
-                    append_detail(detail, &format!("output readers disconnected: {error}"));
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    append_detail(detail, "timed out while draining child output pipes");
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    append_detail(detail, "output readers disconnected");
                     break;
                 }
             }
@@ -470,6 +490,24 @@ fn drain_available(
 }
 
 fn terminate_and_reap(child: &mut Child, detail: &mut String) -> Option<ExitStatus> {
+    #[cfg(unix)]
+    {
+        let process_group = -(i64::from(child.id()) as libc::pid_t);
+        // SAFETY: the spawned child is placed in a new process group whose ID
+        // equals its PID. `kill` receives that bounded process-group ID and a
+        // constant signal; no pointers or borrowed memory cross the FFI call.
+        let result = unsafe { libc::kill(process_group, libc::SIGKILL) };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                append_detail(
+                    detail,
+                    &format!("failed to kill child process group: {error}"),
+                );
+            }
+        }
+    }
+    #[cfg(not(unix))]
     if let Err(error) = child.kill() {
         append_detail(detail, &format!("failed to kill child: {error}"));
     }
@@ -499,7 +537,11 @@ mod tests {
     use std::io::{self, Write};
     use std::path::Path;
     use std::process;
+    #[cfg(unix)]
+    use std::process::Command;
     use std::time::Duration;
+    #[cfg(unix)]
+    use std::time::Instant;
 
     fn test_child(test_name: &str, extra: &[String]) -> (String, Vec<String>) {
         let executable = std::env::current_exe().expect("test executable path");
@@ -559,6 +601,21 @@ mod tests {
         assert!(
             error.status.is_some_and(|status| !status.success()),
             "killed child must be reaped with an unsuccessful status"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_kills_descendants_that_retain_output_pipes() {
+        let (program, args) = test_child("fixture_spawns_descendant", &[]);
+        let started = Instant::now();
+        let error =
+            run_command_structured(Path::new("."), &program, &args, Duration::from_millis(100))
+                .expect_err("process tree must time out");
+        assert_eq!(error.kind, ExecutionErrorKind::Timeout);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "surviving descendant retained an output pipe"
         );
     }
 
@@ -660,6 +717,21 @@ mod tests {
         io::stdout().flush().expect("flush fixture stdout");
         while !Path::new(&release).exists() {
             std::thread::yield_now();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore]
+    #[allow(clippy::zombie_processes)]
+    fn fixture_spawns_descendant() {
+        let (program, args) = test_child("fixture_never_exits", &[]);
+        let _descendant = Command::new(program)
+            .args(args)
+            .spawn()
+            .expect("spawn descendant");
+        loop {
+            std::thread::park();
         }
     }
 

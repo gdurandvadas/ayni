@@ -132,7 +132,10 @@ Resolve exact environment requirements into the committed lock
 
 ###### **Options:**
 
-* `--repo-root <REPO_ROOT>`
+* `--config <CONFIG>` — Policy configuration file, resolved under the repository root
+
+  Default value: `./.ayni.toml`
+* `--repo-root <REPO_ROOT>` — Repository root where `.ayni.lock` will be written
 
   Default value: `.`
 

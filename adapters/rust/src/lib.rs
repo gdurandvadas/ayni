@@ -5,5 +5,6 @@ pub mod catalog;
 pub mod collectors;
 mod discovery;
 mod environment;
+mod environment_resolution;
 
 pub use adapter::RustAdapter;

@@ -281,6 +281,41 @@ pub trait LanguageAdapter: Send + Sync {
         None
     }
 
+    /// Optional exact-resolution capability used only by explicit environment locking.
+    fn environment_resolution_capability(
+        &self,
+    ) -> Option<&dyn crate::EnvironmentResolutionCapability> {
+        None
+    }
+
+    fn resolve_environment(
+        &self,
+        request: &crate::EnvironmentResolutionRequest,
+    ) -> Result<crate::TargetEnvironment, AdapterError> {
+        let capability = self.environment_resolution_capability().ok_or_else(|| {
+            AdapterError::new(
+                self.language(),
+                "environment resolution capability is unsupported",
+            )
+        })?;
+        if request.target().target.language != self.language()
+            || capability.language() != self.language()
+        {
+            return Err(AdapterError::new(
+                self.language(),
+                "environment resolution language does not match adapter language",
+            ));
+        }
+        let resolved = capability.resolve(request)?;
+        if resolved.target != request.target().target {
+            return Err(AdapterError::new(
+                self.language(),
+                "resolved environment target does not match the requested target",
+            ));
+        }
+        Ok(resolved)
+    }
+
     /// Validate capability language and target identity around one read-only
     /// environment discovery call.
     fn discover_environment(

@@ -77,8 +77,9 @@ fn discover(
     } else {
         &workspace_manifest
     };
-    let (package_manager, locks, manager_conflicts, mut warnings) =
+    let (mut package_manager, locks, manager_conflicts, mut warnings) =
         package_manager_requirement(request, &manager_root, manager_manifest)?;
+    preserve_manager_owner_provenance(request, &manager_root, &mut package_manager)?;
     conflicts.extend(manager_conflicts);
 
     if matches!(runtime.version, VersionRequirement::Unresolved { .. }) {
@@ -117,6 +118,25 @@ fn discover(
         conflicts,
     )
     .map_err(adapter_error)
+}
+
+fn preserve_manager_owner_provenance(
+    request: &EnvironmentDiscoveryRequest,
+    manager_root: &Path,
+    manager: &mut PackageManagerRequirement,
+) -> Result<(), AdapterError> {
+    let manifest_path = manager_root.join("package.json");
+    let source_path = relative(request.repo_root(), &manifest_path)?;
+    if manager.source.path != source_path {
+        manager.source = source(
+            request.repo_root(),
+            &manifest_path,
+            "node_package_manager_owner",
+            Some(manager.family.as_str()),
+            RequirementConfidence::Inferred,
+        )?;
+    }
+    Ok(())
 }
 
 fn runtime_requirement(

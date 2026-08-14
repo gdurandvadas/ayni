@@ -7,9 +7,11 @@ Rust roots are directories containing `Cargo.toml`; discovery skips `target`,
 controller, while the repository root is analyzed only when its manifest also
 has `[package]`. Cargo commands for a member run from its workspace root.
 
-`cargo` and a Rust toolchain are user-owned prerequisites. Ayni can install
-catalog-managed tools when their checks are enabled and installation is applied:
-`llvm-tools-preview` through Rustup, and the remaining tools through Cargo.
+`cargo` and a Rust toolchain remain user-owned prerequisites for `--host`
+execution. `ayni env show` discovers Rust requirements and `ayni env lock`
+resolves exact runtime and Cargo catalog-tool versions through `mise`; locking
+does not install tools or modify the checkout. Managed environment builds are
+not implemented yet.
 
 ## Signal Coverage
 

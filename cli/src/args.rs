@@ -1,7 +1,7 @@
 use crate::application::{
-    CheckOperation, ContractOperation, EnvRunOperation, EnvShowOperation, ExecutionMode,
-    ImpactOperation, Operation, OutputFormat, RepositoryOperation, ResultsCompareOperation,
-    ResultsShowOperation, VerifyOperation,
+    CheckOperation, ContractOperation, EnvLockOperation, EnvRunOperation, EnvShowOperation,
+    ExecutionMode, ImpactOperation, Operation, OutputFormat, RepositoryOperation,
+    ResultsCompareOperation, ResultsShowOperation, VerifyOperation,
 };
 use ayni_core::{Language, SignalKind};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -91,7 +91,7 @@ enum EnvCommands {
     /// Diagnose missing, conflicting, unsupported, or stale environment state.
     Doctor(RepositoryOptions),
     /// Resolve exact environment requirements into the committed lock.
-    Lock(RepositoryOptions),
+    Lock(EnvLockOptions),
     /// Build the repository code-environment image from a current lock.
     Build(RepositoryOptions),
     /// Enter the managed environment with the checkout mounted.
@@ -105,7 +105,7 @@ impl EnvCommands {
         match self {
             Self::Show(options) => Operation::EnvShow(options.into_operation()),
             Self::Doctor(options) => Operation::EnvDoctor(options.into()),
-            Self::Lock(options) => Operation::EnvLock(options.into()),
+            Self::Lock(options) => Operation::EnvLock(options.into_operation()),
             Self::Build(options) => Operation::EnvBuild(options.into()),
             Self::Shell(options) => Operation::EnvShell(options.into()),
             Self::Run(options) => Operation::EnvRun(EnvRunOperation {
@@ -277,6 +277,25 @@ impl EnvShowOptions {
             config: self.config,
             repo_root: self.repo_root,
             output: self.output.into(),
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct EnvLockOptions {
+    /// Policy configuration file, resolved under the repository root.
+    #[arg(long, default_value = DEFAULT_CONFIG)]
+    config: PathBuf,
+    /// Repository root where `.ayni.lock` will be written.
+    #[arg(long, default_value = ".")]
+    repo_root: PathBuf,
+}
+
+impl EnvLockOptions {
+    fn into_operation(self) -> EnvLockOperation {
+        EnvLockOperation {
+            config: self.config,
+            repo_root: self.repo_root,
         }
     }
 }

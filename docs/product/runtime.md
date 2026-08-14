@@ -47,9 +47,16 @@ Every analyzed root records:
 
 ## Environment provisioning status
 
-The clean-slate `init` and `env` command vocabulary is active. `env show` now
+The clean-slate `init` and `env` command vocabulary is active. `env show`
 builds a read-only, deterministic environment plan for configured Rust and Node
-targets. Repository initialization, readiness diagnosis, locking, managed
+targets. `env lock` resolves exact Rust and Node requirements and atomically
+writes a versioned, fingerprinted `.ayni.lock`; unchanged inputs produce
+byte-stable output across equivalent checkout directory names, and failed
+resolution preserves the previous lock. Rust selectors and Cargo catalog tools
+resolve through `mise`; Node ranges use `mise` candidates with npm-compatible
+semver selection, while Node project tools must already be present in
+`package-lock.json`. Provisioning-base selection remains explicitly deferred
+until environment image support exists. Repository initialization, readiness diagnosis, managed
 environment builds, and environment support for Go, Python, and Kotlin are not
 implemented yet. Those unavailable operations do not reuse the removed
 `install` behavior.

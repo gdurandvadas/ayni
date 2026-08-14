@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Debug)]
-struct ShowError {
-    code: u8,
-    message: String,
+pub(crate) struct ShowError {
+    pub(crate) code: u8,
+    pub(crate) message: String,
 }
 
 impl ShowError {
@@ -55,7 +55,7 @@ pub(crate) fn show(operation: EnvShowOperation, registry: &AdapterRegistry) -> E
     }
 }
 
-fn build_plan(
+pub(crate) fn build_plan(
     operation: &EnvShowOperation,
     registry: &AdapterRegistry,
 ) -> Result<EnvironmentPlan, ShowError> {
@@ -262,7 +262,7 @@ fn resolve_config_path(repo_root: &Path, configured: &Path) -> Result<PathBuf, S
     Ok(config)
 }
 
-fn default_platforms() -> Vec<TargetPlatform> {
+pub(crate) fn default_platforms() -> Vec<TargetPlatform> {
     vec![
         TargetPlatform {
             os: OperatingSystem::Linux,

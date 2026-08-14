@@ -19,7 +19,7 @@ pub(crate) enum Operation {
     Init(RepositoryOperation),
     EnvShow(EnvShowOperation),
     EnvDoctor(RepositoryOperation),
-    EnvLock(RepositoryOperation),
+    EnvLock(EnvLockOperation),
     EnvBuild(RepositoryOperation),
     EnvShell(RepositoryOperation),
     EnvRun(EnvRunOperation),
@@ -45,6 +45,12 @@ pub(crate) struct EnvShowOperation {
     pub config: PathBuf,
     pub repo_root: PathBuf,
     pub output: OutputFormat,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct EnvLockOperation {
+    pub config: PathBuf,
+    pub repo_root: PathBuf,
 }
 
 #[derive(Debug, PartialEq, Eq)]

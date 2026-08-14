@@ -106,13 +106,18 @@ This human-readable view shows enabled-language roots, all six signal states,
 configured thresholds and rules, and explicit tool overrides. It writes no
 artifact; use `ayni check --host` for measured results.
 
-Managed environment setup will be owned by the explicit `env` lifecycle. These
-commands are present in the command model but are not implemented yet:
+Managed environment setup is owned by the explicit `env` lifecycle. `env show`
+builds a read-only Rust/Node environment plan, and `env lock` resolves exact
+requirements into a deterministic `.ayni.lock`:
 
 ```sh
+ayni env show
 ayni env lock
-ayni env build
 ```
+
+Locking may query `mise` for exact Rust/Node versions; Node project tools must
+already be represented in `package-lock.json`. `env build` and the remaining
+managed provisioning lifecycle are not implemented yet.
 
 `ayni init` will own repository bootstrap without installation or agent-guidance
 mutation. Run `ayni agents sync` explicitly when you want the managed guidance

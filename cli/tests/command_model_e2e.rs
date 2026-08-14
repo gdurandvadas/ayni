@@ -6,12 +6,7 @@ fn ayni() -> Command {
 
 #[test]
 fn unavailable_greenfield_operations_use_incomplete_exit_and_clean_stdout() {
-    for arguments in [
-        ["env", "doctor"],
-        ["env", "lock"],
-        ["env", "build"],
-        ["env", "shell"],
-    ] {
+    for arguments in [["env", "doctor"], ["env", "build"], ["env", "shell"]] {
         let output = ayni().args(arguments).output().expect("launch ayni");
         assert_eq!(output.status.code(), Some(4));
         assert!(output.stdout.is_empty());

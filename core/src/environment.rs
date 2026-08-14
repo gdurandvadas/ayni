@@ -531,6 +531,10 @@ pub enum EnvironmentPlanError {
     DuplicateTarget(TargetIdentity),
     BlockingConflicts(usize),
     UnresolvedRequirements(usize),
+    UnsupportedLockSchema(String),
+    FingerprintMismatch,
+    MissingSourceDigest(String),
+    Serialization(String),
 }
 
 impl fmt::Display for EnvironmentPlanError {
@@ -905,11 +909,19 @@ fn normalize_repository_path(
     }
 }
 
-fn reject_floating_version(version: &str) -> Result<(), EnvironmentPlanError> {
-    if matches!(
-        version.to_ascii_lowercase().as_str(),
-        "latest" | "stable" | "*"
-    ) {
+pub(crate) fn reject_floating_version(version: &str) -> Result<(), EnvironmentPlanError> {
+    let normalized = version.trim().to_ascii_lowercase();
+    let floating_alias = matches!(
+        normalized.as_str(),
+        "latest" | "stable" | "beta" | "nightly" | "canary" | "current" | "node" | "*"
+    ) || normalized.starts_with("lts/");
+    let selector_syntax = normalized
+        .chars()
+        .any(|character| character.is_whitespace() || "*^~<>=|,".contains(character));
+    let wildcard_component = normalized
+        .split(['.', '-', '+'])
+        .any(|component| matches!(component, "x" | "xx"));
+    if floating_alias || selector_syntax || wildcard_component {
         Err(EnvironmentPlanError::FloatingExactVersion(
             version.to_string(),
         ))

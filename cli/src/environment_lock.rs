@@ -1,0 +1,403 @@
+use crate::application::{EnvLockOperation, EnvShowOperation, OutputFormat};
+use crate::environment;
+use ayni_core::{AdapterRegistry, EnvironmentLock, EnvironmentPlan, EnvironmentResolutionRequest};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File, OpenOptions};
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+const LOCK_FILE: &str = ".ayni.lock";
+
+#[derive(Debug)]
+struct LockError {
+    code: u8,
+    message: String,
+}
+impl LockError {
+    fn input(message: impl Into<String>) -> Self {
+        Self {
+            code: 2,
+            message: message.into(),
+        }
+    }
+    fn environment(message: impl Into<String>) -> Self {
+        Self {
+            code: 3,
+            message: message.into(),
+        }
+    }
+    fn execution(message: impl Into<String>) -> Self {
+        Self {
+            code: 4,
+            message: message.into(),
+        }
+    }
+}
+
+pub(crate) fn run(operation: EnvLockOperation, registry: &AdapterRegistry) -> ExitCode {
+    match lock(&operation, registry) {
+        Ok((path, lock, changed)) => {
+            println!(
+                "{} {}",
+                if changed { "wrote" } else { "current" },
+                path.display()
+            );
+            println!("fingerprint: {}", lock.fingerprint());
+            println!("targets: {}", lock.targets().len());
+            println!("provisioning base: deferred until env build support");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{}", error.message);
+            ExitCode::from(error.code)
+        }
+    }
+}
+
+fn lock(
+    operation: &EnvLockOperation,
+    registry: &AdapterRegistry,
+) -> Result<(PathBuf, EnvironmentLock, bool), LockError> {
+    let show = EnvShowOperation {
+        config: operation.config.clone(),
+        repo_root: operation.repo_root.clone(),
+        output: OutputFormat::Json,
+    };
+    let plan = environment::build_plan(&show, registry).map_err(|error| LockError {
+        code: error.code,
+        message: error.message,
+    })?;
+    ensure_no_conflicts(&plan)?;
+    let repo_root = canonical_repo_root(operation)?;
+    let destination = repo_root.join(LOCK_FILE);
+    let existing = validate_existing_lock(&destination)?;
+    let source_snapshot = capture_source_snapshot(&show, registry, &plan, &repo_root)?;
+    let resolved_plan = resolve_plan(&plan, &repo_root, registry)?;
+    let mise_version = mise_version(&repo_root)?;
+    ensure_plan_snapshot(&show, registry, &plan, &repo_root, &source_snapshot)?;
+    let locked_source_digests =
+        merge_source_digests(&resolved_plan, &repo_root, source_snapshot.clone())?;
+    let lock = EnvironmentLock::from_resolved_plan(
+        &resolved_plan,
+        env!("CARGO_PKG_VERSION"),
+        mise_version,
+        &locked_source_digests,
+    )
+    .map_err(|error| LockError::environment(error.to_string()))?;
+    let serialized = lock
+        .canonical_json()
+        .map_err(|error| LockError::execution(error.to_string()))?;
+    ensure_plan_snapshot(&show, registry, &plan, &repo_root, &source_snapshot)?;
+    let changed = persist_if_changed(&destination, existing.as_deref(), &serialized)?;
+    Ok((destination, lock, changed))
+}
+
+fn ensure_no_conflicts(plan: &EnvironmentPlan) -> Result<(), LockError> {
+    if plan.conflicts().is_empty() {
+        Ok(())
+    } else {
+        Err(LockError::environment(format!(
+            "environment plan has {} blocking conflict(s); run `ayni env show` for details",
+            plan.conflicts().len()
+        )))
+    }
+}
+
+fn canonical_repo_root(operation: &EnvLockOperation) -> Result<PathBuf, LockError> {
+    operation.repo_root.canonicalize().map_err(|error| {
+        LockError::input(format!(
+            "failed to establish repository root {}: {error}",
+            operation.repo_root.display()
+        ))
+    })
+}
+
+fn resolve_plan(
+    plan: &EnvironmentPlan,
+    repo_root: &Path,
+    registry: &AdapterRegistry,
+) -> Result<ayni_core::ResolvedEnvironmentPlan, LockError> {
+    let targets = plan
+        .targets()
+        .iter()
+        .map(|target| resolve_target(target, repo_root, registry))
+        .collect::<Result<Vec<_>, _>>()?;
+    EnvironmentPlan::new(
+        plan.repository().clone(),
+        plan.platforms().to_vec(),
+        targets,
+        Vec::new(),
+        Vec::new(),
+    )
+    .map_err(|error| LockError::environment(error.to_string()))?
+    .resolve()
+    .map_err(|error| LockError::environment(error.to_string()))
+}
+
+fn resolve_target(
+    target: &ayni_core::TargetEnvironment,
+    repo_root: &Path,
+    registry: &AdapterRegistry,
+) -> Result<ayni_core::TargetEnvironment, LockError> {
+    let adapter = registry
+        .adapters()
+        .iter()
+        .find(|adapter| adapter.language() == target.target.language)
+        .ok_or_else(|| {
+            LockError::environment(format!(
+                "{} adapter is not registered",
+                target.target.language
+            ))
+        })?;
+    let request = EnvironmentResolutionRequest::new(repo_root.to_path_buf(), target.clone())
+        .map_err(|error| LockError::environment(error.to_string()))?;
+    adapter
+        .resolve_environment(&request)
+        .map_err(resolution_error)
+}
+
+fn merge_source_digests(
+    plan: &ayni_core::ResolvedEnvironmentPlan,
+    repo_root: &Path,
+    mut digests: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, LockError> {
+    for (path, digest) in source_digests(plan.plan(), repo_root)? {
+        if digests
+            .insert(path.clone(), digest.clone())
+            .is_some_and(|existing| existing != digest)
+        {
+            return Err(LockError::environment(format!(
+                "environment source changed during locking: {path}"
+            )));
+        }
+    }
+    Ok(digests)
+}
+
+fn persist_if_changed(
+    destination: &Path,
+    existing: Option<&str>,
+    serialized: &str,
+) -> Result<bool, LockError> {
+    let changed = existing != Some(serialized);
+    if changed {
+        atomic_write(destination, serialized.as_bytes())?;
+    }
+    Ok(changed)
+}
+
+fn source_digests(
+    plan: &EnvironmentPlan,
+    repo_root: &Path,
+) -> Result<BTreeMap<String, String>, LockError> {
+    let mut paths = BTreeSet::new();
+    for target in plan.targets() {
+        paths.extend(target.runtimes.iter().map(|item| item.source.path.clone()));
+        if let Some(manager) = &target.package_manager {
+            paths.insert(manager.source.path.clone());
+        }
+        paths.extend(
+            target
+                .signal_tools
+                .iter()
+                .map(|item| item.source.path.clone()),
+        );
+        paths.extend(
+            target
+                .system_requirements
+                .iter()
+                .map(|item| item.source.path.clone()),
+        );
+        paths.extend(
+            target
+                .dependency_locks
+                .iter()
+                .map(|item| item.source.path.clone()),
+        );
+    }
+    let mut digests = BTreeMap::new();
+    for path in paths {
+        let candidate = repo_root.join(&path);
+        let metadata = fs::metadata(&candidate).map_err(|error| {
+            LockError::environment(format!(
+                "failed to inspect environment source {}: {error}",
+                candidate.display()
+            ))
+        })?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let bytes =
+            ayni_adapters_common::repository::read_optional_contained_bytes(repo_root, &candidate)
+                .map_err(LockError::environment)?
+                .ok_or_else(|| {
+                    LockError::environment(format!(
+                        "environment source disappeared while locking: {}",
+                        candidate.display()
+                    ))
+                })?;
+        digests.insert(path, format!("sha256:{:x}", Sha256::digest(bytes)));
+    }
+    for target in plan.targets() {
+        for dependency in &target.dependency_locks {
+            if digests.get(&dependency.path) != Some(&dependency.digest) {
+                return Err(LockError::environment(format!(
+                    "dependency lock changed during locking: {}",
+                    dependency.path
+                )));
+            }
+        }
+    }
+    Ok(digests)
+}
+
+fn capture_source_snapshot(
+    show: &EnvShowOperation,
+    registry: &AdapterRegistry,
+    plan: &EnvironmentPlan,
+    repo_root: &Path,
+) -> Result<BTreeMap<String, String>, LockError> {
+    let snapshot = source_digests(plan, repo_root)?;
+    ensure_plan_snapshot(show, registry, plan, repo_root, &snapshot)?;
+    Ok(snapshot)
+}
+
+fn ensure_plan_snapshot(
+    show: &EnvShowOperation,
+    registry: &AdapterRegistry,
+    expected_plan: &EnvironmentPlan,
+    repo_root: &Path,
+    expected_digests: &BTreeMap<String, String>,
+) -> Result<(), LockError> {
+    let current_plan = environment::build_plan(show, registry).map_err(|error| {
+        LockError::environment(format!(
+            "environment inputs changed during locking: {}",
+            error.message
+        ))
+    })?;
+    if current_plan != *expected_plan {
+        return Err(LockError::environment(
+            "environment inputs changed during locking; rerun the command",
+        ));
+    }
+    ensure_source_snapshot(&current_plan, repo_root, expected_digests)
+}
+
+fn ensure_source_snapshot(
+    plan: &EnvironmentPlan,
+    repo_root: &Path,
+    expected: &BTreeMap<String, String>,
+) -> Result<(), LockError> {
+    if source_digests(plan, repo_root)? == *expected {
+        Ok(())
+    } else {
+        Err(LockError::environment(
+            "environment inputs changed during locking; rerun the command",
+        ))
+    }
+}
+
+fn resolution_error(error: ayni_core::AdapterError) -> LockError {
+    let message = error.to_string();
+    match error.kind {
+        ayni_core::AdapterErrorKind::Environment => LockError::environment(message),
+        ayni_core::AdapterErrorKind::Execution => LockError::execution(message),
+    }
+}
+
+fn mise_version(repo_root: &Path) -> Result<String, LockError> {
+    let args = vec![
+        "--no-config".to_owned(),
+        "--no-env".to_owned(),
+        "--no-hooks".to_owned(),
+        "--version".to_owned(),
+    ];
+    let output = ayni_adapters_common::exec::run_command(
+        repo_root,
+        "mise",
+        &args,
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|error| LockError::execution(format!("failed to run mise --version: {error}")))?;
+    if !output.status.success() {
+        return Err(LockError::execution("mise --version failed"));
+    }
+    let output = String::from_utf8(output.stdout).map_err(|error| {
+        LockError::execution(format!("mise --version returned non-UTF-8 output: {error}"))
+    })?;
+    output
+        .split_whitespace()
+        .next()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| LockError::execution("mise --version returned no version"))
+}
+
+fn validate_existing_lock(path: &Path) -> Result<Option<String>, LockError> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(None);
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(LockError::input(format!(
+            "lock destination must be a regular file: {}",
+            path.display()
+        )));
+    }
+    let content = fs::read_to_string(path).map_err(|error| {
+        LockError::input(format!(
+            "failed to read existing lock {}: {error}",
+            path.display()
+        ))
+    })?;
+    serde_json::from_str::<EnvironmentLock>(&content).map_err(|error| {
+        LockError::input(format!(
+            "failed to validate existing lock {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(content))
+}
+
+fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), LockError> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| LockError::execution("lock path has no parent"))?;
+    let (mut file, temporary) = create_temporary_lock(parent)?;
+    let result = (|| {
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|error| {
+                LockError::execution(format!("failed to write temporary lock: {error}"))
+            })?;
+        fs::rename(&temporary, destination).map_err(|error| {
+            LockError::execution(format!(
+                "failed to atomically replace {}: {error}",
+                destination.display()
+            ))
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn create_temporary_lock(parent: &Path) -> Result<(File, PathBuf), LockError> {
+    for attempt in 0..100 {
+        let path = parent.join(format!(".ayni.lock.tmp-{}-{attempt}", std::process::id()));
+        match OpenOptions::new().create_new(true).write(true).open(&path) {
+            Ok(file) => return Ok((file, path)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(LockError::execution(format!(
+                    "failed to create temporary lock: {error}"
+                )));
+            }
+        }
+    }
+    Err(LockError::execution(
+        "failed to allocate a unique temporary lock file",
+    ))
+}

@@ -2,9 +2,12 @@
 
 ## Installation
 
-Repository initialization and managed tool provisioning are not implemented in
-the clean-slate command model yet. Configure roots in `.ayni.toml` and provide
-the documented runtime, package manager, and signal tools when using `--host`.
+Configure roots in `.ayni.toml` and provide the documented runtime, package
+manager, and signal tools when using `--host`. `ayni env show` discovers Node
+requirements, and `ayni env lock` resolves runtime/package-manager ranges using
+`mise` candidates while reading exact project-tool versions from
+`package-lock.json`. Locking does not install dependencies or modify the
+checkout; managed environment builds are not implemented yet.
 
 ## Signal Coverage
 

@@ -58,9 +58,16 @@ impl ExecutionResolution {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterErrorKind {
+    Environment,
+    Execution,
+}
+
 #[derive(Debug, Clone)]
 pub struct AdapterError {
     pub language: Language,
+    pub kind: AdapterErrorKind,
     pub message: String,
 }
 
@@ -69,6 +76,16 @@ impl AdapterError {
     pub fn new(language: Language, message: impl Into<String>) -> Self {
         Self {
             language,
+            kind: AdapterErrorKind::Environment,
+            message: message.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn execution(language: Language, message: impl Into<String>) -> Self {
+        Self {
+            language,
+            kind: AdapterErrorKind::Execution,
             message: message.into(),
         }
     }

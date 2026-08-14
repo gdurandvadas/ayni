@@ -5,6 +5,8 @@ pub mod catalog;
 pub mod comparison;
 pub mod environment;
 pub mod environment_adapter;
+mod environment_lock;
+pub mod environment_resolution;
 pub mod finding;
 pub mod language;
 pub mod policy;
@@ -37,6 +39,12 @@ pub use environment::{
     TargetIdentity, TargetPlatform, ToolInstallationScope, VersionRequirement,
 };
 pub use environment_adapter::{EnvironmentCapability, EnvironmentDiscoveryRequest};
+pub use environment_lock::{
+    ENVIRONMENT_LOCK_SCHEMA_VERSION, EnvironmentLock, LockedDependencyLock, LockedPackageManager,
+    LockedRepositoryIdentity, LockedRequirementSource, LockedRuntime, LockedSignalTool,
+    LockedTargetEnvironment, ProvisioningBaseState,
+};
+pub use environment_resolution::{EnvironmentResolutionCapability, EnvironmentResolutionRequest};
 pub use language::Language;
 pub use policy::{
     AYNI_POLICY_FILE, AyniPolicy, ComplexityPolicy, ConcurrencyPolicy, CoveragePolicy, DepsPolicy,
@@ -45,7 +53,7 @@ pub use policy::{
     SizeThreshold, ThresholdFloat, ThresholdInt, ToolCommandOverride,
 };
 pub use registry::AdapterRegistry;
-pub use runtime::{AdapterError, ExecutionResolution, RunContext, Scope};
+pub use runtime::{AdapterError, AdapterErrorKind, ExecutionResolution, RunContext, Scope};
 pub use signal::{
     AYNI_SIGNAL_SCHEMA_VERSION, AggregateStatus, AggregateSummary, AppliedThreshold, Budget,
     CommandFailure, CompletionIssue, CompletionScope, CompletionStage, CompletionState,

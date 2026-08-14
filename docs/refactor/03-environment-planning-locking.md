@@ -176,6 +176,35 @@ requirement with the old Ayni artifact schemas.
 - Provider lock capabilities are reported honestly; `mise` checksums and
   provenance are not available equally for every backend.
 
+### Initial Rust and Node locking decisions
+
+- `.ayni.lock` schema `0.1.0` is canonical JSON with exact requirements,
+  deterministic ordering, and a SHA-256 fingerprint calculated without the
+  fingerprint field itself. Repository identity uses the contract digest and
+  excludes the checkout directory name so equivalent clones remain byte-stable.
+  Requirement-source files carry content digests so byte changes remain visible
+  even when they resolve to the same exact versions.
+- Exact resolution remains adapter-owned. The CLI invokes capabilities and
+  persists validated core contracts; it does not interpret Rust or Node
+  selectors, manifests, native locks, or tool catalogs.
+- Rust runtime selectors and Cargo-installed catalog tools resolve through
+  bounded `mise latest` invocations owned by the Rust adapter. Node runtime and
+  package-manager selectors use `mise ls-remote` candidates and npm-compatible
+  semver evaluation owned by the Node adapter, so bounded ranges select the
+  highest matching exact version rather than merely the provider's latest
+  version. Exact repository declarations bypass provider resolution. Provider
+  calls use the shared timeout runner with repository configuration, environment
+  activation, and hooks disabled.
+- Node project-integrated signal tools are read from `package-lock.json`; a
+  missing locked tool fails rather than changing repository dependencies.
+  Other Node lock formats remain unsupported for exact tool extraction in this
+  first locking slice.
+- The lock records Ayni and observed `mise` versions while marking the
+  provisioning base as `deferred`. Immutable base-image selection belongs to
+  the environment-image milestone; the lock does not invent an image digest.
+- Lock replacement is atomic. Malformed existing locks and failed discovery or
+  resolution leave the previous bytes untouched.
+
 ## Security boundary
 
 Repository configuration may contain executable hooks, tasks, templates, or
