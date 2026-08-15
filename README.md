@@ -85,8 +85,8 @@ Use focused verification for the inner TDD loop. `check` evaluates the configure
 repository and is the only completion gate and writer of `.ayni/last/signals.json`:
 
 ```sh
-ayni verify test --host --language rust --package my-crate --name test_filter
-ayni verify test --host --language node --file apps/web/src/example.test.ts
+ayni verify test --language rust --package my-crate --name test_filter
+ayni verify test --language node --file apps/web/src/example.test.ts
 ayni verify test --host --language go --package ./internal/api --name TestCreate
 ayni verify test --host --language python --file tests/test_api.py --name test_create
 ayni verify test --host --language kotlin --package com.example.ApiTest --name createsUser
@@ -135,7 +135,8 @@ digest-verified Cargo/npm manifests and locks, warm provider caches, and retain
 npm `node_modules` as an image seed. Launch materializes that seed below
 `.ayni/environment/`, mounts it over the target without writing dependencies to
 the checkout, and runs lifecycle rebuilds with networking disabled and the
-checkout read-only. pnpm, Yarn, Bun, managed verification, and Go/Python/Kotlin
+checkout read-only. Managed check and focused verification are available for
+locked Rust and npm Node targets. pnpm, Yarn, Bun, and Go/Python/Kotlin
 environments remain explicitly unsupported.
 
 `ayni init` will own repository bootstrap without installation or agent-guidance

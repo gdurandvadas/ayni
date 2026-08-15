@@ -1,3 +1,4 @@
+use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_adapters_go::GoAdapter;
 use ayni_adapters_kotlin::KotlinAdapter;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -36,8 +37,8 @@ use clap::Parser;
 
 const ARTIFACTS_DIR: &str = ".ayni/last";
 const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
-const VERIFY_ARTIFACTS_DIR: &str = ".ayni/verify/last";
 const VERIFY_SIGNALS_ARTIFACT: &str = ".ayni/verify/last/signals.json";
+const MANAGED_TARGET_ENVIRONMENTS: &str = "AYNI_MANAGED_TARGET_ENVIRONMENTS";
 
 fn main() -> ExitCode {
     dispatch(args::Cli::parse().into_operation())
@@ -86,7 +87,7 @@ fn dispatch_analysis(operation: application::Operation) -> ExitCode {
             run_verify_operation(operation)
         }
         Operation::Check(operation) => environment_backend::check(operation, &build_registry()),
-        Operation::Verify(_) => environment_unavailable(),
+        Operation::Verify(operation) => environment_backend::verify(operation, &build_registry()),
         _ => unreachable!("dispatch_analysis received a non-analysis operation"),
     }
 }
@@ -140,15 +141,12 @@ fn run_verify_operation(operation: application::VerifyOperation) -> ExitCode {
         debug: operation.debug,
     };
     match verify::run(request) {
-        Ok(false) => ExitCode::SUCCESS,
-        Ok(true) => ExitCode::from(1),
+        Ok(outcome) if outcome.has_execution_failures => ExitCode::from(4),
+        Ok(outcome) if outcome.has_quality_failures => ExitCode::from(1),
+        Ok(_) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{error}");
-            if error.starts_with("failed to read ") || error.starts_with("failed to parse ") {
-                ExitCode::from(2)
-            } else {
-                ExitCode::from(4)
-            }
+            eprintln!("{}", error.message);
+            ExitCode::from(error.code)
         }
     }
 }
@@ -194,11 +192,6 @@ fn agents_sync(repo_root: &Path) -> ExitCode {
             ExitCode::from(4)
         }
     }
-}
-
-fn environment_unavailable() -> ExitCode {
-    eprintln!("managed environment execution is not implemented yet; rerun with --host");
-    ExitCode::from(3)
 }
 
 fn not_implemented(operation: &application::Operation) -> ExitCode {
@@ -802,13 +795,18 @@ fn flatten_target_results(
 
 fn analyze(config_path: &str, options: AnalyzeOptions) -> ExitCode {
     match analyze_impl(config_path, options) {
-        Ok(AnalyzeOutcome::Completed { has_failures }) => {
-            if has_failures {
-                ExitCode::from(1)
-            } else {
-                ExitCode::SUCCESS
-            }
-        }
+        Ok(AnalyzeOutcome::Completed {
+            has_quality_failures: _,
+            has_execution_failures: true,
+        }) => ExitCode::from(4),
+        Ok(AnalyzeOutcome::Completed {
+            has_quality_failures: true,
+            has_execution_failures: false,
+        }) => ExitCode::from(1),
+        Ok(AnalyzeOutcome::Completed {
+            has_quality_failures: false,
+            has_execution_failures: false,
+        }) => ExitCode::SUCCESS,
         Ok(AnalyzeOutcome::Aborted) => {
             eprintln!("check aborted");
             ExitCode::from(4)
@@ -825,7 +823,10 @@ fn analyze(config_path: &str, options: AnalyzeOptions) -> ExitCode {
 }
 
 enum AnalyzeOutcome {
-    Completed { has_failures: bool },
+    Completed {
+        has_quality_failures: bool,
+        has_execution_failures: bool,
+    },
     Aborted,
 }
 
@@ -847,6 +848,8 @@ fn analyze_impl(
     let config_path = PathBuf::from(config_path);
     let workspace_root = workspace_root_from_config_path(&config_path);
     let policy = AyniPolicy::load_from_path(&config_path).map_err(AnalyzeError::InvalidContract)?;
+    validate_configured_root_containment(&workspace_root, &policy)
+        .map_err(AnalyzeError::InvalidContract)?;
     ensure_analyze_directories(&workspace_root)?;
 
     let AnalyzeOptions { output_mode, debug } = options;
@@ -875,15 +878,29 @@ fn analyze_impl(
         artifact_slot,
     )?;
     artifact.metadata = metadata;
-    verification_command::materialize_finding_commands(&mut artifact, &build_registry())?;
+    verification_command::materialize_finding_commands(
+        &mut artifact,
+        &build_registry(),
+        !managed_execution_active(),
+    )?;
     let serialized = serialize_artifact(&artifact)?;
     persist_artifact_at(&workspace_root, SIGNALS_ARTIFACT, &serialized)?;
     emit_analyze_outputs(output_mode, &policy, &artifact, &serialized)?;
 
-    Ok(AnalyzeOutcome::Completed {
-        has_failures: artifact.completion.state == CompletionState::Incomplete
-            || artifact.rows.iter().any(|row| !row.pass),
-    })
+    Ok(completed_analyze_outcome(&artifact))
+}
+
+fn completed_analyze_outcome(artifact: &RunArtifact) -> AnalyzeOutcome {
+    let has_execution_failures = artifact.completion.state == CompletionState::Incomplete
+        || artifact
+            .rows
+            .iter()
+            .any(|row| row.result.command_failure().is_some());
+    let has_quality_failures = artifact.rows.iter().any(|row| !row.pass) && !has_execution_failures;
+    AnalyzeOutcome::Completed {
+        has_quality_failures,
+        has_execution_failures,
+    }
 }
 
 fn execute_analyze_plan_or_persist_failure(
@@ -1206,6 +1223,9 @@ fn build_analyze_targets(
         if let Some(mut execution) = configured_target.execution {
             if let Some(environment) = managed_target_environment(language, &root)? {
                 execution.environment.extend(environment);
+                execution
+                    .environment
+                    .insert(String::from(MANAGED_TARGET_ENVIRONMENTS), String::new());
             }
             let workdir = repo_root.join(&root);
             let scope = Scope {
@@ -1242,11 +1262,17 @@ fn build_analyze_targets(
     })
 }
 
+fn managed_execution_active() -> bool {
+    std::env::var_os(MANAGED_TARGET_ENVIRONMENTS).is_some_and(|value| !value.is_empty())
+}
+
 fn managed_target_environment(
     language: Language,
     root: &str,
 ) -> Result<Option<BTreeMap<String, String>>, String> {
-    let Some(serialized) = std::env::var_os("AYNI_MANAGED_TARGET_ENVIRONMENTS") else {
+    let Some(serialized) =
+        std::env::var_os(MANAGED_TARGET_ENVIRONMENTS).filter(|value| !value.is_empty())
+    else {
         return Ok(None);
     };
     let environments: BTreeMap<String, BTreeMap<String, String>> =

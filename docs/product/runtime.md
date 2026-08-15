@@ -79,12 +79,13 @@ and runs lifecycle rebuilds offline with the checkout read-only. Prepared Cargo
 and npm caches are also copied into fingerprinted writable state and mounted
 over the read-only image cache. Per-target
 runtime and offline variables are injected only into that target's collector
-process. Normal managed launch and check remain network-disabled.
+process. Normal managed launch, check, and focused verification remain
+network-disabled.
 
-Managed `check` is available for locked Rust and npm Node targets and preserves
-its inner quality exit code. pnpm, Yarn, Bun, managed `verify`, and Go, Python,
-and Kotlin provisioning remain unavailable. `--host` retains adapter-owned
-runner resolution as an explicit escape hatch; it does not install tools or
+Managed `check` and focused `verify` are available for locked Rust and npm Node
+targets and preserve their inner quality exit codes. pnpm, Yarn, Bun, and Go,
+Python, and Kotlin provisioning remain unavailable. `--host` retains
+adapter-owned runner resolution as an explicit escape hatch; it does not install tools or
 mutate repository dependencies. No operation reuses removed `install`
 behavior.
 

@@ -15,7 +15,7 @@ fn environment_operations_require_a_valid_lock_without_implicit_provisioning() {
 }
 
 #[test]
-fn managed_check_requires_a_lock_while_verify_still_suggests_host() {
+fn managed_check_and_verify_require_a_lock_without_implicit_provisioning() {
     let check = ayni().arg("check").output().expect("launch ayni");
     assert_eq!(check.status.code(), Some(3));
     assert!(check.stdout.is_empty());
@@ -27,7 +27,7 @@ fn managed_check_requires_a_lock_while_verify_still_suggests_host() {
         .expect("launch ayni");
     assert_eq!(verify.status.code(), Some(3));
     assert!(verify.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&verify.stderr).contains("rerun with --host"));
+    assert!(String::from_utf8_lossy(&verify.stderr).contains("environment lock"));
 }
 
 #[test]

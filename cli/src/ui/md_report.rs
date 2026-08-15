@@ -12,6 +12,15 @@ const WARN_IMAGE_URL: &str =
 const FAIL_IMAGE_URL: &str =
     "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/fail.svg";
 
+fn push_heading(out: &mut String, scope: CompletionScope) {
+    match scope {
+        CompletionScope::Repository => out.push_str("# ayni check\n\n"),
+        CompletionScope::Requested => out.push_str(
+            "# ayni verify\n\n> Focused evidence only; run `ayni check` for repository completion.\n\n",
+        ),
+    }
+}
+
 pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String {
     let mut out = String::new();
     let total = artifact.rows.len();
@@ -20,7 +29,7 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
         AggregateStatus::Pass => "pass",
         AggregateStatus::Fail => "fail",
     };
-    out.push_str("# ayni check\n\n");
+    push_heading(&mut out, artifact.completion.scope);
     out.push_str(&format!(
         "**{}** / **{}** checks passing · aggregate **{}** · schema `{}`\n\n",
         passing, total, aggregate, artifact.schema_version
@@ -462,6 +471,8 @@ mod tests {
         };
 
         let text = build_markdown(&artifact, 3);
+        assert!(text.starts_with("# ayni verify\n"));
+        assert!(text.contains("Focused evidence only; run `ayni check`"));
         assert!(text.contains("aggregate **fail**"));
         assert!(text.contains("scope `requested` · state **incomplete**"));
         assert!(text.contains("## Completion issues"));

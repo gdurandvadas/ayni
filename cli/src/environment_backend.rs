@@ -1,6 +1,6 @@
 use crate::application::{
     CheckOperation, EnvRunOperation, EnvShellOperation, EnvShowOperation, OutputFormat,
-    RepositoryOperation,
+    RepositoryOperation, VerifyOperation,
 };
 use ayni_core::{
     AdapterRegistry, DependencyPreparationPlan, DependencyPreparationRequest, EnvironmentPlan,
@@ -39,56 +39,118 @@ pub(crate) fn build(operation: RepositoryOperation, registry: &AdapterRegistry) 
 }
 
 pub(crate) fn check(operation: CheckOperation, registry: &AdapterRegistry) -> ExitCode {
-    let result = (|| {
-        let repo_root = operation
-            .config
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        let (root, plan) = current_plan(repo_root, registry)?;
-        let preparations = dependency_preparations(&root, registry, &plan)?;
-        let config =
-            operation
-                .config
-                .canonicalize()
-                .map_err(|error| ayni_environment::BackendError {
-                    code: 2,
-                    message: format!(
-                        "failed to resolve environment contract {}: {error}",
-                        operation.config.display()
-                    ),
-                })?;
-        let relative = config
-            .strip_prefix(&root)
-            .map_err(|_| ayni_environment::BackendError {
-                code: 2,
-                message: String::from("environment contract escapes the repository root"),
-            })?;
-        let container_config = format!(
-            "/workspace/{}",
-            relative.to_string_lossy().replace('\\', "/")
-        );
-        let mut command = vec![
-            String::from("check"),
-            String::from("--host"),
-            String::from("--config"),
-            container_config,
-            String::from("--output"),
-            match operation.output {
-                OutputFormat::Human => String::from("human"),
-                OutputFormat::Json => String::from("json"),
-                OutputFormat::Markdown => String::from("markdown"),
-            },
-        ];
-        if operation.debug {
-            command.push(String::from("--debug"));
-        }
-        ayni_environment::launch_repository_prepared(&root, &preparations, &command)
-    })();
+    managed_quality_result(
+        "check",
+        (|| {
+            let (root, preparations, container_config) =
+                prepared_quality_environment(&operation.config, registry)?;
+            let mut command = vec![
+                String::from("check"),
+                String::from("--host"),
+                String::from("--config"),
+                container_config,
+                String::from("--output"),
+                output_name(operation.output).to_owned(),
+            ];
+            if operation.debug {
+                command.push(String::from("--debug"));
+            }
+            ayni_environment::launch_repository_prepared(&root, &preparations, &command)
+        })(),
+    )
+}
+
+pub(crate) fn verify(operation: VerifyOperation, registry: &AdapterRegistry) -> ExitCode {
+    managed_quality_result(
+        "verify",
+        (|| {
+            let (root, preparations, container_config) =
+                prepared_quality_environment(&operation.config, registry)?;
+            let command = managed_verify_command(&operation, container_config);
+            ayni_environment::launch_repository_prepared(&root, &preparations, &command)
+        })(),
+    )
+}
+
+fn managed_verify_command(operation: &VerifyOperation, container_config: String) -> Vec<String> {
+    let mut command = vec![
+        String::from("verify"),
+        crate::signal_kind_slug(operation.signal).to_owned(),
+        String::from("--host"),
+        String::from("--config"),
+        container_config,
+        String::from("--output"),
+        output_name(operation.output).to_owned(),
+    ];
+    if let Some(language) = operation.language {
+        command.extend([String::from("--language"), language.as_str().to_owned()]);
+    }
+    if let Some(root) = &operation.root {
+        command.extend([String::from("--root"), root.clone()]);
+    }
+    if let Some(file) = &operation.file {
+        command.extend([String::from("--file"), file.clone()]);
+    }
+    if let Some(package) = &operation.package {
+        command.extend([String::from("--package"), package.clone()]);
+    }
+    if let Some(name) = &operation.name {
+        command.extend([String::from("--name"), name.clone()]);
+    }
+    if operation.debug {
+        command.push(String::from("--debug"));
+    }
+    command
+}
+
+fn output_name(output: OutputFormat) -> &'static str {
+    match output {
+        OutputFormat::Human => "human",
+        OutputFormat::Json => "json",
+        OutputFormat::Markdown => "markdown",
+    }
+}
+
+fn prepared_quality_environment(
+    config: &Path,
+    registry: &AdapterRegistry,
+) -> Result<
+    (std::path::PathBuf, Vec<DependencyPreparationPlan>, String),
+    ayni_environment::BackendError,
+> {
+    let repo_root = config
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let (root, plan) = current_plan(repo_root, registry)?;
+    let preparations = dependency_preparations(&root, registry, &plan)?;
+    let config = config
+        .canonicalize()
+        .map_err(|error| ayni_environment::BackendError {
+            code: 2,
+            message: format!(
+                "failed to resolve environment contract {}: {error}",
+                config.display()
+            ),
+        })?;
+    let relative = config
+        .strip_prefix(&root)
+        .map_err(|_| ayni_environment::BackendError {
+            code: 2,
+            message: String::from("environment contract escapes the repository root"),
+        })?;
+    let container_config = format!("./{}", relative.to_string_lossy().replace('\\', "/"));
+    Ok((root, preparations, container_config))
+}
+
+fn managed_quality_result(
+    operation: &str,
+    result: Result<i32, ayni_environment::BackendError>,
+) -> ExitCode {
     match result {
         Ok(code @ 0..=4) => ExitCode::from(code as u8),
         Ok(code) => {
-            eprintln!("managed check exited with unsupported code {code}");
+            eprintln!("managed {operation} exited with unsupported code {code}");
             ExitCode::from(4)
         }
         Err(error) => render_error(error),
@@ -232,4 +294,51 @@ fn launch(
 fn render_error(error: ayni_environment::BackendError) -> ExitCode {
     eprintln!("{}", error.message);
     ExitCode::from(error.code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::managed_verify_command;
+    use crate::application::{ExecutionMode, OutputFormat, VerifyOperation};
+    use ayni_core::{Language, SignalKind};
+    use std::path::PathBuf;
+
+    #[test]
+    fn managed_verify_forwards_the_complete_focused_request() {
+        let operation = VerifyOperation {
+            signal: SignalKind::Test,
+            config: PathBuf::from("./.ayni.toml"),
+            language: Some(Language::Node),
+            root: Some(String::from("apps/web")),
+            file: Some(String::from("apps/web/src/cart.test.ts")),
+            package: None,
+            name: Some(String::from("updates cart")),
+            output: OutputFormat::Markdown,
+            execution_mode: ExecutionMode::Managed,
+            debug: true,
+        };
+
+        assert_eq!(
+            managed_verify_command(&operation, String::from("./.ayni.toml")),
+            [
+                "verify",
+                "test",
+                "--host",
+                "--config",
+                "./.ayni.toml",
+                "--output",
+                "markdown",
+                "--language",
+                "node",
+                "--root",
+                "apps/web",
+                "--file",
+                "apps/web/src/cart.test.ts",
+                "--name",
+                "updates cart",
+                "--debug",
+            ]
+            .map(String::from)
+        );
+    }
 }

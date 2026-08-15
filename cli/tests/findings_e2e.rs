@@ -185,7 +185,7 @@ fn preserves_non_default_config_and_root() {
     assert_eq!(
         command,
         format!(
-            "ayni verify size --config {} --language rust --root {} --file {}",
+            "ayni verify size --config {} --language rust --root {} --host --file {}",
             shell_quote(&config.to_string_lossy()),
             shell_quote(configured_root),
             shell_quote(&format!("{configured_root}/oversized.rs")),
@@ -197,7 +197,7 @@ fn preserves_non_default_config_and_root() {
 fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
     let fixture = Fixture::size();
     let command = format!(
-        "ayni verify size --config '{}' --language rust --root '.' --file 'oversized.rs'",
+        "ayni verify size --config '{}' --language rust --root '.' --host --file 'oversized.rs'",
         fixture.config.display()
     );
 
@@ -222,7 +222,7 @@ fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
 fn synthetic_zero_test_finding_has_an_actionable_public_command() {
     let fixture = Fixture::zero_tests();
     let command = format!(
-        "ayni verify test --config '{}' --language rust --root '.'",
+        "ayni verify test --config '{}' --language rust --root '.' --host",
         fixture.config.display()
     );
     let output = fixture.analyze(&["--output", "json"]);

@@ -10,6 +10,7 @@ use ayni_core::{
 pub(crate) fn materialize_finding_commands(
     artifact: &mut RunArtifact,
     registry: &AdapterRegistry,
+    host_execution: bool,
 ) -> Result<(), String> {
     let mut findings = Vec::with_capacity(artifact.rows.len());
     for row in &artifact.rows {
@@ -33,6 +34,7 @@ pub(crate) fn materialize_finding_commands(
                     row.language,
                     configured_root,
                     target,
+                    host_execution,
                 ))
             })
             .map_err(|error: FindingError| error.to_string())?;
@@ -48,6 +50,7 @@ fn render_verification_command(
     language: Language,
     configured_root: &str,
     target: &VerificationTarget,
+    host_execution: bool,
 ) -> String {
     let mut command = format!(
         "ayni verify {} --config {} --language {} --root {}",
@@ -56,6 +59,9 @@ fn render_verification_command(
         language.as_str(),
         shell_quote(configured_root),
     );
+    if host_execution {
+        command.push_str(" --host");
+    }
     if let Some(file) = &target.file {
         command.push_str(&format!(" --file {}", shell_quote(file)));
     }
@@ -90,8 +96,9 @@ mod tests {
                     package: None,
                     name: Some(String::from("it's focused $(nope)")),
                 },
+                true,
             ),
-            "ayni verify test --config 'policies/it'\"'\"'s hostile $(nope).toml' --language node --root 'apps/a weird;root' --file 'tests/a weird;name.test.js' --name 'it'\"'\"'s focused $(nope)'"
+            "ayni verify test --config 'policies/it'\"'\"'s hostile $(nope).toml' --language node --root 'apps/a weird;root' --host --file 'tests/a weird;name.test.js' --name 'it'\"'\"'s focused $(nope)'"
         );
     }
 
@@ -104,6 +111,7 @@ mod tests {
                 Language::Rust,
                 ".",
                 &VerificationTarget::default(),
+                false,
             ),
             "ayni verify coverage --config './.ayni.toml' --language rust --root '.'"
         );

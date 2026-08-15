@@ -12,11 +12,11 @@ execution. `ayni env show` discovers Rust requirements and `ayni env lock`
 resolves exact runtime and Cargo catalog-tool versions through `mise`; locking
 does not install tools or modify the checkout. `env build` stages the locked
 Cargo manifests, requires `Cargo.lock`, and runs `cargo fetch --locked` inside
-the image build. `env doctor`, `env shell`, `env run`, and managed `check`
-consume that image with networking and Cargo online access disabled. Cargo
-`package.workspace` values that point to a non-ancestor workspace fail closed
-because the current environment ownership contract is ancestry-based. Focused
-`verify` still requires `--host`.
+the image build. `env doctor`, `env shell`, `env run`, managed `check`, and
+managed focused `verify` consume that image with networking and Cargo online
+access disabled. Cargo `package.workspace` values that point to a non-ancestor
+workspace fail closed because the current environment ownership contract is
+ancestry-based.
 
 ## Signal Coverage
 

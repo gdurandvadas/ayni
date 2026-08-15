@@ -28,8 +28,8 @@ pub struct ImagePlan {
 #[derive(Default)]
 struct ProvisioningInventory {
     tools: BTreeMap<String, BTreeSet<String>>,
-    rust_components: BTreeSet<String>,
-    rust_targets: BTreeSet<String>,
+    rust_components: BTreeMap<String, BTreeSet<String>>,
+    rust_targets: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// Construct a deterministic repository-image plan using only a validated
@@ -110,10 +110,16 @@ fn add_runtime(
     if runtime.runtime == "rust" {
         add_rust_items(
             "component",
+            &runtime.version,
             &runtime.components,
             &mut inventory.rust_components,
         )?;
-        add_rust_items("target", &runtime.targets, &mut inventory.rust_targets)?;
+        add_rust_items(
+            "target",
+            &runtime.version,
+            &runtime.targets,
+            &mut inventory.rust_targets,
+        )?;
     }
     add_tool(&mut inventory.tools, &runtime.runtime, &runtime.version);
     Ok(())
@@ -121,12 +127,16 @@ fn add_runtime(
 
 fn add_rust_items(
     kind: &str,
+    version: &str,
     values: &[String],
-    destination: &mut BTreeSet<String>,
+    destination: &mut BTreeMap<String, BTreeSet<String>>,
 ) -> Result<(), BackendError> {
     for value in values {
         validate_rustup_item(kind, value)?;
-        destination.insert(value.clone());
+        destination
+            .entry(version.to_owned())
+            .or_default()
+            .insert(value.clone());
     }
     Ok(())
 }
@@ -184,11 +194,11 @@ fn dockerfile(
     preparations: &[DependencyPreparationPlan],
     preparation_digest: &str,
 ) -> Result<String, BackendError> {
-    let provisioning_env = rust_provisioning_env(inventory);
+    let rustup_provisioning = rustup_provisioning(inventory);
     let base = lock.provisioning_base();
     let preparation = crate::preparation::dockerfile_fragment(lock, preparations)?;
     Ok(format!(
-        "FROM {}@{} AS ayni-runtime\nUSER ayni\nCOPY --chown=10001:10001 mise.toml /etc/ayni/mise.toml\nRUN chmod 0444 /etc/ayni/mise.toml\nENV MISE_CONFIG_FILE=/etc/ayni/mise.toml MISE_TRUSTED_CONFIG_PATHS=/etc/ayni\n{provisioning_env}RUN mise trust /etc/ayni/mise.toml && mise install --yes && mise reshim\nENV MISE_AUTO_INSTALL=0 MISE_CONFIG_FILE=/etc/ayni/mise.toml\n{preparation}LABEL {IMAGE_SCHEMA_LABEL}=\"{IMAGE_SCHEMA_VERSION}\" {IMAGE_LOCK_LABEL}=\"{}\" {IMAGE_BASE_LABEL}=\"{}\" {IMAGE_AYNI_LABEL}=\"{}\" {IMAGE_MISE_LABEL}=\"{}\" {IMAGE_PLATFORM_LABEL}=\"{}\" {IMAGE_PREPARATION_LABEL}=\"{}\"\nWORKDIR {WORKSPACE}\n",
+        "FROM {}@{} AS ayni-runtime\nUSER ayni\nCOPY --chown=10001:10001 mise.toml /etc/ayni/mise.toml\nRUN chmod 0444 /etc/ayni/mise.toml\nENV MISE_CONFIG_FILE=/etc/ayni/mise.toml MISE_TRUSTED_CONFIG_PATHS=/etc/ayni\nRUN mise trust /etc/ayni/mise.toml && mise install --yes && mise reshim\n{rustup_provisioning}ENV MISE_AUTO_INSTALL=0 MISE_CONFIG_FILE=/etc/ayni/mise.toml\n{preparation}LABEL {IMAGE_SCHEMA_LABEL}=\"{IMAGE_SCHEMA_VERSION}\" {IMAGE_LOCK_LABEL}=\"{}\" {IMAGE_BASE_LABEL}=\"{}\" {IMAGE_AYNI_LABEL}=\"{}\" {IMAGE_MISE_LABEL}=\"{}\" {IMAGE_PLATFORM_LABEL}=\"{}\" {IMAGE_PREPARATION_LABEL}=\"{}\"\nWORKDIR {WORKSPACE}\n",
         base.reference,
         base.digest,
         lock.fingerprint(),
@@ -200,26 +210,31 @@ fn dockerfile(
     ))
 }
 
-fn rust_provisioning_env(inventory: &ProvisioningInventory) -> String {
+fn rustup_provisioning(inventory: &ProvisioningInventory) -> String {
     let mut output = String::new();
-    push_rust_provisioning_env(
-        &mut output,
-        "MISE_RUSTUP_COMPONENTS",
-        &inventory.rust_components,
-    );
-    push_rust_provisioning_env(&mut output, "MISE_RUSTUP_TARGETS", &inventory.rust_targets);
+    push_rustup_commands(&mut output, "component", &inventory.rust_components);
+    push_rustup_commands(&mut output, "target", &inventory.rust_targets);
     output
 }
 
-fn push_rust_provisioning_env(output: &mut String, name: &str, values: &BTreeSet<String>) {
-    if values.is_empty() {
-        return;
+fn push_rustup_commands(
+    output: &mut String,
+    kind: &str,
+    versions: &BTreeMap<String, BTreeSet<String>>,
+) {
+    for (version, values) in versions {
+        let mut command = vec![
+            String::from("rustup"),
+            kind.to_owned(),
+            String::from("add"),
+            String::from("--toolchain"),
+            version.clone(),
+        ];
+        command.extend(values.iter().cloned());
+        output.push_str("RUN ");
+        output.push_str(&serde_json::to_string(&command).expect("rustup argv serialization"));
+        output.push('\n');
     }
-    let value = values.iter().cloned().collect::<Vec<_>>().join(",");
-    output.push_str(&format!(
-        "ENV {name}={}\n",
-        serde_json::to_string(&value).expect("string serialization")
-    ));
 }
 
 fn validate_rustup_item(kind: &str, value: &str) -> Result<(), BackendError> {

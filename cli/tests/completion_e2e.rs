@@ -110,7 +110,7 @@ fn completion_keeps_undetected_configured_roots_and_replaces_stale_analyze_evide
     fs::write(&artifact_path, "stale-success\n").expect("stale artifact");
 
     let output = fixture.run(&["check", "--host", "--output", "json"]);
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(4));
     let artifact = fixture.artifact(".ayni/last/signals.json");
     assert_eq!(artifact["completion"]["scope"], "repository");
     assert_eq!(artifact["completion"]["state"], "incomplete");
@@ -137,7 +137,7 @@ fn completion_counts_failed_rows_as_completed_targets() {
     fixture.add_rust_root("good");
 
     let output = fixture.run(&["check", "--host", "--output", "json"]);
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(4));
     let artifact = fixture.artifact(".ayni/last/signals.json");
     assert_eq!(artifact["completion"]["state"], "complete");
     assert_eq!(artifact["completion"]["completed_targets"], 1);
@@ -190,7 +190,7 @@ fn completion_verify_failure_replaces_only_requested_scope_artifact() {
         "--output",
         "json",
     ]);
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(4));
     let artifact = fixture.artifact(".ayni/verify/last/signals.json");
     assert_eq!(artifact["completion"]["scope"], "requested");
     assert_eq!(artifact["completion"]["state"], "incomplete");
@@ -220,7 +220,7 @@ fn configured_root_escape_is_rejected_by_analyze_before_artifact_writes() {
     symlink(outside, fixture.root.join("escape-link")).expect("escape link");
 
     let output = fixture.run(&["check", "--host", "--output", "json"]);
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("configured root 'escape-link'"), "{stderr}");
     assert!(stderr.contains("repository containment"), "{stderr}");

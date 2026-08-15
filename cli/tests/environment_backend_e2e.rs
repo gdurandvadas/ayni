@@ -138,7 +138,12 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     );
     let dockerfile = fs::read_to_string(format!("{}.dockerfile", record.display())).unwrap();
     assert!(dockerfile.contains("MISE_AUTO_INSTALL=0"));
-    assert!(dockerfile.contains("MISE_RUSTUP_COMPONENTS=\"llvm-tools-preview\""));
+    assert!(dockerfile.contains(
+        "RUN [\"rustup\",\"component\",\"add\",\"--toolchain\",\"1.92.0\",\"llvm-tools-preview\"]"
+    ));
+    assert!(dockerfile.contains(
+        "RUN [\"rustup\",\"component\",\"add\",\"--toolchain\",\"1.93.0\",\"llvm-tools-preview\"]"
+    ));
     assert!(dockerfile.contains("FROM ayni-runtime AS ayni-preparation"));
     assert!(dockerfile.contains("\"cargo\",\"fetch\",\"--locked\""));
     assert!(!dockerfile.contains(&root.path().display().to_string()));
@@ -251,6 +256,29 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     assert!(managed_args.ends_with("--output\nhuman\n"));
     assert!(!managed_args.contains("--entrypoint"));
 
+    let managed_verify = command(&root, &["verify", "coverage", "--config"])
+        .arg(root.path().join(".ayni.toml"))
+        .args([
+            "--language",
+            "rust",
+            "--root",
+            "one",
+            "--output",
+            "json",
+            "--debug",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(managed_verify.status.code(), Some(1));
+    let managed_verify_args = fs::read_to_string(format!("{}.check", record.display())).unwrap();
+    assert!(managed_verify_args.contains("AYNI_MANAGED_TARGET_ENVIRONMENTS="));
+    assert!(managed_verify_args.contains("rust:one"));
+    assert!(managed_verify_args.contains("rust:two"));
+    assert!(managed_verify_args.ends_with(
+        "verify\ncoverage\n--host\n--config\n./.ayni.toml\n--output\njson\n--language\nrust\n--root\none\n--debug\n"
+    ));
+    assert!(!managed_verify_args.contains("--entrypoint"));
+
     fs::write(root.path().join("one/rust-toolchain"), "stable\n").unwrap();
     let stale = command(&root, &["env", "doctor", "--repo-root"])
         .arg(root.path())
@@ -261,7 +289,7 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
 }
 
 #[test]
-fn npm_dependencies_are_staged_materialized_offline_and_mounted_for_managed_check() {
+fn npm_dependencies_are_staged_materialized_offline_and_mounted_for_managed_quality_runs() {
     let root = TempDir::new().unwrap();
     let bin = root.path().join("bin");
     fs::create_dir(&bin).unwrap();
@@ -361,10 +389,19 @@ fn npm_dependencies_are_staged_materialized_offline_and_mounted_for_managed_chec
         .output()
         .unwrap();
     assert_eq!(managed.status.code(), Some(1));
+    let managed_verify = command(&root, &["verify", "size", "--config"])
+        .arg(root.path().join(".ayni.toml"))
+        .args(["--language", "node", "--output", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(managed_verify.status.code(), Some(1));
     let runs = fs::read_to_string(format!("{}.runs", record.display())).unwrap();
     assert!(runs.contains("npm\nrebuild\n--offline"));
     assert!(runs.contains("target=/workspace/node_modules"));
     assert!(runs.contains("AYNI_MANAGED_TARGET_ENVIRONMENTS="));
     assert!(runs.contains("npm_config_offline"));
     assert!(runs.contains("type=bind"));
+    assert!(runs.contains(
+        "verify\nsize\n--host\n--config\n./.ayni.toml\n--output\njson\n--language\nnode"
+    ));
 }

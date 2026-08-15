@@ -111,7 +111,11 @@ fn build_report_text(
 ) -> String {
     let mut out = String::new();
     out.push('\n');
-    out.push_str(&stylize(color, "ayni check report", Palette::Heading, true));
+    let heading = match completion.map(|value| value.scope) {
+        Some(CompletionScope::Requested) => "ayni verify report",
+        Some(CompletionScope::Repository) | None => "ayni check report",
+    };
+    out.push_str(&stylize(color, heading, Palette::Heading, true));
     out.push('\n');
 
     if let Some(completion) = completion {
@@ -748,6 +752,7 @@ mod tests {
         };
 
         let text = build_report_text(&[], Some(&completion), false, 3);
+        assert!(text.contains("ayni verify report"));
         assert!(text.contains("scope=requested state=incomplete"));
         assert!(text.contains("targets=0/1 detected=0 skipped=1"));
         assert!(

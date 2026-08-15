@@ -9,11 +9,12 @@ requirements, and `ayni env lock` resolves runtime/package-manager ranges using
 `package-lock.json`. Locking does not install dependencies or modify the
 checkout. For npm with `package-lock.json`, `env build` stages only locked
 manifests, runs `npm ci --ignore-scripts`, and stores `node_modules` as an image
-seed. Shell, run, and managed check copy the seed below `.ayni/environment/`,
-mount it over the target, and run `npm rebuild --offline` with the checkout
-read-only. npm `file:` and `link:` dependencies are rejected because their
-referenced content is not part of the staged input contract. pnpm, Yarn, Bun,
-and managed `verify` remain unsupported; use `--host` for those paths.
+seed. Shell, run, managed check, and managed focused verification copy the seed
+below `.ayni/environment/`, mount it over the target, and run
+`npm rebuild --offline` with the checkout read-only. npm `file:` and `link:`
+dependencies are rejected because their referenced content is not part of the
+staged input contract. pnpm, Yarn, and Bun remain unsupported for managed
+execution; use `--host` for those package managers.
 
 ## Signal Coverage
 
