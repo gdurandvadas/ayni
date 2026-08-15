@@ -155,6 +155,11 @@ The first environment adapter interface uses these decisions:
 - The shared conformance harness runs discovery repeatedly, compares canonical
   serialized contributions, and snapshots the bounded fixture to detect
   mutation. It does not interpret ecosystem files or execute providers.
+- The Go adapter emits a complete `go:` provider coordinate for isolated tools;
+  the Python adapter maps enabled signals to exact uv-locked project
+  dependencies; and the Kotlin adapter maps analysis capabilities to exact
+  repository Gradle plugins. Generic provisioning understands provider and
+  output modes, not language-specific manifests or task semantics.
 
 ## Non-goals
 

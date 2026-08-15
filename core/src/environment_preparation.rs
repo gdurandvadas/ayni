@@ -79,12 +79,36 @@ pub struct PreparationScaffold {
     pub content: String,
 }
 
+/// How an output directory is initialized before offline materialization.
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PreparationOutputMode {
+    /// Copy the prepared image tree before running materialization commands.
+    #[default]
+    Seeded,
+    /// Start from an empty directory. Use this for non-relocatable environments.
+    Fresh,
+}
+
 /// One generated directory produced while preparing dependencies and mounted
 /// over its repository location during managed execution.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct PreparationOutput {
     pub path: String,
     pub mount_path: String,
+    #[serde(default)]
+    pub mode: PreparationOutputMode,
 }
 
 /// Adapter-provided plan for preparing one target's native dependencies in an

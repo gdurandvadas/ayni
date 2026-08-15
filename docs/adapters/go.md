@@ -6,10 +6,19 @@ Go roots are directories containing `go.mod`; discovery excludes VCS and
 `vendor` directories. A repository `go.work` marks a workspace controller, and
 the repository root is analyzed only when it contains `go.mod`.
 
-The Go toolchain and `gocyclo` are user-owned prerequisites for `--host`
-execution. Go environment discovery and locking are not implemented yet, so
-`env show` and `env lock` fail explicitly for configured Go targets rather than
-installing tools or changing the checkout.
+For managed execution, Ayni discovers `.go-version`, `.tool-versions`, `go`
+and `toolchain` directives, validates `go.work` membership, and locks an exact
+Go runtime. Modules with declared dependencies require a committed `go.sum`.
+`env build` runs `go mod download all` only against staged, digest-checked
+manifests, stores module/build data below the managed cache, disables Go's own
+toolchain downloads, and runs quality commands with read-only module metadata
+and networking disabled. Complexity additionally provisions pinned `gocyclo`
+`0.6.0` through its Go module provider.
+
+The Go toolchain and `gocyclo` remain user-owned prerequisites for `--host`
+execution. Managed support does not cover module-less GOPATH projects, external
+local replacements, private registries requiring undeclared credentials, or
+cgo system libraries absent from the base image.
 
 ## Signal Coverage
 
@@ -18,7 +27,7 @@ installing tools or changing the checkout.
 | `test` | `go test` | no version enforced |
 | `coverage` | `go test` and `go tool cover` | no version enforced |
 | `size` | built-in Go source scan | no version enforced |
-| `complexity` | `gocyclo` | no version enforced |
+| `complexity` | `gocyclo` | managed: `0.6.0`; host: no version enforced |
 | `deps` | `go list` dependency graph | no version enforced |
 | `mutation` | `go test` mutation proxy, or a configured Go mutation command | no version enforced |
 

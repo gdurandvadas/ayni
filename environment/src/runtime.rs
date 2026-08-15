@@ -6,7 +6,8 @@ use crate::image::{
 use crate::{BackendError, concise_output, read_lock};
 use ayni_adapters_common::exec::{DEFAULT_TOOL_TIMEOUT, run_command, run_command_streaming};
 use ayni_core::{
-    DependencyPreparationPlan, EnvironmentLock, Language, LockedTargetEnvironment, TargetIdentity,
+    DependencyPreparationPlan, EnvironmentLock, Language, LockedTargetEnvironment,
+    PreparationOutputMode, TargetIdentity,
 };
 use std::collections::BTreeMap;
 use std::env;
@@ -567,15 +568,17 @@ fn stage_dependency_output(
 ) -> Result<StagingDirectory, BackendError> {
     reject_partial_materialization(destination)?;
     let staging = StagingDirectory::create(destination.parent().expect("dependency parent"))?;
-    copy_image_tree(
-        request.root,
-        request.engine,
-        &request.image_plan.tag,
-        &format!("{}/{}/.", crate::preparation::SEED_ROOT, request.key),
-        staging.path(),
-        "/tmp/ayni/dependencies",
-        "locked dependencies",
-    )?;
+    if request.output.mode == PreparationOutputMode::Seeded {
+        copy_image_tree(
+            request.root,
+            request.engine,
+            &request.image_plan.tag,
+            &format!("{}/{}/.", crate::preparation::SEED_ROOT, request.key),
+            staging.path(),
+            "/tmp/ayni/dependencies",
+            "locked dependencies",
+        )?;
+    }
     rebuild_dependency_output(request, staging.path())?;
     Ok(staging)
 }
@@ -1270,6 +1273,13 @@ pub(crate) fn target_environment(
             mise_version_variable(&runtime.runtime)?,
             runtime.version.clone(),
         );
+        if runtime.runtime == "java" {
+            validate_mise_install_version("java", &runtime.version)?;
+            variables.insert(
+                String::from("JAVA_HOME"),
+                format!("/opt/ayni/mise/installs/java/{}", runtime.version),
+            );
+        }
     }
     if let Some(manager) = &target.package_manager {
         variables.insert(
@@ -1294,6 +1304,22 @@ fn mise_version_variable(tool: &str) -> Result<String, BackendError> {
         "MISE_{}_VERSION",
         tool.to_ascii_uppercase().replace('-', "_")
     ))
+}
+
+fn validate_mise_install_version(tool: &str, version: &str) -> Result<(), BackendError> {
+    let safe = !version.is_empty()
+        && version != "."
+        && version != ".."
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'+'));
+    if safe {
+        Ok(())
+    } else {
+        Err(BackendError::environment(format!(
+            "locked {tool} version cannot form a safe mise install path: {version}"
+        )))
+    }
 }
 
 fn execution_state(repo_root: &Path, fingerprint: &str) -> Result<String, BackendError> {
@@ -1402,6 +1428,37 @@ fn host_identity() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn java_target_activation_sets_mise_selection_and_java_home() {
+        use ayni_core::{
+            LockedRequirementSource, LockedRuntime, RequirementConfidence, TargetIdentity,
+        };
+        let target = LockedTargetEnvironment {
+            target: TargetIdentity::new(Language::Kotlin, ".").expect("target"),
+            runtimes: vec![LockedRuntime {
+                runtime: "java".into(),
+                version: "temurin-21.0.6+7".into(),
+                components: Vec::new(),
+                targets: Vec::new(),
+                source: LockedRequirementSource {
+                    kind: "test".into(),
+                    path: ".java-version".into(),
+                    digest: None,
+                    confidence: RequirementConfidence::Exact,
+                },
+            }],
+            package_manager: None,
+            signal_tools: Vec::new(),
+            dependency_locks: Vec::new(),
+        };
+        let environment = target_environment(&target).expect("activation");
+        assert!(environment.contains(&("MISE_JAVA_VERSION".into(), "temurin-21.0.6+7".into())));
+        assert!(environment.contains(&(
+            "JAVA_HOME".into(),
+            "/opt/ayni/mise/installs/java/temurin-21.0.6+7".into()
+        )));
+    }
 
     #[test]
     fn repository_launch_keeps_target_activation_inside_ayni() {

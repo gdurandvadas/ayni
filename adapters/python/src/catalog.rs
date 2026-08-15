@@ -29,10 +29,6 @@ enum Requirement {
         version: Option<&'static str>,
         dev: bool,
     },
-    UvTool {
-        package: &'static str,
-        version: Option<&'static str>,
-    },
 }
 
 pub(crate) struct PythonCatalogRuntime;
@@ -52,9 +48,6 @@ impl CatalogRuntime for PythonCatalogRuntime {
             Requirement::Runtime => runtime_status(execution, timeout),
             Requirement::Package { import_name, .. } => {
                 import_status(execution, import_name, timeout)
-            }
-            Requirement::UvTool { package, version } => {
-                uv_tool_status(execution, package, version, timeout)
             }
         }
     }
@@ -91,26 +84,6 @@ impl CatalogRuntime for PythonCatalogRuntime {
                     on_line,
                 )
             }
-            Requirement::UvTool { package, version } => {
-                let target = version.map_or_else(
-                    || package.to_string(),
-                    |version| format!("{package}=={version}"),
-                );
-                run_install(
-                    entry.name,
-                    execution,
-                    uv_program(execution),
-                    vec![
-                        String::from("tool"),
-                        String::from("install"),
-                        String::from("--force"),
-                        String::from("--upgrade"),
-                        target,
-                    ],
-                    timeout,
-                    on_line,
-                )
-            }
         }
     }
 }
@@ -131,10 +104,7 @@ fn requirement(
         PYTEST_JSON => Ok(package("pytest-json-report", "pytest_jsonreport")),
         PYTEST_COV => Ok(package("pytest-cov", "pytest_cov")),
         COVERAGE => Ok(package("coverage", "coverage")),
-        COMPLEXIPY => Ok(Requirement::UvTool {
-            package: "complexipy",
-            version: None,
-        }),
+        COMPLEXIPY => Ok(package("complexipy", "complexipy")),
         MUTMUT => Ok(package("mutmut", "mutmut")),
         _ => Err(CatalogOperationError::contract(
             operation,
@@ -204,53 +174,6 @@ fn import_status(
     } else {
         ToolStatus::Missing
     })
-}
-
-fn uv_tool_status(
-    execution: &ExecutionResolution,
-    package: &str,
-    version: Option<&str>,
-    timeout: Duration,
-) -> Result<ToolStatus, CatalogOperationError> {
-    let program = uv_program(execution);
-    let Some(output) = status_command(execution, program, &["tool", "list"], timeout)? else {
-        return Ok(ToolStatus::Missing);
-    };
-    if !output.status.success() {
-        return Ok(ToolStatus::Missing);
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let Some(line) = stdout
-        .lines()
-        .find(|line| line.split_whitespace().next() == Some(package))
-    else {
-        return Ok(ToolStatus::Missing);
-    };
-    if version.is_some_and(|version| !line.contains(version)) {
-        return Ok(ToolStatus::Outdated);
-    }
-    let Some(output) = status_command(
-        execution,
-        program,
-        &["tool", "run", package, "--help"],
-        timeout,
-    )?
-    else {
-        return Ok(ToolStatus::Missing);
-    };
-    Ok(if output.status.success() {
-        ToolStatus::Current
-    } else {
-        ToolStatus::Missing
-    })
-}
-
-fn uv_program(execution: &ExecutionResolution) -> &str {
-    if PackageManager::from_runner(&execution.runner) == Some(PackageManager::Uv) {
-        &execution.runner
-    } else {
-        "uv"
-    }
 }
 
 fn status_command(
@@ -354,7 +277,7 @@ pub static PYTHON_CATALOG: &[CatalogEntry] = &[
     managed(
         "complexipy",
         COMPLEXIPY,
-        "install: uv tool install complexipy",
+        "install: add Python devDependency complexipy via package manager",
         &[SignalKind::Complexity],
         false,
     ),
@@ -479,7 +402,7 @@ mod tests {
         assert_eq!(
             PYTHON_CATALOG_RUNTIME
                 .status(complexipy, &uv_execution, Duration::from_secs(2))
-                .expect("uv tool status"),
+                .expect("project tool status"),
             ayni_core::ToolStatus::Current
         );
         let mut progress = Vec::new();
@@ -490,11 +413,11 @@ mod tests {
                 Duration::from_secs(2),
                 &mut |line| progress.push(line.to_string()),
             )
-            .expect("uv tool install");
+            .expect("project tool install");
         assert!(
             progress
                 .iter()
-                .any(|line| { line == "progress:tool install --force --upgrade complexipy" })
+                .any(|line| { line == "progress:add --dev complexipy" })
         );
         let error =
             requirement("python.unknown", CatalogOperation::Status).expect_err("unknown key");

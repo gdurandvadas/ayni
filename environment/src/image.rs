@@ -152,6 +152,11 @@ fn add_signal_tools(
             ToolInstallationScope::Isolated if tool.provider == "cargo-install" => {
                 add_tool(tools, &format!("cargo:{}", tool.tool), &tool.version);
             }
+            ToolInstallationScope::Isolated
+                if tool.provider.starts_with("go:") || tool.provider.starts_with("pipx:") =>
+            {
+                add_tool(tools, &tool.provider, &tool.version);
+            }
             ToolInstallationScope::Isolated => {
                 return Err(BackendError::environment(format!(
                     "environment backend does not support isolated provider {} for {}",
@@ -248,5 +253,53 @@ fn validate_rustup_item(kind: &str, value: &str) -> Result<(), BackendError> {
         Err(BackendError::environment(format!(
             "locked Rust {kind} cannot be provisioned safely: {value}"
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ayni_core::{
+        LockedRequirementSource, RequirementConfidence, SignalKind, ToolInstallationScope,
+    };
+
+    fn source() -> LockedRequirementSource {
+        LockedRequirementSource {
+            kind: "test".into(),
+            path: "go.mod".into(),
+            digest: None,
+            confidence: RequirementConfidence::Exact,
+        }
+    }
+
+    #[test]
+    fn isolated_mise_provider_coordinates_are_preserved_without_language_tool_logic() {
+        let tools = vec![LockedSignalTool {
+            tool: "gocyclo".into(),
+            version: "0.6.0".into(),
+            provider: "go:github.com/fzipp/gocyclo/cmd/gocyclo".into(),
+            scope: ToolInstallationScope::Isolated,
+            signals: vec![SignalKind::Complexity],
+            source: source(),
+        }];
+        let mut inventory = BTreeMap::new();
+        add_signal_tools(&tools, &mut inventory).expect("provider");
+        assert_eq!(
+            mise_toml(inventory),
+            "[tools]\n\"go:github.com/fzipp/gocyclo/cmd/gocyclo\" = \"0.6.0\"\n"
+        );
+    }
+
+    #[test]
+    fn unknown_isolated_provider_fails_closed() {
+        let tools = vec![LockedSignalTool {
+            tool: "unknown".into(),
+            version: "1.0.0".into(),
+            provider: "unknown-provider".into(),
+            scope: ToolInstallationScope::Isolated,
+            signals: Vec::new(),
+            source: source(),
+        }];
+        assert!(add_signal_tools(&tools, &mut BTreeMap::new()).is_err());
     }
 }

@@ -318,3 +318,113 @@ exit 1"#,
     assert!(String::from_utf8_lossy(&output.stderr).contains("changed during locking"));
     assert_eq!(fs::read(path).unwrap(), existing);
 }
+
+#[test]
+fn go_python_and_kotlin_exact_requirements_lock_without_language_specific_cli_logic() {
+    let root = TempDir::new().expect("tempdir");
+    fs::write(
+        root.path().join(".ayni.toml"),
+        "[checks]\ntest=true\ncoverage=false\nsize=false\ncomplexity=false\ndeps=false\nmutation=false\n[languages]\nenabled=[\"go\",\"python\",\"kotlin\"]\n[go]\nroots=[\"go\"]\n[python]\nroots=[\"python\"]\n[kotlin]\nroots=[\"kotlin\"]\n",
+    )
+    .unwrap();
+
+    fs::create_dir(root.path().join("go")).unwrap();
+    fs::write(
+        root.path().join("go/go.mod"),
+        "module example.com/go\n\ngo 1.23\ntoolchain go1.23.4\n",
+    )
+    .unwrap();
+
+    fs::create_dir(root.path().join("python")).unwrap();
+    fs::write(
+        root.path().join("python/pyproject.toml"),
+        "[project]\nname='python-fixture'\nrequires-python='>=3.12'\n[dependency-groups]\ndev=['pytest==8.3.5','pytest-json-report==1.5.0']\n[tool.uv]\nrequired-version='0.6.0'\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("python/.python-version"), "3.12.4\n").unwrap();
+    fs::write(
+        root.path().join("python/uv.lock"),
+        "version=1\n[[package]]\nname='pytest'\nversion='8.3.5'\n[[package]]\nname='pytest-json-report'\nversion='1.5.0'\n",
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.path().join("kotlin/gradle/wrapper")).unwrap();
+    fs::write(
+        root.path().join("kotlin/settings.gradle.kts"),
+        "rootProject.name=\"fixture\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("kotlin/build.gradle.kts"),
+        "plugins { kotlin(\"jvm\") version \"2.1.0\" }\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("kotlin/.java-version"), "21.0.6\n").unwrap();
+    fs::write(root.path().join("kotlin/gradlew"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::write(
+        root.path().join("kotlin/gradle/wrapper/gradle-wrapper.jar"),
+        "jar",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("kotlin/gradle/wrapper/gradle-wrapper.properties"),
+        format!("distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10.2-bin.zip\ndistributionSha256Sum={}\n", "a".repeat(64)),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("kotlin/gradle.lockfile"),
+        "example:dependency:1.0=runtimeClasspath\n",
+    )
+    .unwrap();
+
+    fake_mise(
+        &root,
+        r#"if [ "$1" = "version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
+exit 1"#,
+    );
+    let output = lock(&root);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
+    assert_eq!(lock["targets"].as_array().unwrap().len(), 3);
+    assert_eq!(lock["targets"][0]["target"]["language"], "go");
+    assert_eq!(lock["targets"][1]["target"]["language"], "python");
+    assert_eq!(lock["targets"][2]["target"]["language"], "kotlin");
+    assert_eq!(lock["targets"][2]["runtimes"][0]["version"], "21.0.6");
+}
+
+#[cfg(unix)]
+#[test]
+fn python_requires_range_selects_highest_matching_cpython() {
+    let root = TempDir::new().expect("tempdir");
+    fs::write(
+        root.path().join(".ayni.toml"),
+        "[checks]\ntest=false\ncoverage=false\nsize=false\ncomplexity=false\ndeps=false\nmutation=false\n[languages]\nenabled=[\"python\"]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("pyproject.toml"),
+        "[project]\nname='fixture'\nrequires-python='>=3.11,<3.13'\n[tool.uv]\nrequired-version='0.6.0'\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("uv.lock"), "version=1\n").unwrap();
+    fake_mise(
+        &root,
+        r#"if [ "$1" = "version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
+if [ "$1" = "ls-remote" ] && [ "$2" = "python" ]; then printf '3.10.14\n3.11.9\n3.12.8\n3.13.1\n'; exit 0; fi
+exit 1"#,
+    );
+    let output = lock(&root);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
+    assert_eq!(lock["targets"][0]["runtimes"][0]["version"], "3.12.8");
+}

@@ -47,7 +47,8 @@ pub use environment_lock::{
 };
 pub use environment_preparation::{
     DependencyPreparationCapability, DependencyPreparationPlan, DependencyPreparationRequest,
-    PreparationCommand, PreparationInput, PreparationOutput, PreparationScaffold,
+    PreparationCommand, PreparationInput, PreparationOutput, PreparationOutputMode,
+    PreparationScaffold,
 };
 pub use environment_resolution::{EnvironmentResolutionCapability, EnvironmentResolutionRequest};
 pub use language::Language;

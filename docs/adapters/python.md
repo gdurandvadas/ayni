@@ -2,20 +2,31 @@
 
 ## Installation
 
-Repository initialization and managed tool provisioning are not implemented in
-the clean-slate command model yet. Configure roots in `.ayni.toml` and provide
-the documented runtime, package manager, and signal tools when using `--host`.
+Managed Python support is intentionally bounded to uv-locked `pyproject.toml`
+projects. Add an exact or bounded `[tool.uv].required-version`, a
+`.python-version` or compatible `project.requires-python`, and commit `uv.lock`.
+Every enabled project tool (`pytest`, `pytest-json-report`, `pytest-cov`,
+`coverage`, `complexipy`, or opt-in `mutmut`) must be declared by the project
+and have one unambiguous exact version in `uv.lock`.
+
+`env build` warms uv's cache from staged, digest-checked workspace manifests and
+the lock. Managed launch creates a fresh root-specific `.venv` offline, mounts
+it over the checkout without modifying repository files, and forces uv's frozen,
+o-sync, offline behavior. Poetry, PDM, Pipenv, Hatch, plain pip, excluded uv
+workspace members, ambiguous locked tool versions, and undeclared project tools
+fail closed for managed execution. They remain available through the explicit
+`--host` path with their documented user-owned prerequisites.
 
 ## Signal Coverage
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | `pytest`; `pytest-json-report` | no version enforced |
-| `coverage` | `pytest`; `pytest-cov`; `coverage` | no version enforced |
-| `size` | built-in Python source scan | no version enforced |
-| `complexity` | `complexipy` | no version enforced |
-| `deps` | Python import scan | no version enforced |
-| `mutation` | `mutmut` (opt-in) | no version enforced |
+| `test` | `pytest`; `pytest-json-report` | managed: exact `uv.lock`; host: no version enforced |
+| `coverage` | `pytest`; `pytest-cov`; `coverage` | managed: exact `uv.lock`; host: no version enforced |
+| `size` | built-in Python source scan | no external version |
+| `complexity` | `complexipy` | managed: exact `uv.lock`; host: no version enforced |
+| `deps` | Python import scan | no external version |
+| `mutation` | `mutmut` (opt-in) | managed: exact `uv.lock`; host: no version enforced |
 
 ## Focused verification
 

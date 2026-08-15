@@ -405,3 +405,155 @@ fn npm_dependencies_are_staged_materialized_offline_and_mounted_for_managed_qual
         "verify\nsize\n--host\n--config\n./.ayni.toml\n--output\njson\n--language\nnode"
     ));
 }
+
+#[test]
+fn polyglot_build_stages_go_uv_and_gradle_preparation_without_source() {
+    let root = TempDir::new().expect("tempdir");
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::write(
+        root.path().join(".ayni.toml"),
+        "[checks]\ntest=true\ncoverage=false\nsize=false\ncomplexity=false\ndeps=false\nmutation=false\n[languages]\nenabled=[\"go\",\"python\",\"kotlin\"]\n[go]\nroots=[\"go\"]\n[python]\nroots=[\"python\"]\n[kotlin]\nroots=[\"kotlin\"]\n",
+    )
+    .unwrap();
+    fs::create_dir(root.path().join("go")).unwrap();
+    fs::write(
+        root.path().join("go/go.mod"),
+        "module example.com/go\n\ngo 1.23\ntoolchain go1.23.4\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("go/main.go"), "package main\n").unwrap();
+
+    fs::create_dir(root.path().join("python")).unwrap();
+    fs::write(
+        root.path().join("python/pyproject.toml"),
+        "[project]\nname='python-fixture'\nrequires-python='>=3.12'\n[dependency-groups]\ndev=['pytest==8.3.5','pytest-json-report==1.5.0']\n[tool.uv]\nrequired-version='0.6.0'\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("python/.python-version"), "3.12.4\n").unwrap();
+    fs::write(
+        root.path().join("python/uv.lock"),
+        "version=1\n[[package]]\nname='pytest'\nversion='8.3.5'\n[[package]]\nname='pytest-json-report'\nversion='1.5.0'\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("python/app.py"), "print('source')\n").unwrap();
+
+    fs::create_dir_all(root.path().join("kotlin/gradle/wrapper")).unwrap();
+    fs::write(
+        root.path().join("kotlin/settings.gradle.kts"),
+        "rootProject.name=\"fixture\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("kotlin/build.gradle.kts"),
+        "plugins { kotlin(\"jvm\") version \"2.1.0\" }\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("kotlin/.java-version"), "21.0.6\n").unwrap();
+    fs::write(root.path().join("kotlin/gradlew"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::write(
+        root.path().join("kotlin/gradle/wrapper/gradle-wrapper.jar"),
+        "jar",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("kotlin/gradle/wrapper/gradle-wrapper.properties"),
+        format!("distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10.2-bin.zip\ndistributionSha256Sum={}\n", "a".repeat(64)),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("kotlin/gradle.lockfile"),
+        "example:dependency:1.0=runtimeClasspath\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.path().join("kotlin/src/main/kotlin")).unwrap();
+    fs::write(
+        root.path().join("kotlin/src/main/kotlin/App.kt"),
+        "class App\n",
+    )
+    .unwrap();
+
+    write_executable(
+        &bin.join("mise"),
+        "while [ \"$1\" = \"--no-config\" ] || [ \"$1\" = \"--no-env\" ] || [ \"$1\" = \"--no-hooks\" ]; do shift; done\n[ \"$1\" = \"version\" ] && echo '2026.8.7 linux-x64' && exit 0\nexit 1",
+    );
+    let record = root.path().join("polyglot");
+    write_executable(
+        &bin.join("docker"),
+        &format!(
+            "case \"$1\" in\nbuildx) printf '{{\"digest\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}}\\n';;\nimage) exit 1;;\nbuild) shift; file=''; context=''; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; cat \"$context/mise.toml\" > '{}.mise'; find \"$context/repository\" -type f | sed \"s|$context/repository/||\" | sort > '{}.inputs';;\nesac\nexit 0",
+            record.display(),
+            record.display(),
+            record.display(),
+        ),
+    );
+    let locked = command(&root, &["env", "lock", "--repo-root"])
+        .arg(root.path())
+        .output()
+        .unwrap();
+    assert!(
+        locked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&locked.stderr)
+    );
+    let lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
+    let labels = serde_json::json!({
+        "dev.ayni.environment.schema": "0.3.0",
+        "dev.ayni.environment.lock-fingerprint": lock["fingerprint"],
+        "dev.ayni.environment.base-digest": lock["provisioning_base"]["digest"],
+        "dev.ayni.environment.ayni-version": env!("CARGO_PKG_VERSION"),
+        "dev.ayni.environment.mise-version": "2025.2.4",
+        "dev.ayni.environment.platform": if cfg!(target_arch = "aarch64") {
+            "linux/arm64"
+        } else {
+            "linux/amd64"
+        },
+        "dev.ayni.environment.preparation-digest": "PREPARATION_DIGEST",
+    });
+    write_executable(
+        &bin.join("docker"),
+        &format!(
+            "case \"$1\" in\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\";;\nbuild) shift; file=''; context=''; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; cat \"$context/mise.toml\" > '{}.mise'; find \"$context/repository\" -type f | sed \"s|$context/repository/||\" | sort > '{}.inputs'; touch '{}.built';;\nesac\nexit 0",
+            record.display(),
+            record.display(),
+            labels,
+            record.display(),
+            record.display(),
+            record.display(),
+            record.display(),
+            record.display(),
+        ),
+    );
+    let built = command(&root, &["env", "build", "--repo-root"])
+        .arg(root.path())
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let dockerfile = fs::read_to_string(format!("{}.dockerfile", record.display())).unwrap();
+    assert!(dockerfile.contains("\"go\",\"mod\",\"download\",\"all\""));
+    assert!(dockerfile.contains("\"uv\",\"sync\",\"--frozen\",\"--no-install-project\""));
+    assert!(dockerfile.contains("\"sh\",\"gradlew\",\"--no-daemon\""));
+    assert!(dockerfile.contains(".ayni-gradle-resolve.init.gradle"));
+    assert!(!dockerfile.contains("/opt/ayni/dependencies"));
+    let mise = fs::read_to_string(format!("{}.mise", record.display())).unwrap();
+    for tool in ["go", "python", "uv", "java", "gradle"] {
+        assert!(
+            mise.contains(&format!("\"{tool}\"")),
+            "missing {tool}: {mise}"
+        );
+    }
+    let inputs = fs::read_to_string(format!("{}.inputs", record.display())).unwrap();
+    assert!(inputs.contains("go/go.mod"));
+    assert!(inputs.contains("python/pyproject.toml"));
+    assert!(inputs.contains("python/uv.lock"));
+    assert!(inputs.contains("kotlin/gradle.lockfile"));
+    assert!(inputs.contains("kotlin/.ayni-gradle-resolve.init.gradle"));
+    assert!(!inputs.contains("go/main.go"));
+    assert!(!inputs.contains("python/app.py"));
+    assert!(!inputs.contains("kotlin/src/main/kotlin/App.kt"));
+}

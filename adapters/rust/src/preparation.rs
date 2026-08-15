@@ -55,6 +55,8 @@ impl DependencyPreparationCapability for RustDependencyPreparationCapability {
             Vec::new(),
             Vec::new(),
             BTreeMap::from([
+                // Docker Desktop bind mounts can lose Cargo artifacts under parallel rustc writes.
+                (String::from("CARGO_BUILD_JOBS"), String::from("1")),
                 (String::from("CARGO_NET_OFFLINE"), String::from("true")),
                 (
                     String::from("CARGO_TARGET_DIR"),
@@ -207,6 +209,10 @@ mod tests {
         assert_eq!(
             plan.execution_environment.get("CARGO_NET_OFFLINE"),
             Some(&String::from("true"))
+        );
+        assert_eq!(
+            plan.execution_environment.get("CARGO_BUILD_JOBS"),
+            Some(&String::from("1"))
         );
         assert!(
             RustDependencyPreparationCapability

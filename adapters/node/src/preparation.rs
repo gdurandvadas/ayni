@@ -95,6 +95,7 @@ impl DependencyPreparationCapability for NodeDependencyPreparationCapability {
             vec![PreparationOutput {
                 path: node_modules.clone(),
                 mount_path: node_modules,
+                mode: ayni_core::PreparationOutputMode::Seeded,
             }],
             BTreeMap::from([(String::from("npm_config_offline"), String::from("true"))]),
         )

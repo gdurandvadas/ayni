@@ -7,21 +7,34 @@ contains `build.gradle.kts`, `build.gradle`, `settings.gradle.kts`, or
 `settings.gradle`; configure analysis roots in `[kotlin].roots`. The Gradle
 runner precedence is `./gradlew`, `gradlew.bat`, then `gradle` on `PATH`.
 
-The Gradle runner, JDK, and required analysis plugins are user-owned
-prerequisites for `--host` execution. Kotlin environment discovery and locking
-are not implemented yet, and the clean-slate CLI does not edit Gradle build
-files. Existing JaCoCo or Kover configuration remains repository-owned.
+Managed Kotlin support requires a repository-owned POSIX Gradle wrapper
+(`gradlew`, wrapper JAR, properties, exact official distribution URL), a
+repository JDK requirement, build/settings files, and committed Gradle
+dependency locks. Ayni discovers `.java-version`, `.tool-versions`, and common
+Gradle JVM toolchain declarations separately from the wrapper version. Conflicts
+fail rather than selecting an arbitrary JDK.
+
+`env build` stages only digest-checked Gradle metadata and uses a generated init
+script to resolve locked configurations into `GRADLE_USER_HOME`; it does not
+copy source or edit build files. Managed Gradle commands use the locked JDK,
+set `JAVA_HOME`, and add `--offline --no-daemon`. Coverage, complexity, and
+mutation require exact repository plugin declarations for Kover/JaCoCo,
+Detekt, and PIT respectively. The Gradle runner, JDK, and plugins remain
+user-owned prerequisites for `--host` execution. Composite builds, dynamic
+plugin versions, Android SDK management, missing dependency locks, and private
+repositories requiring undeclared credentials are not supported by the first
+managed slice.
 
 ## Signal Coverage
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
 | `test` | Gradle `test` task and JUnit XML | no version enforced |
-| `coverage` | Gradle `koverXmlReport` or `jacocoTestReport` | no version enforced |
+| `coverage` | Gradle `koverXmlReport` or `jacocoTestReport` | managed: exact Kover/JaCoCo declaration; host: no version enforced |
 | `size` | built-in Kotlin source scan | no version enforced |
-| `complexity` | Gradle `detekt` task | no version enforced |
+| `complexity` | Gradle `detekt` task | managed: exact Detekt plugin; host: no version enforced |
 | `deps` | Gradle `dependencies` project edges | no version enforced |
-| `mutation` | Gradle `pitest` task (opt-in) | no version enforced |
+| `mutation` | Gradle `pitest` task (opt-in) | managed: exact PIT plugin; host: no version enforced |
 
 ## Focused verification
 

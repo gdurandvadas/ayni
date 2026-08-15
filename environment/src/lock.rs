@@ -128,15 +128,13 @@ pub fn plan_matches_lock(plan: &EnvironmentPlan, lock: &EnvironmentLock) -> bool
                                 && left.source.path == right.source.path
                         })
                     && plan.dependency_locks.len() == locked.dependency_locks.len()
-                    && plan
-                        .dependency_locks
-                        .iter()
-                        .zip(&locked.dependency_locks)
-                        .all(|(left, right)| {
+                    && plan.dependency_locks.iter().all(|left| {
+                        locked.dependency_locks.iter().any(|right| {
                             left.path == right.path
                                 && left.digest == right.digest
                                 && left.owner_root == right.owner_root
                         })
+                    })
             })
 }
 

@@ -143,19 +143,101 @@ fn malformed_configuration_fails_explicitly() {
 }
 
 #[test]
-fn unsupported_environment_adapter_fails_explicitly() {
+fn go_environment_adapter_plans_deterministically() {
     let root = TempDir::new().expect("tempdir");
     fs::write(
         root.path().join(".ayni.toml"),
-        "[languages]\nenabled = [\"go\"]\n",
+        "[checks]\ntest=true\ncoverage=false\nsize=false\ncomplexity=false\ndeps=false\nmutation=false\n[languages]\nenabled=[\"go\"]\n",
     )
     .unwrap();
     fs::write(root.path().join("go.mod"), "module fixture\n\ngo 1.23\n").unwrap();
-    let output = show(&root, "human");
-    assert_eq!(output.status.code(), Some(3));
-    assert!(output.stdout.is_empty());
+    let first = show(&root, "json");
+    let second = show(&root, "json");
     assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("environment discovery capability is unsupported")
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
     );
+    assert_eq!(first.stdout, second.stdout);
+    let plan: Value = serde_json::from_slice(&first.stdout).expect("plan");
+    assert_eq!(plan["targets"][0]["target"]["language"], "go");
+    assert_eq!(plan["targets"][0]["runtimes"][0]["runtime"], "go");
+}
+
+#[test]
+fn uv_python_environment_adapter_plans_locked_project_tools() {
+    let root = TempDir::new().expect("tempdir");
+    fs::write(
+        root.path().join(".ayni.toml"),
+        "[checks]\ntest=true\ncoverage=false\nsize=false\ncomplexity=false\ndeps=false\nmutation=false\n[languages]\nenabled=[\"python\"]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("pyproject.toml"),
+        "[project]\nname='fixture'\nrequires-python='>=3.12'\n[dependency-groups]\ndev=['pytest==8.3.5','pytest-json-report==1.5.0']\n[tool.uv]\nrequired-version='0.6.0'\n",
+    )
+    .unwrap();
+    fs::write(root.path().join(".python-version"), "3.12.4\n").unwrap();
+    fs::write(
+        root.path().join("uv.lock"),
+        "version=1\n[[package]]\nname='pytest'\nversion='8.3.5'\n[[package]]\nname='pytest-json-report'\nversion='1.5.0'\n",
+    )
+    .unwrap();
+    let output = show(&root, "json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: Value = serde_json::from_slice(&output.stdout).expect("plan");
+    assert_eq!(plan["targets"][0]["target"]["language"], "python");
+    assert_eq!(plan["targets"][0]["package_manager"]["family"], "uv");
+    assert_eq!(
+        plan["targets"][0]["signal_tools"].as_array().unwrap().len(),
+        2
+    );
+}
+
+#[test]
+fn kotlin_environment_adapter_plans_jdk_wrapper_and_locked_gradle_inputs() {
+    let root = TempDir::new().expect("tempdir");
+    fs::write(
+        root.path().join(".ayni.toml"),
+        "[checks]\ntest=true\ncoverage=false\nsize=false\ncomplexity=false\ndeps=false\nmutation=false\n[languages]\nenabled=[\"kotlin\"]\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.path().join("gradle/wrapper")).unwrap();
+    fs::write(
+        root.path().join("settings.gradle.kts"),
+        "rootProject.name=\"fixture\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("build.gradle.kts"),
+        "plugins { kotlin(\"jvm\") version \"2.1.0\" }\n",
+    )
+    .unwrap();
+    fs::write(root.path().join(".java-version"), "21.0.6\n").unwrap();
+    fs::write(root.path().join("gradlew"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::write(root.path().join("gradle/wrapper/gradle-wrapper.jar"), "jar").unwrap();
+    fs::write(
+        root.path().join("gradle/wrapper/gradle-wrapper.properties"),
+        format!("distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10.2-bin.zip\ndistributionSha256Sum={}\n", "a".repeat(64)),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("gradle.lockfile"),
+        "example:dependency:1.0=runtimeClasspath\n",
+    )
+    .unwrap();
+    let output = show(&root, "json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: Value = serde_json::from_slice(&output.stdout).expect("plan");
+    assert_eq!(plan["targets"][0]["target"]["language"], "kotlin");
+    assert_eq!(plan["targets"][0]["runtimes"][0]["runtime"], "java");
+    assert_eq!(plan["targets"][0]["package_manager"]["family"], "gradle");
 }

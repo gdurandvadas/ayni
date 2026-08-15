@@ -81,9 +81,10 @@ cargo doc-cli > docs/cli.md
 
 ## Ayni (Rust)
 
-- `env show`, Rust/Node `env lock`, and the lock-driven OCI `env doctor`,
-  `env build`, `env shell`, and `env run` lifecycle are implemented. Do not
-  substitute removed `install` behavior.
+- `env show`, multi-language `env lock`, and the lock-driven OCI `env doctor`,
+  `env build`, `env shell`, and `env run` lifecycle are implemented for Rust,
+  npm Node, Go modules, uv Python, and locked Gradle Kotlin. Do not substitute
+  removed `install` behavior.
 - `cargo run -p ayni-cli -- agents sync --repo-root .` is the only command that
   creates or refreshes the Ayni-managed `AGENTS.md` block.
 - `cargo test -p <pkg>` runs package-scoped tests.

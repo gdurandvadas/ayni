@@ -1,6 +1,9 @@
 use crate::catalog::GO_CATALOG;
 use crate::collectors::GoCollector;
 use crate::discovery;
+use crate::environment::GoEnvironmentCapability;
+use crate::environment_resolution::GoEnvironmentResolutionCapability;
+use crate::preparation::GoDependencyPreparationCapability;
 use ayni_adapters_common::catalog::GENERIC_CATALOG_RUNTIME;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
@@ -95,6 +98,22 @@ impl LanguageAdapter for GoAdapter {
         &self.collector
     }
 
+    fn environment_capability(&self) -> Option<&dyn ayni_core::EnvironmentCapability> {
+        Some(&GoEnvironmentCapability)
+    }
+
+    fn dependency_preparation_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::DependencyPreparationCapability> {
+        Some(&GoDependencyPreparationCapability)
+    }
+
+    fn environment_resolution_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::EnvironmentResolutionCapability> {
+        Some(&GoEnvironmentResolutionCapability)
+    }
+
     fn policy_effectiveness_facts(&self) -> PolicyEffectivenessFacts {
         PolicyEffectivenessFacts::new(Language::Go, vec![ComplexityThresholdKind::FnCyclomatic])
     }
@@ -171,6 +190,14 @@ mod tests {
         assert_eq!(resolution.kind, "workspace_ancestor");
         assert_eq!(resolution.resolved_from, dir.path());
         assert_eq!(resolution.exec_cwd, module);
+    }
+
+    #[test]
+    fn exposes_all_environment_capabilities() {
+        let adapter = GoAdapter::new();
+        assert!(adapter.environment_capability().is_some());
+        assert!(adapter.dependency_preparation_capability().is_some());
+        assert!(adapter.environment_resolution_capability().is_some());
     }
 
     #[test]

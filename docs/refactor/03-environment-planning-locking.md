@@ -97,6 +97,26 @@ The first built-in environment capabilities establish these rules:
 - Node `packageManager` declarations are checked against native lockfile family. Missing locks, ambiguous lock families, and declaration/lock disagreement are blocking conflicts. The npm execution fallback remains an unresolved assumed requirement rather than disappearing from the plan.
 - Project-integrated Node signal tools never claim immutable offline provisioning in this discovery slice. Missing declarations explicitly report checkout mutation; declared tools remain online-only until native lock materialization proves the stronger guarantee.
 
+### Initial Go, Python, and Kotlin decisions
+
+- Go workspace ownership requires validated `go.work use` membership. Toolchain
+  selectors govern exact selection while `go` directives remain minima; a
+  selected toolchain below the effective module/workspace minimum is blocking.
+  Go's own toolchain download is disabled, and complexity uses the exact
+  adapter-owned `go:` provider coordinate for `gocyclo`.
+- Managed Python is initially uv-only. Ownership follows validated uv workspace
+  members, `[tool.uv].required-version` is mandatory, and each enabled project
+  tool must be both declared and resolved once in `uv.lock`. Other manager
+  families remain host-capable but block portable managed locking.
+- Managed Kotlin is initially Gradle/JVM-only. The exact official wrapper
+  distribution, repository JDK evidence, POSIX wrapper files, build/settings
+  metadata, and committed dependency locks are mandatory. Kover/JaCoCo,
+  Detekt, and PIT remain exact project plugins; the clean-slate path never
+  inserts them.
+- These adapters use the same optional capability interfaces and generic lock
+  projection as Rust and Node. Core and CLI do not interpret Go directives, uv
+  workspaces, Python requirements, Gradle wrappers, JVM toolchains, or plugins.
+
 ## Environment plan
 
 The typed plan should contain:
@@ -223,6 +243,15 @@ requirement with the old Ayni artifact schemas.
   plans `npm ci --ignore-scripts --no-audit --no-fund`. Other Node managers and
   a missing npm lockfile fail explicitly. The owning `package.json` and
   `package-lock.json` are digest-tracked.
+- Go preparation runs `go mod download all` with `GOTOOLCHAIN=local` and
+  repository-external caches. Runtime module access is read-only and offline.
+- uv preparation warms its package cache without installing repository source,
+  then creates a fresh, root-specific virtual environment after the checkout is
+  mounted. Fresh outputs are distinct from relocatable seeded outputs.
+- Gradle preparation stages wrapper/build/lock metadata plus an Ayni-generated
+  init script that resolves every resolvable configuration into
+  `GRADLE_USER_HOME`. Managed commands use the locked JDK and Gradle wrapper
+  offline without executing the historical plugin insertion path.
 
 ## Security boundary
 

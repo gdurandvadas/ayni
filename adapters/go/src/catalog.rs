@@ -1,9 +1,13 @@
 use ayni_core::{CatalogEntry, Installer, SignalKind, VersionCheck};
 
+/// Module and exact version used by both host installation and managed provisioning.
+pub(crate) const GOCYCLO_MODULE: &str = "github.com/fzipp/gocyclo/cmd/gocyclo";
+pub(crate) const GOCYCLO_VERSION: &str = "0.6.0";
+
 /// Tool catalog for the Go adapter.
 ///
-/// Drives `ayni install --language go` and keeps external tool requirements
-/// centralized and signal-scoped.
+/// Drives host diagnostics and keeps external tool requirements centralized
+/// and signal-scoped.
 pub static GO_CATALOG: &[CatalogEntry] = &[
     CatalogEntry {
         name: "go",
@@ -31,8 +35,8 @@ pub static GO_CATALOG: &[CatalogEntry] = &[
             contains: None,
         }),
         installer: Installer::GoInstall {
-            module: "github.com/fzipp/gocyclo/cmd/gocyclo",
-            version: None,
+            module: GOCYCLO_MODULE,
+            version: Some(GOCYCLO_VERSION),
         },
         for_signals: &[SignalKind::Complexity],
         opt_in: false,

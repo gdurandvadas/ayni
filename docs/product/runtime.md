@@ -48,23 +48,23 @@ Every analyzed root records:
 ## Environment provisioning status
 
 The clean-slate `init` and `env` command vocabulary is active. `env show`
-builds a read-only, deterministic environment plan for configured Rust and Node
-targets. `env lock` resolves exact Rust and Node requirements and atomically
-writes schema `0.3.0`, a versioned, fingerprinted `.ayni.lock`; unchanged inputs produce
-byte-stable output across equivalent checkout directory names, and failed
-resolution preserves the previous lock. Rust selectors and Cargo catalog tools
-resolve through `mise`; Node ranges use `mise` candidates with npm-compatible
-semver selection, while Node project tools must already be present in
-`package-lock.json`. A lock now contains a validated immutable OCI base
+builds a read-only, deterministic environment plan for configured Rust, Node,
+Go, uv Python, and Gradle Kotlin targets. `env lock` resolves exact requirements
+and atomically writes schema `0.3.0`, a versioned, fingerprinted `.ayni.lock`;
+unchanged inputs produce byte-stable output across equivalent checkout directory
+names, and failed resolution preserves the previous lock. Adapter-owned
+resolvers interpret each ecosystem's selectors. Project tools must already be
+present in the native npm/uv/Gradle inputs, while isolated Cargo and Go tools
+are provisioned from exact provider coordinates. A lock contains a validated immutable OCI base
 reference and SHA-256 digest. The default release-base digest is resolved with
 Docker Buildx; `env lock --base <reference>@sha256:<digest>` accepts an explicit
 base. `env doctor`, `env build`, `env shell`, and `env run` use Docker first and
 compatible Podman second. They derive generic mise input from the validated
 lock and image identity from both the lock fingerprint and canonical dependency
-preparation digest; they never implicitly create a lock or image. For Rust
-and npm, adapters additionally provide structured preparation commands over
-lock-digested manifests; the temporary build context contains only those
-allowlisted inputs, never source files or credentials. Image labels are checked
+preparation digest; they never implicitly create a lock or image. Adapters additionally provide structured Cargo, npm, Go module, uv, and Gradle
+preparation commands over lock-digested inputs; the temporary build context
+contains only those allowlisted manifests, locks, wrapper files, and generated
+scaffolds—never application source or credentials. Image labels are checked
 before reuse and launch.
 
 Launch mounts the canonical checkout at `/workspace`, selects one locked target,
@@ -72,22 +72,22 @@ uses the invoking identity, disables mise auto-install and networking, mounts a
 writable generated home, and applies read-only-root and privilege restrictions.
 Multi-target shell/run requests require `--language` and `--root`.
 
-`env build` runs adapter-owned Cargo fetch and npm installation plans only in
-the isolated staged context. Managed launch copies npm dependency seeds into
-fingerprinted state below `.ayni/environment/`, mounts them over `node_modules`,
-and runs lifecycle rebuilds offline with the checkout read-only. Prepared Cargo
-and npm caches are also copied into fingerprinted writable state and mounted
-over the read-only image cache. Per-target
-runtime and offline variables are injected only into that target's collector
+`env build` runs adapter-owned preparation plans only in the isolated staged
+context. Managed launch copies seeded npm dependencies, creates fresh
+non-relocatable uv environments, and reuses prepared Cargo, Go, uv, and Gradle
+caches from fingerprinted state below `.ayni/environment/`. Outputs are mounted
+over their repository locations with the checkout read-only. Per-target runtime
+and offline variables—including Go cache/toolchain controls, uv frozen state,
+and Gradle/JDK activation—are injected only into that target's collector
 process. Normal managed launch, check, and focused verification remain
 network-disabled.
 
-Managed `check` and focused `verify` are available for locked Rust and npm Node
-targets and preserve their inner quality exit codes. pnpm, Yarn, Bun, and Go,
-Python, and Kotlin provisioning remain unavailable. `--host` retains
-adapter-owned runner resolution as an explicit escape hatch; it does not install tools or
-mutate repository dependencies. No operation reuses removed `install`
-behavior.
+Managed `check` and focused `verify` are available for locked Rust, npm Node,
+Go modules, uv Python projects, and locked Gradle Kotlin builds, preserving
+inner quality exit codes. pnpm, Yarn, Bun, non-uv Python managers, and unsupported
+Gradle build shapes fail explicitly. `--host` retains adapter-owned runner
+resolution as an escape hatch; it does not install tools or mutate repository
+dependencies. No operation reuses removed `install` behavior.
 
 ## Failure Categories
 

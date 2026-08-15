@@ -122,22 +122,24 @@ ayni env build
 ayni env run -- cargo test
 ```
 
-Locking may query `mise` for exact Rust/Node versions and Docker Buildx for the
-published base-image digest. `--base <reference>@sha256:<digest>` supplies an
-explicit base instead. If the published base is unavailable, run
-`scripts/build-local-environment-image.sh`; it compiles Ayni inside a Linux
-container and prints the exact local `env lock --base` command. Node project
-tools must already be represented in
-`package-lock.json`. Doctor, build, shell, run, and managed check consume the
-validated lock without creating or refreshing it. Multi-target shell/run
-requests use `--language` and `--root`. Environment builds stage only
-digest-verified Cargo/npm manifests and locks, warm provider caches, and retain
-npm `node_modules` as an image seed. Launch materializes that seed below
-`.ayni/environment/`, mounts it over the target without writing dependencies to
-the checkout, and runs lifecycle rebuilds with networking disabled and the
-checkout read-only. Managed check and focused verification are available for
-locked Rust and npm Node targets. pnpm, Yarn, Bun, and Go/Python/Kotlin
-environments remain explicitly unsupported.
+Locking may query `mise` for exact adapter-owned runtime and tool versions and
+Docker Buildx for the published base-image digest.
+`--base <reference>@sha256:<digest>` supplies an explicit base instead. If the
+published base is unavailable, run `scripts/build-local-environment-image.sh`;
+it compiles Ayni inside a Linux container and prints the exact local
+`env lock --base` command. Project tools must already be represented in native
+npm, uv, or Gradle inputs. Doctor, build, shell, run, and managed check consume
+the validated lock without creating or refreshing it. Multi-target shell/run
+requests use `--language` and `--root`.
+
+Environment builds stage only digest-verified Cargo/npm/Go/uv/Gradle inputs,
+warm provider caches, and retain only declared dependency outputs. Launch
+materializes seeded npm dependencies and fresh uv environments below
+`.ayni/environment/`, mounts them without writing dependencies to the checkout,
+and runs with networking disabled and the checkout read-only. Managed check and
+focused verification support locked Rust, npm Node, Go module, uv Python, and
+Gradle Kotlin targets. pnpm, Yarn, Bun, non-uv Python managers, and unsupported
+Gradle build shapes remain explicit failures.
 
 `ayni init` will own repository bootstrap without installation or agent-guidance
 mutation. Run `ayni agents sync` explicitly when you want the managed guidance

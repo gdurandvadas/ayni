@@ -33,11 +33,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         threshold,
         String::from("--ignore-complexity"),
     ];
-    let mut command_args = vec![
-        String::from("tool"),
-        String::from("run"),
-        String::from("complexipy"),
-    ];
+    let mut command_args = vec![String::from("run"), String::from("complexipy")];
     command_args.extend(args);
     let engine = format_command("uv", &command_args);
     let output = run_command_for_context_structured(context, "uv", &command_args)?;

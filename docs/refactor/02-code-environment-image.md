@@ -177,10 +177,16 @@ The first lock-driven OCI backend establishes these rules:
   auto-installation, drops capabilities, and uses generated state below
   `.ayni/environment/` for the container home.
 - Adapter-owned preparation contracts provide deterministic staged argv for
-  Rust Cargo and Node npm. The generic backend verifies every staged digest,
-  warms Cargo/npm caches during build, retains npm dependencies as an image
-  seed, and materializes/rebuilds them below `.ayni/environment/` with no
-  network and a read-only checkout. Unsupported managers fail explicitly.
+  Rust Cargo, Node npm, Go modules, uv Python, and Gradle. The generic backend
+  verifies every staged digest and warms only declared caches. npm uses a
+  relocatable seeded output; uv uses a fresh output because virtual environments
+  are path-sensitive; Go and Gradle reuse cache-only state. All materialization
+  occurs below `.ayni/environment/` with no network and a read-only checkout.
+  Unknown providers and unsupported managers fail explicitly.
+- Target activation now includes Go toolchain/cache controls, uv frozen/offline
+  state, Gradle cache controls, and a backend-derived `JAVA_HOME` for the exact
+  mise-managed JDK. Gradle collectors add `--offline --no-daemon` only when the
+  managed activation marker is present.
 
 ## Non-goals
 

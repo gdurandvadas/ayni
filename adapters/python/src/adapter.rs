@@ -1,7 +1,10 @@
 use crate::catalog::{PYTHON_CATALOG, PYTHON_CATALOG_RUNTIME};
 use crate::collectors::PythonCollector;
 use crate::discovery;
+use crate::environment::PythonEnvironmentCapability;
+use crate::environment_resolution::PythonEnvironmentResolutionCapability;
 use crate::package_manager;
+use crate::preparation::PythonDependencyPreparationCapability;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
     CatalogEntry, CatalogRuntime, ComplexityThresholdKind, DetectResult, ExecutionResolution,
@@ -92,6 +95,27 @@ impl LanguageAdapter for PythonAdapter {
 
     fn catalog_runtime(&self) -> &dyn CatalogRuntime {
         &PYTHON_CATALOG_RUNTIME
+    }
+
+    fn environment_capability(&self) -> Option<&dyn ayni_core::EnvironmentCapability> {
+        static CAPABILITY: PythonEnvironmentCapability = PythonEnvironmentCapability;
+        Some(&CAPABILITY)
+    }
+
+    fn dependency_preparation_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::DependencyPreparationCapability> {
+        static CAPABILITY: PythonDependencyPreparationCapability =
+            PythonDependencyPreparationCapability;
+        Some(&CAPABILITY)
+    }
+
+    fn environment_resolution_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::EnvironmentResolutionCapability> {
+        static CAPABILITY: PythonEnvironmentResolutionCapability =
+            PythonEnvironmentResolutionCapability;
+        Some(&CAPABILITY)
     }
 
     fn collector(&self) -> &dyn SignalCollector {

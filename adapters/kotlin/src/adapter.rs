@@ -1,6 +1,9 @@
 use crate::catalog::KOTLIN_CATALOG;
 use crate::collectors::KotlinCollector;
 use crate::discovery;
+use crate::environment::KotlinEnvironmentCapability;
+use crate::environment_resolution::KotlinEnvironmentResolutionCapability;
+use crate::preparation::KotlinDependencyPreparationCapability;
 use ayni_adapters_common::catalog::GENERIC_CATALOG_RUNTIME;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
@@ -131,6 +134,27 @@ impl LanguageAdapter for KotlinAdapter {
 
     fn collector(&self) -> &dyn SignalCollector {
         &self.collector
+    }
+
+    fn environment_capability(&self) -> Option<&dyn ayni_core::EnvironmentCapability> {
+        static CAPABILITY: KotlinEnvironmentCapability = KotlinEnvironmentCapability;
+        Some(&CAPABILITY)
+    }
+
+    fn dependency_preparation_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::DependencyPreparationCapability> {
+        static CAPABILITY: KotlinDependencyPreparationCapability =
+            KotlinDependencyPreparationCapability;
+        Some(&CAPABILITY)
+    }
+
+    fn environment_resolution_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::EnvironmentResolutionCapability> {
+        static CAPABILITY: KotlinEnvironmentResolutionCapability =
+            KotlinEnvironmentResolutionCapability;
+        Some(&CAPABILITY)
     }
 
     fn policy_effectiveness_facts(&self) -> PolicyEffectivenessFacts {

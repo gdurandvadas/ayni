@@ -10,9 +10,10 @@ locally, and turn results into signals that humans and agents can act on.
 
 - The clean-slate command tree is active. For an already configured repository,
   run `ayni contract show`, `ayni env show`, `ayni env lock`,
-  `ayni agents sync`, and `ayni check --host`. Rust/Node environment planning
-  and locking are available; initialization, builds, and managed execution are
-  not implemented yet.
+  `ayni agents sync`, and `ayni check --host`. Environment planning, locking,
+  building, and managed execution are available for Rust, npm Node, Go modules,
+  uv Python projects, and locked Gradle Kotlin builds; unsupported ecosystem
+  variants fail explicitly.
 - [CLI reference](/cli)
 - [Configuration reference](/product/config)
 - [Signal contract index](/product/signals)

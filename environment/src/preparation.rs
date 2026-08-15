@@ -1,6 +1,8 @@
 use crate::BackendError;
 use crate::runtime::{WORKSPACE, target_environment};
-use ayni_core::{DependencyPreparationPlan, EnvironmentLock, PreparationOutput};
+use ayni_core::{
+    DependencyPreparationPlan, EnvironmentLock, PreparationOutput, PreparationOutputMode,
+};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -60,6 +62,9 @@ pub(crate) fn dockerfile_fragment(
     );
     for plan in ordered_plans(plans) {
         for prepared in &plan.outputs {
+            if prepared.mode == PreparationOutputMode::Fresh {
+                continue;
+            }
             output.push_str("COPY --from=ayni-preparation ");
             output.push_str(&docker_path(INPUT_ROOT, &prepared.path));
             output.push(' ');
