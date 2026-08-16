@@ -5,6 +5,8 @@ on:
     branches:
       - main
     paths:
+      - .ayni.lock
+      - rust-toolchain.toml
       - .github/docker/ayni-rust-ci.Dockerfile
       - .github/workflows/publish-ayni-rust-ci.yml
   workflow_dispatch:

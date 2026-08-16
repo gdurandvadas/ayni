@@ -1,0 +1,50 @@
+name: Validate Ayni example
+description: Run the checkout CLI against one language fixture and validate its typed artifact.
+
+inputs:
+  language:
+    description: Adapter language expected in the artifact.
+    required: true
+  fixture:
+    description: Repository-relative mono fixture root.
+    required: true
+  expected-roots:
+    description: Newline-separated configured roots expected in the artifact.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check fixture and validate typed artifact
+      shell: bash
+      env:
+        LANGUAGE: ${{ inputs.language }}
+        FIXTURE: ${{ inputs.fixture }}
+        EXPECTED_ROOTS: ${{ inputs.expected-roots }}
+      run: |
+        rm -rf "$FIXTURE/.ayni"
+        set +e
+        ./target/debug/ayni check --host --config "$FIXTURE/.ayni.toml"
+        check_code=$?
+        set -e
+        echo "Ayni check exit code: $check_code (policy and typed tool failures are permitted)"
+
+        root_args=()
+        while IFS= read -r root; do
+          if [[ -n "$root" ]]; then
+            root_args+=(--expected-root "$root")
+          fi
+        done <<< "$EXPECTED_ROOTS"
+
+        python3 scripts/ci/validate_example_artifact.py \
+          --artifact "$FIXTURE/.ayni/last/signals.json" \
+          --language "$LANGUAGE" \
+          --repository-root "$FIXTURE" \
+          "${root_args[@]}"
+
+    - name: Remove ephemeral analysis artifacts
+      if: always()
+      shell: bash
+      env:
+        FIXTURE: ${{ inputs.fixture }}
+      run: rm -rf "$FIXTURE/.ayni"

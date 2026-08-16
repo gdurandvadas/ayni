@@ -25,7 +25,11 @@ ayni check --host --config examples/go/mono/.ayni.toml
 ```
 
 CI prepares every host tool explicitly; Ayni does not install tools as a side
-effect of `check`.
+effect of `check`. Pull requests expose one workflow per adapter:
+`ayni-go`, `ayni-node`, `ayni-python`, and `ayni-kotlin` validate the matching
+`mono/` fixture, while `ayni-rust` validates the Ayni repository itself as the
+Rust target. Python's pinned host-only CI tools live with its fixture in
+`examples/python/mono/requirements-ci.txt`.
 
 The `single/` fixtures intentionally omit Ayni configuration so they can be
 used as raw language examples. Use `ayni agents sync --repo-root <path>` only

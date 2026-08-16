@@ -1,0 +1,44 @@
+name: ayni-node
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate Node mono example
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build Ayni CLI
+        uses: ./.github/actions/build-ayni
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: examples/node/mono/package-lock.json
+
+      - name: Enable Node package managers
+        run: corepack enable
+
+      - name: Install locked Node fixture dependencies
+        run: npm ci --prefix examples/node/mono --ignore-scripts --no-audit --no-fund
+
+      - name: Validate Node example
+        uses: ./.github/actions/validate-example
+        with:
+          language: node
+          fixture: examples/node/mono
+          expected-roots: .
