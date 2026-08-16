@@ -62,6 +62,15 @@ Verification commands carry their originating contract and target, for example:
 'com.example.ApiTest' --name 'createsUser'`. Use only the selectors marked
 above; copy the exact command in an artifact finding rather than synthesizing one.
 
+## Impact planning
+
+Kotlin impact mapping currently treats every changed input below the configured
+root as relevant, along with governing ancestor Gradle build/settings, lock,
+wrapper executable/JAR, version-catalog, dependency-lock, and JDK runtime inputs. Because Gradle project topology is not yet
+used for narrowing, every enabled signal broadens to the configured Kotlin root
+and records a `missing_topology` uncertainty. This is intentionally conservative
+and does not replace the final unscoped `ayni check`.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure roots in `[kotlin].roots`

@@ -56,6 +56,15 @@ Verification commands carry their originating contract and target, for example:
 --package './internal/api' --name 'TestCreate'`. Use only the selectors marked
 above; copy the exact command in an artifact finding rather than synthesizing one.
 
+## Impact planning
+
+Go impact mapping currently treats every changed input below the configured root
+as relevant, along with governing ancestor module/workspace, `go.work.sum`, and
+runtime markers. Because package topology
+is not yet used for narrowing, every enabled signal broadens to the configured
+Go root and records a `missing_topology` uncertainty. This is intentionally
+conservative and does not replace the final unscoped `ayni check`.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure Go roots in `[go].roots`

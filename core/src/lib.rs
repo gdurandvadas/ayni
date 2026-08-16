@@ -9,6 +9,7 @@ mod environment_lock;
 pub mod environment_preparation;
 pub mod environment_resolution;
 pub mod finding;
+pub mod impact;
 pub mod language;
 pub mod policy;
 pub mod registry;
@@ -51,6 +52,11 @@ pub use environment_preparation::{
     PreparationScaffold,
 };
 pub use environment_resolution::{EnvironmentResolutionCapability, EnvironmentResolutionRequest};
+pub use impact::{
+    ChangeKind, ChangedPath, ImpactCapability, ImpactConfidence, ImpactContribution, ImpactError,
+    ImpactIdentity, ImpactIdentityKind, ImpactPlan, ImpactReason, ImpactReasonKind, ImpactRequest,
+    ImpactUncertainty, ImpactUncertaintyKind, SelectedCheck,
+};
 pub use language::Language;
 pub use policy::{
     AYNI_POLICY_FILE, AyniPolicy, ComplexityPolicy, ConcurrencyPolicy, CoveragePolicy, DepsPolicy,

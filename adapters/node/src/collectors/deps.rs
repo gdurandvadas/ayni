@@ -18,7 +18,8 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         .as_ref()
         .map(|value| value.forbidden.clone())
         .unwrap_or_default();
-    let workspace = NodeWorkspace::load(&context.workdir, &context.repo_root)?;
+    let workspace_root = governing_workspace_root(context)?;
+    let workspace = NodeWorkspace::load(&workspace_root, &context.repo_root)?;
     let visible = workspace.visible_members(&context.scope, &context.repo_root)?;
     let member_by_name = workspace
         .members
@@ -74,6 +75,29 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         budget: Budget::Deps(json!({ "forbidden": rules })),
         offenders: Offenders::Deps(offenders),
     })
+}
+
+fn governing_workspace_root(context: &RunContext) -> Result<PathBuf, String> {
+    let mut current = context.target_root.as_path();
+    loop {
+        let manifest = current.join("package.json");
+        if manifest.is_file() {
+            let package = parse_node_package(&manifest)?;
+            if package.workspaces.is_some() {
+                return Ok(current.to_path_buf());
+            }
+        }
+        if current == context.repo_root {
+            return Ok(context.workdir.clone());
+        }
+        let Some(parent) = current
+            .parent()
+            .filter(|parent| parent.starts_with(&context.repo_root))
+        else {
+            return Ok(context.workdir.clone());
+        };
+        current = parent;
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -273,4 +297,51 @@ fn compile_rules(forbidden: &BTreeMap<String, Vec<String>>) -> Result<Vec<Compil
         }
     }
     Ok(compiled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect;
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+
+    #[test]
+    fn member_target_can_collect_a_reverse_dependent_package_from_workspace() {
+        let directory = tempfile::tempdir().expect("fixture");
+        let root = directory.path();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        )
+        .expect("workspace");
+        for (name, dependencies) in [("base", "{}"), ("app", r#"{"base":"*"}"#)] {
+            let package = root.join("packages").join(name);
+            std::fs::create_dir_all(&package).expect("package");
+            std::fs::write(
+                package.join("package.json"),
+                format!(r#"{{"name":"{name}","dependencies":{dependencies}}}"#),
+            )
+            .expect("manifest");
+        }
+        let canonical = root.canonicalize().expect("canonical");
+        let target = canonical.join("packages/base");
+        let context = RunContext {
+            repo_root: canonical.clone(),
+            target_root: target.clone(),
+            workdir: target.clone(),
+            policy: AyniPolicy::default(),
+            scope: Scope {
+                workspace_root: canonical.to_string_lossy().into_owned(),
+                path: Some(String::from("packages/base")),
+                package: Some(String::from("app")),
+                file: None,
+            },
+            execution: ExecutionResolution::direct("npm", target, "test", 100),
+            debug: false,
+        };
+
+        let row = collect(&context).expect("dependency row");
+
+        assert!(row.pass);
+        assert_eq!(row.scope.package.as_deref(), Some("app"));
+    }
 }

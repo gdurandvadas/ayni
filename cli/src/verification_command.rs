@@ -44,7 +44,7 @@ pub(crate) fn materialize_finding_commands(
     Ok(())
 }
 
-fn render_verification_command(
+pub(crate) fn render_verification_command(
     config_path: &str,
     kind: SignalKind,
     language: Language,

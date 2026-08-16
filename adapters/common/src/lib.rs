@@ -13,6 +13,7 @@ pub mod environment;
 pub mod exec;
 pub mod failure;
 pub mod finding;
+pub mod impact;
 pub mod paths;
 pub mod reports;
 pub mod repository;

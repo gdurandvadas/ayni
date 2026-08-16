@@ -123,8 +123,8 @@ row should not suppress valid rows from other roots or languages.
 
 `ayni check` is repository-only: it plans and evaluates every configured
 language root and is the sole writer of `.ayni/last/signals.json`; `--host`
-changes execution location, not completion semantics. Use `ayni verify
-<signal> --host` for focused evidence for one of the six canonical
+changes execution location, not completion semantics. Use
+`ayni verify <signal> --host` for focused evidence for one of the six canonical
 signals. Its adapter-owned selectors are validated before tool invocation, and
 its requested-scope evidence is written separately to
 `.ayni/verify/last/signals.json`.

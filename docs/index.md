@@ -21,6 +21,7 @@ locally, and turn results into signals that humans and agents can act on.
 - [Historical signal schema v2](/product/signals/v2)
 - [Historical signal schema v1](/product/signals/v1)
 - [Runtime and setup rules](/product/runtime)
+- [Impact-aware execution](/product/impact)
 - [Rust adapter](/adapters/rust)
 - [Go adapter](/adapters/go)
 - [Node adapter](/adapters/node)

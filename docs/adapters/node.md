@@ -51,6 +51,19 @@ Verification commands carry their originating contract and target, for example:
 --file 'src/example.test.ts' --name 'renders'`. Use only the selectors marked
 above; copy the exact command in an artifact finding rather than synthesizing one.
 
+## Impact planning
+
+`impact show` and `impact run` resolve the governing Node workspace, map changed
+JavaScript and TypeScript files to the deepest owning package, then include
+transitive reverse dependencies even when configured roots name individual
+workspace members. Only manifests matched by the workspace patterns enter the
+graph. npm, pnpm, Yarn, and Bun lock changes broaden the plan, and package-
+scoped dependency execution resolves the governing workspace. Tests and dependency checks use package scope;
+coverage and mutation broaden to the configured root; size and complexity use
+exact changed-file scope when safe. Package manifests, npm lockfiles, common
+JSON/YAML/TOML and `*.config.*` inputs, environment files, and ambiguous
+ownership broaden every enabled signal and record an uncertainty.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure roots in `[node].roots`

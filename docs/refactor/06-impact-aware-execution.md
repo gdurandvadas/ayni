@@ -127,6 +127,30 @@ Impact results have an explicit `impact` scope and contain:
 Impact success means the selected impact plan passed. It does not mean the
 repository contract is complete.
 
+## Initial implementation decisions
+
+The first implementation keeps the published schema-v3 repository/focused
+artifact unchanged. Impact uses its own versioned envelope and the dedicated
+`.ayni/impact/last/impact.json` slot. The envelope repeats the plan and typed
+rows, records exact selected-job accounting, and always carries an explicit
+`ayni check` requirement.
+
+The frozen CLI requires `--base`; the candidate is the complete current working
+tree: commits through `HEAD`, index changes, unstaged changes, and untracked
+non-ignored files. Both identities and a deterministic candidate fingerprint
+are visible. A plan is recomputed before persistence so candidate drift fails
+closed.
+
+Git invocation belongs to CLI application infrastructure. Core owns normalized
+change, reason, confidence, selection, uncertainty, and plan types. Adapters own
+repository relevance, package ownership, and internal dependency topology.
+Rust Cargo and npm Node adapters resolve the governing workspace above
+configured member roots and calculate transitive reverse dependencies. Cargo
+mapping includes target-specific and workspace-inherited aliased dependencies.
+Go, Python, and Gradle Kotlin treat all in-root changes plus governing ancestor
+runtime/dependency inputs as relevant, then use adapter-owned conservative root
+broadening until equally strong topology mapping is available.
+
 ## Caching direction
 
 After selection is proven correct, results may be cached using inputs such as:

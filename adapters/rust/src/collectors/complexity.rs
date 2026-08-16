@@ -266,7 +266,7 @@ fn parse_rust_code_analysis_output(
     if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
         let mut metrics = Vec::new();
         walk_metric_tree(&value, repo_root, workdir, None, &mut metrics);
-        if metrics.is_empty() {
+        if metrics.is_empty() && !confirms_zero_functions(&value) {
             return Err(String::from(
                 "rust-code-analysis-cli output was valid JSON but did not contain function metrics",
             ));
@@ -276,6 +276,7 @@ fn parse_rust_code_analysis_output(
 
     let mut metrics = Vec::new();
     let mut parsed_lines = 0_u64;
+    let mut every_document_confirms_zero_functions = true;
     for line in trimmed.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -285,6 +286,7 @@ fn parse_rust_code_analysis_output(
             format!("failed to parse rust-code-analysis-cli JSON line: {error}")
         })?;
         parsed_lines += 1;
+        every_document_confirms_zero_functions &= confirms_zero_functions(&value);
         walk_metric_tree(&value, repo_root, workdir, None, &mut metrics);
     }
 
@@ -293,12 +295,47 @@ fn parse_rust_code_analysis_output(
             "rust-code-analysis-cli output was neither JSON nor NDJSON",
         ));
     }
-    if metrics.is_empty() {
+    if metrics.is_empty() && !every_document_confirms_zero_functions {
         return Err(String::from(
             "rust-code-analysis-cli output did not contain function metrics",
         ));
     }
     Ok(metrics)
+}
+
+fn confirms_zero_functions(value: &Value) -> bool {
+    let mut function_counts = Vec::new();
+    collect_unit_function_counts(value, &mut function_counts);
+    !function_counts.is_empty()
+        && function_counts
+            .into_iter()
+            .all(|count| count.is_some_and(|count| count == 0.0))
+}
+
+fn collect_unit_function_counts(value: &Value, counts: &mut Vec<Option<f64>>) {
+    match value {
+        Value::Object(map) => {
+            if map.get("kind").and_then(Value::as_str) == Some("unit") {
+                counts.push(
+                    map.get("metrics")
+                        .and_then(Value::as_object)
+                        .and_then(|metrics| metrics.get("nom"))
+                        .and_then(Value::as_object)
+                        .and_then(|nom| nom.get("functions"))
+                        .and_then(Value::as_f64),
+                );
+            }
+            if let Some(spaces) = map.get("spaces") {
+                collect_unit_function_counts(spaces, counts);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_unit_function_counts(item, counts);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn walk_metric_tree(
@@ -538,6 +575,30 @@ mod tests {
         assert_eq!(metrics[1].file, "cli/src/main.rs");
         assert_eq!(metrics[1].function, "beta");
         assert_eq!(metrics[1].cognitive, Some(9.0));
+    }
+
+    #[test]
+    fn accepts_valid_zero_function_evidence_but_rejects_unrecognized_json() {
+        let temp = TempDir::new().expect("tempdir");
+        let root = temp.path();
+        let zero_functions = json!({
+            "kind": "unit",
+            "name": format!("{}/core/src/lib.rs", root.display()),
+            "spaces": [],
+            "metrics": { "nom": { "functions": 0.0 } }
+        });
+
+        let metrics = parse_rust_code_analysis_output(&zero_functions.to_string(), root, root)
+            .expect("zero functions are complete evidence");
+        assert!(metrics.is_empty());
+
+        let error = parse_rust_code_analysis_output(
+            &json!({"kind": "unit", "spaces": [], "metrics": {}}).to_string(),
+            root,
+            root,
+        )
+        .expect_err("unrecognized output must fail closed");
+        assert!(error.contains("did not contain function metrics"));
     }
 
     #[test]

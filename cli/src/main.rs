@@ -18,6 +18,7 @@ mod discovery;
 mod environment;
 mod environment_backend;
 mod environment_lock;
+mod impact;
 mod ui;
 mod verification_command;
 mod verify;
@@ -48,7 +49,10 @@ fn dispatch(operation: application::Operation) -> ExitCode {
     use application::Operation;
 
     match operation {
-        operation @ (Operation::Check(_) | Operation::Verify(_)) => dispatch_analysis(operation),
+        operation @ (Operation::Check(_) | Operation::Verify(_) | Operation::ImpactRun(_)) => {
+            dispatch_analysis(operation)
+        }
+        Operation::ImpactShow(operation) => impact::show(operation),
         operation @ (Operation::EnvShow(_)
         | Operation::EnvLock(_)
         | Operation::EnvDoctor(_)
@@ -86,8 +90,14 @@ fn dispatch_analysis(operation: application::Operation) -> ExitCode {
         Operation::Verify(operation) if operation.execution_mode == ExecutionMode::Host => {
             run_verify_operation(operation)
         }
+        Operation::ImpactRun(operation) if operation.execution_mode == ExecutionMode::Host => {
+            impact::run(operation)
+        }
         Operation::Check(operation) => environment_backend::check(operation, &build_registry()),
         Operation::Verify(operation) => environment_backend::verify(operation, &build_registry()),
+        Operation::ImpactRun(operation) => {
+            environment_backend::impact_run(operation, &build_registry())
+        }
         _ => unreachable!("dispatch_analysis received a non-analysis operation"),
     }
 }

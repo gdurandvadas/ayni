@@ -53,6 +53,15 @@ Verification commands carry their originating contract and target, for example:
 'tests/test_api.py' --name 'test_create'`. Use only the selectors marked above;
 copy the exact command in an artifact finding rather than synthesizing one.
 
+## Impact planning
+
+Python impact mapping currently treats every changed input below the configured
+root as relevant, along with governing ancestor project, package-manager lock,
+requirements, and runtime inputs. Because package topology is not yet used for narrowing, every enabled
+signal broadens to the configured Python root and records a `missing_topology`
+uncertainty. This is intentionally conservative and does not replace the final
+unscoped `ayni check`.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure roots in `[python].roots`

@@ -48,6 +48,13 @@ and has no implicit prior-artifact, repository, Git, fetch, storage, or write
 behavior. There is no compatibility payload or automatic conversion from an
 earlier schema.
 
+Impact planning and execution use a separate versioned envelope because impact
+evidence records Git changes, inclusion reasons, uncertainty, and selected-job
+accounting rather than repository completion. It may contain the same typed
+signal rows, but it is not a schema-v3 `RunArtifact`, cannot replace
+`.ayni/last/signals.json`, and is not accepted by `results compare`. See the
+[impact execution contract](impact.md).
+
 V1 and v2 are retained only as historical documentation. Ayni makes no current
 parsing, conversion, migration, or compatibility promise for either schema.
 

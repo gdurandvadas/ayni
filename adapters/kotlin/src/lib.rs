@@ -6,6 +6,7 @@ pub mod collectors;
 mod discovery;
 mod environment;
 mod environment_resolution;
+mod impact;
 pub mod install;
 mod preparation;
 

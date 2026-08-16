@@ -3,6 +3,7 @@ use crate::collectors::NodeCollector;
 use crate::discovery;
 use crate::environment::NodeEnvironmentCapability;
 use crate::environment_resolution::NodeEnvironmentResolutionCapability;
+use crate::impact::NodeImpactCapability;
 use crate::package_manager;
 use crate::preparation::NodeDependencyPreparationCapability;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
@@ -97,6 +98,10 @@ impl LanguageAdapter for NodeAdapter {
 
     fn catalog_runtime(&self) -> &dyn CatalogRuntime {
         &NODE_CATALOG_RUNTIME
+    }
+
+    fn impact_capability(&self) -> Option<&dyn ayni_core::ImpactCapability> {
+        Some(&NodeImpactCapability)
     }
 
     fn collector(&self) -> &dyn SignalCollector {

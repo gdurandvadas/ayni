@@ -3,6 +3,7 @@ use crate::collectors::PythonCollector;
 use crate::discovery;
 use crate::environment::PythonEnvironmentCapability;
 use crate::environment_resolution::PythonEnvironmentResolutionCapability;
+use crate::impact::PythonImpactCapability;
 use crate::package_manager;
 use crate::preparation::PythonDependencyPreparationCapability;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
@@ -116,6 +117,10 @@ impl LanguageAdapter for PythonAdapter {
         static CAPABILITY: PythonEnvironmentResolutionCapability =
             PythonEnvironmentResolutionCapability;
         Some(&CAPABILITY)
+    }
+
+    fn impact_capability(&self) -> Option<&dyn ayni_core::ImpactCapability> {
+        Some(&PythonImpactCapability)
     }
 
     fn collector(&self) -> &dyn SignalCollector {

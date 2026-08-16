@@ -3,6 +3,7 @@ use crate::collectors::KotlinCollector;
 use crate::discovery;
 use crate::environment::KotlinEnvironmentCapability;
 use crate::environment_resolution::KotlinEnvironmentResolutionCapability;
+use crate::impact::KotlinImpactCapability;
 use crate::preparation::KotlinDependencyPreparationCapability;
 use ayni_adapters_common::catalog::GENERIC_CATALOG_RUNTIME;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
@@ -130,6 +131,10 @@ impl LanguageAdapter for KotlinAdapter {
 
     fn catalog_runtime(&self) -> &dyn CatalogRuntime {
         &KOTLIN_CATALOG_RUNTIME
+    }
+
+    fn impact_capability(&self) -> Option<&dyn ayni_core::ImpactCapability> {
+        Some(&KotlinImpactCapability)
     }
 
     fn collector(&self) -> &dyn SignalCollector {

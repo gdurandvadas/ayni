@@ -54,6 +54,21 @@ Verification commands carry their originating contract and target, for example:
 'my-crate' --name 'my_test'`. Use only the selectors marked above; copy the
 exact command in an artifact finding rather than synthesizing one.
 
+## Impact planning
+
+`impact show` and `impact run` resolve the governing Cargo workspace, map
+changed Rust source files to the deepest owning package, then include transitive
+reverse dependencies even when configured roots name individual members.
+Dependency mapping includes normal, development, build, target-specific, and
+workspace-inherited aliased Cargo tables. Declared workspace membership and
+exclusions are honored; a changed source below a non-member manifest broadens
+rather than being assigned to an enclosing package.
+Tests and dependency checks use package scope; coverage and mutation broaden to
+the configured root; size and complexity use exact changed-file scope when the
+file still exists. Cargo manifests, lockfiles, Rust toolchain files, `.cargo`
+configuration, other configuration-sensitive inputs, and ambiguous ownership
+broaden every enabled signal and record an uncertainty.
+
 ## Contract
 
 Enabled checks come from `[checks]`. Configure Rust roots in `[rust].roots`

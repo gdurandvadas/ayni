@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SnapshotMetadata {
+pub(crate) struct SnapshotMetadata {
     len: u64,
     readonly: bool,
     modified: Option<(u64, u32)>,
@@ -62,7 +62,7 @@ impl SnapshotMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum SnapshotEntry {
+pub(crate) enum SnapshotEntry {
     Directory(SnapshotMetadata),
     File {
         metadata: SnapshotMetadata,
@@ -166,7 +166,7 @@ fn validate_contribution(
     }
 }
 
-fn snapshot(root: &Path) -> Result<BTreeMap<PathBuf, SnapshotEntry>, String> {
+pub(crate) fn snapshot(root: &Path) -> Result<BTreeMap<PathBuf, SnapshotEntry>, String> {
     let metadata = fs::symlink_metadata(root)
         .map_err(|error| format!("failed to inspect {}: {error}", root.display()))?;
     if !metadata.is_dir() {

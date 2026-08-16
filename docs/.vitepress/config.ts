@@ -22,6 +22,7 @@ export default defineConfig({
         text: 'Product Reference',
           items: [
             { text: 'Configuration', link: '/product/config' },
+            { text: 'Impact-aware execution', link: '/product/impact' },
             {
               text: 'Signals',
               link: '/product/signals',
@@ -59,6 +60,7 @@ export default defineConfig({
           text: 'Product Reference',
           items: [
             { text: 'Configuration', link: '/product/config' },
+            { text: 'Impact-aware execution', link: '/product/impact' },
             {
               text: 'Signals',
               link: '/product/signals',

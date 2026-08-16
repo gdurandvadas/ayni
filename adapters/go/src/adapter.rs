@@ -3,6 +3,7 @@ use crate::collectors::GoCollector;
 use crate::discovery;
 use crate::environment::GoEnvironmentCapability;
 use crate::environment_resolution::GoEnvironmentResolutionCapability;
+use crate::impact::GoImpactCapability;
 use crate::preparation::GoDependencyPreparationCapability;
 use ayni_adapters_common::catalog::GENERIC_CATALOG_RUNTIME;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
@@ -92,6 +93,10 @@ impl LanguageAdapter for GoAdapter {
 
     fn catalog_runtime(&self) -> &dyn CatalogRuntime {
         &GENERIC_CATALOG_RUNTIME
+    }
+
+    fn impact_capability(&self) -> Option<&dyn ayni_core::ImpactCapability> {
+        Some(&GoImpactCapability)
     }
 
     fn collector(&self) -> &dyn SignalCollector {

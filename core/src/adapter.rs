@@ -275,6 +275,31 @@ pub trait LanguageAdapter: Send + Sync {
     fn catalog_runtime(&self) -> &dyn CatalogRuntime;
     fn collector(&self) -> &dyn SignalCollector;
 
+    /// Optional, read-only impact capability. Unsupported is explicit so callers can broaden safely.
+    fn impact_capability(&self) -> Option<&dyn crate::ImpactCapability> {
+        None
+    }
+
+    /// Validate capability, request, and contribution identities around impact analysis.
+    fn analyze_impact(
+        &self,
+        request: &crate::ImpactRequest,
+    ) -> Result<crate::ImpactContribution, AdapterError> {
+        let capability = self.impact_capability().ok_or_else(|| {
+            AdapterError::new(self.language(), "impact capability is unsupported")
+        })?;
+        if request.language != self.language() || capability.language() != self.language() {
+            return Err(AdapterError::new(
+                self.language(),
+                "impact request language does not match adapter capability",
+            ));
+        }
+        let mut contribution = capability.analyze(request)?;
+        contribution.normalize();
+        contribution.validate(request, |signal| self.verification_selector_support(signal))?;
+        Ok(contribution)
+    }
+
     /// Optional environment-planning capability. Existing quality adapters
     /// remain valid while environment discovery is implemented incrementally.
     fn environment_capability(&self) -> Option<&dyn crate::EnvironmentCapability> {

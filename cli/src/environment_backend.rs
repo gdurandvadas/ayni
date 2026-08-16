@@ -1,6 +1,6 @@
 use crate::application::{
-    CheckOperation, EnvRunOperation, EnvShellOperation, EnvShowOperation, OutputFormat,
-    RepositoryOperation, VerifyOperation,
+    CheckOperation, EnvRunOperation, EnvShellOperation, EnvShowOperation, ImpactOperation,
+    OutputFormat, RepositoryOperation, VerifyOperation,
 };
 use ayni_core::{
     AdapterRegistry, DependencyPreparationPlan, DependencyPreparationRequest, EnvironmentPlan,
@@ -70,6 +70,36 @@ pub(crate) fn verify(operation: VerifyOperation, registry: &AdapterRegistry) -> 
             ayni_environment::launch_repository_prepared(&root, &preparations, &command)
         })(),
     )
+}
+
+pub(crate) fn impact_run(operation: ImpactOperation, registry: &AdapterRegistry) -> ExitCode {
+    managed_quality_result(
+        "impact run",
+        (|| {
+            let (root, preparations, container_config) =
+                prepared_quality_environment(&operation.config, registry)?;
+            let command = managed_impact_command(&operation, container_config);
+            ayni_environment::launch_repository_prepared(&root, &preparations, &command)
+        })(),
+    )
+}
+
+fn managed_impact_command(operation: &ImpactOperation, container_config: String) -> Vec<String> {
+    let mut command = vec![
+        String::from("impact"),
+        String::from("run"),
+        String::from("--host"),
+        String::from("--base"),
+        operation.base.clone(),
+        String::from("--config"),
+        container_config,
+        String::from("--output"),
+        output_name(operation.output).to_owned(),
+    ];
+    if operation.debug {
+        command.push(String::from("--debug"));
+    }
+    command
 }
 
 fn managed_verify_command(operation: &VerifyOperation, container_config: String) -> Vec<String> {
@@ -298,8 +328,8 @@ fn render_error(error: ayni_environment::BackendError) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::managed_verify_command;
-    use crate::application::{ExecutionMode, OutputFormat, VerifyOperation};
+    use super::{managed_impact_command, managed_verify_command};
+    use crate::application::{ExecutionMode, ImpactOperation, OutputFormat, VerifyOperation};
     use ayni_core::{Language, SignalKind};
     use std::path::PathBuf;
 
@@ -336,6 +366,34 @@ mod tests {
                 "apps/web/src/cart.test.ts",
                 "--name",
                 "updates cart",
+                "--debug",
+            ]
+            .map(String::from)
+        );
+    }
+
+    #[test]
+    fn managed_impact_forwards_explicit_change_identity_and_output() {
+        let operation = ImpactOperation {
+            config: PathBuf::from("./.ayni.toml"),
+            base: String::from("feature/base"),
+            output: OutputFormat::Json,
+            execution_mode: ExecutionMode::Managed,
+            debug: true,
+        };
+
+        assert_eq!(
+            managed_impact_command(&operation, String::from("./.ayni.toml")),
+            [
+                "impact",
+                "run",
+                "--host",
+                "--base",
+                "feature/base",
+                "--config",
+                "./.ayni.toml",
+                "--output",
+                "json",
                 "--debug",
             ]
             .map(String::from)

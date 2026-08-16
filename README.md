@@ -99,6 +99,21 @@ conflicting, ambiguous, or out-of-scope selectors are rejected before a tool
 runs. Re-run the exact `verification.command` supplied with a finding rather
 than broadening it by hand.
 
+Use impact planning for a conservative change-scoped loop against an explicit
+Git base:
+
+```sh
+ayni impact show --base main
+ayni impact run --base main
+```
+
+The candidate is the current HEAD plus staged, unstaged, and untracked files.
+Rust and npm Node workspaces follow reverse dependencies; every other built-in
+adapter broadens uncertain work rather than omitting it. Impact results live at
+`.ayni/impact/last/impact.json`, explicitly require a final `ayni check`, and
+never replace full-check or focused evidence. See
+[`docs/product/impact.md`](docs/product/impact.md).
+
 Inspect the validated configured signal contract without running discovery,
 adapters, or analysis:
 

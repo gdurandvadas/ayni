@@ -119,9 +119,10 @@ During an edit, use the narrowest supported `ayni verify <signal>`:
 ayni verify <signal> [selectors]
 ```
 
-Rerun the exact verification command supplied by a finding. Use focused
-verification or impact analysis during iteration, then run one unscoped
-`ayni check` at the caller's completion boundary.
+Rerun the exact verification command supplied by a finding. For a change-scoped
+loop, run `ayni impact show --base <revision>` and then `ayni impact run`,
+copying the same explicit base. Impact success is not repository completion;
+run one unscoped `ayni check` at the caller's completion boundary.
 
 Treat incomplete artifacts as failure, and never loosen `.ayni.toml` merely
 to silence a finding.
