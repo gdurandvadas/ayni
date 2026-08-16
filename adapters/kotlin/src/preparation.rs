@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 const RESOLVE_SCRIPT: &str = ".ayni-gradle-resolve.init.gradle";
 const RESOLVE_TASK: &str = "ayniResolveDependencies";
+const MANAGED_OUTPUT_ROOT: &str = "AYNI_GRADLE_OUTPUT_ROOT";
 const RESOLVE_SCRIPT_CONTENT: &str = r#"gradle.projectsEvaluated {
     allprojects { project ->
         project.tasks.register("ayniResolveDependencies") {
@@ -110,9 +111,22 @@ impl DependencyPreparationCapability for KotlinDependencyPreparationCapability {
             BTreeMap::from([
                 ("GRADLE_USER_HOME".into(), "/home/ayni/.cache/gradle".into()),
                 ("AYNI_GRADLE_OFFLINE".into(), "1".into()),
+                (
+                    MANAGED_OUTPUT_ROOT.into(),
+                    managed_output_root(&target.target.root),
+                ),
             ]),
         )
     }
+}
+
+fn managed_output_root(target_root: &str) -> String {
+    let encoded = target_root
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("/workspace/.ayni/quality/kotlin/{encoded}")
 }
 
 fn prefixed(root: &str, path: &str) -> String {
@@ -197,6 +211,10 @@ mod tests {
         assert_eq!(
             plan.execution_environment.get("AYNI_GRADLE_OFFLINE"),
             Some(&"1".into())
+        );
+        assert_eq!(
+            plan.execution_environment.get(MANAGED_OUTPUT_ROOT),
+            Some(&"/workspace/.ayni/quality/kotlin/2e".into())
         );
     }
 }

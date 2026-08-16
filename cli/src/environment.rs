@@ -1,7 +1,8 @@
 use crate::application::{EnvShowOperation, OutputFormat};
+use ayni_adapters_common::environment::environment_discovery_request;
 use ayni_core::{
-    AdapterRegistry, Architecture, AyniPolicy, EnvironmentDiscoveryRequest, EnvironmentPlan, Libc,
-    OperatingSystem, RepositoryIdentity, TargetIdentity, TargetPlatform,
+    AdapterRegistry, Architecture, AyniPolicy, EnvironmentPlan, Libc, OperatingSystem,
+    RepositoryIdentity, TargetIdentity, TargetPlatform,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -10,27 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-#[derive(Debug)]
-pub(crate) struct ShowError {
-    pub(crate) code: u8,
-    pub(crate) message: String,
-}
-
-impl ShowError {
-    fn input(message: impl Into<String>) -> Self {
-        Self {
-            code: 2,
-            message: message.into(),
-        }
-    }
-
-    fn environment(message: impl Into<String>) -> Self {
-        Self {
-            code: 3,
-            message: message.into(),
-        }
-    }
-}
+pub(crate) type ShowError = crate::application_error::ApplicationError;
 
 pub(crate) fn show(operation: EnvShowOperation, registry: &AdapterRegistry) -> ExitCode {
     match build_plan(&operation, registry) {
@@ -48,10 +29,7 @@ pub(crate) fn show(operation: EnvShowOperation, registry: &AdapterRegistry) -> E
             }
             ExitCode::SUCCESS
         }
-        Err(error) => {
-            eprintln!("{}", error.message);
-            ExitCode::from(error.code)
-        }
+        Err(error) => crate::application_error::render_error(error),
     }
 }
 
@@ -153,7 +131,7 @@ fn discover_targets(
                 continue;
             }
             ensure_detected(repo_root, root, adapter.as_ref())?;
-            let request = EnvironmentDiscoveryRequest::new(
+            let request = environment_discovery_request(
                 repo_root.to_path_buf(),
                 identity,
                 enabled_signals.iter().copied(),

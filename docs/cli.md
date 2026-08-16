@@ -5,7 +5,6 @@ This document contains the help content for the `ayni` command-line program.
 **Command Overview:**
 
 * [`ayni`↴](#ayni)
-* [`ayni init`↴](#ayni-init)
 * [`ayni env`↴](#ayni-env)
 * [`ayni env show`↴](#ayni-env-show)
 * [`ayni env doctor`↴](#ayni-env-doctor)
@@ -30,7 +29,6 @@ This document contains the help content for the `ayni` command-line program.
 * [`ayni agents`↴](#ayni-agents)
 * [`ayni agents sync`↴](#ayni-agents-sync)
 * [`ayni results`↴](#ayni-results)
-* [`ayni results show`↴](#ayni-results-show)
 * [`ayni results compare`↴](#ayni-results-compare)
 
 ## `ayni`
@@ -41,7 +39,6 @@ Correct environments, focused feedback, one definitive quality gate
 
 ###### **Subcommands:**
 
-* `init` — Prepare a repository for Ayni
 * `env` — Inspect and manage the repository code environment
 * `contract` — Inspect and validate the repository quality contract
 * `verify` — Run one quality signal with optional adapter-owned selectors
@@ -49,20 +46,6 @@ Correct environments, focused feedback, one definitive quality gate
 * `check` — Run the complete repository quality contract
 * `agents` — Manage Ayni's agent instructions
 * `results` — Inspect and compare explicit local result files
-
-
-
-## `ayni init`
-
-Prepare a repository for Ayni
-
-**Usage:** `ayni init [OPTIONS]`
-
-###### **Options:**
-
-* `--repo-root <REPO_ROOT>`
-
-  Default value: `.`
 
 
 
@@ -615,32 +598,7 @@ Inspect and compare explicit local result files
 
 ###### **Subcommands:**
 
-* `show` — Render one explicit local result file
 * `compare` — Compare two explicit compatible result files
-
-
-
-## `ayni results show`
-
-Render one explicit local result file
-
-**Usage:** `ayni results show [OPTIONS] --file <FILE>`
-
-###### **Options:**
-
-* `--file <FILE>` — Result file to render
-* `--output <OUTPUT>`
-
-  Default value: `human`
-
-  Possible values:
-  - `human`:
-    Human-readable terminal output
-  - `json`:
-    One deterministic JSON document on stdout
-  - `markdown`:
-    Deterministic Markdown output
-
 
 
 

@@ -17,15 +17,6 @@ impl EnvironmentResolutionRequest {
                 "environment resolution repository root must be absolute",
             ));
         }
-        let repo_root = repo_root.canonicalize().map_err(|error| {
-            AdapterError::new(
-                language,
-                format!(
-                    "failed to establish environment resolution repository root {}: {error}",
-                    repo_root.display()
-                ),
-            )
-        })?;
         Ok(Self { repo_root, target })
     }
 

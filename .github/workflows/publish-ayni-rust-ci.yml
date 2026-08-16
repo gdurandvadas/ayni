@@ -28,7 +28,7 @@ jobs:
           set -euo pipefail
 
           rust_version="$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
-          cargo_llvm_cov_version="$(sed -n '/crate_name: "cargo-llvm-cov"/{n;s/.*version: Some("\([^"]*\)").*/\1/p;}' adapters/rust/src/catalog.rs | head -n1)"
+          cargo_llvm_cov_version="$(sed -n 's/^pub const CARGO_LLVM_COV_VERSION: &str = "\(.*\)";$/\1/p' adapters/rust/src/catalog.rs | head -n1)"
           rust_code_analysis_cli_version="$(sed -n '/crate_name: "rust-code-analysis-cli"/{n;s/.*version: Some("\([^"]*\)").*/\1/p;}' adapters/rust/src/catalog.rs | head -n1)"
 
           if [ -z "${rust_version}" ]; then

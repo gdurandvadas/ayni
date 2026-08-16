@@ -53,29 +53,6 @@ impl PackageManager {
         argv.extend(args.iter().map(|arg| (*arg).to_string()));
         (self.executable().to_string(), argv)
     }
-
-    pub(crate) fn add_dependency_args(self, package: &str, dev: bool) -> Vec<String> {
-        let mut args = match self {
-            Self::Uv => vec![String::from("add")],
-            Self::Poetry | Self::Pdm => vec![String::from("add")],
-            Self::Pipenv => vec![String::from("install")],
-            Self::Hatch | Self::Pip => vec![
-                String::from("-m"),
-                String::from("pip"),
-                String::from("install"),
-            ],
-        };
-        if dev {
-            match self {
-                Self::Uv | Self::Pdm => args.push(String::from("--dev")),
-                Self::Poetry => args.extend([String::from("--group"), String::from("dev")]),
-                Self::Pipenv => args.push(String::from("--dev")),
-                Self::Hatch | Self::Pip => {}
-            }
-        }
-        args.push(package.to_string());
-        args
-    }
 }
 
 pub(crate) fn detect(root: &Path) -> Option<PackageManager> {
@@ -191,46 +168,16 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn manager_commands_are_characterized() {
+    fn manager_execution_commands_are_characterized() {
         let cases = [
-            (
-                PackageManager::Uv,
-                "uv",
-                &["run"][..],
-                &["add", "--dev"][..],
-            ),
-            (
-                PackageManager::Poetry,
-                "poetry",
-                &["run"][..],
-                &["add", "--group", "dev"][..],
-            ),
-            (
-                PackageManager::Pdm,
-                "pdm",
-                &["run"][..],
-                &["add", "--dev"][..],
-            ),
-            (
-                PackageManager::Pipenv,
-                "pipenv",
-                &["run"][..],
-                &["install", "--dev"][..],
-            ),
-            (
-                PackageManager::Hatch,
-                "hatch",
-                &["run"][..],
-                &["-m", "pip", "install"][..],
-            ),
-            (
-                PackageManager::Pip,
-                "python",
-                &["-m"][..],
-                &["-m", "pip", "install"][..],
-            ),
+            (PackageManager::Uv, "uv", &["run"][..]),
+            (PackageManager::Poetry, "poetry", &["run"][..]),
+            (PackageManager::Pdm, "pdm", &["run"][..]),
+            (PackageManager::Pipenv, "pipenv", &["run"][..]),
+            (PackageManager::Hatch, "hatch", &["run"][..]),
+            (PackageManager::Pip, "python", &["-m"][..]),
         ];
-        for (manager, executable, run_prefix, add_prefix) in cases {
+        for (manager, executable, run_prefix) in cases {
             assert_eq!(PackageManager::from_executable(executable), Some(manager));
             let (program, argv) = manager.run_command("pytest-json-report", &["-q"]);
             assert_eq!(program, executable);
@@ -243,12 +190,6 @@ mod tests {
                 expected[1] = String::from("pytest-json-report");
             }
             assert_eq!(argv, expected);
-            let mut expected = add_prefix
-                .iter()
-                .map(|arg| (*arg).to_string())
-                .collect::<Vec<_>>();
-            expected.push(String::from("pytest"));
-            assert_eq!(manager.add_dependency_args("pytest", true), expected);
         }
     }
 

@@ -15,10 +15,7 @@ fn result(result: Result<String, ayni_environment::BackendError>) -> ExitCode {
             println!("{message}");
             ExitCode::SUCCESS
         }
-        Err(error) => {
-            eprintln!("{}", error.message);
-            ExitCode::from(error.code)
-        }
+        Err(error) => render_error(error),
     }
 }
 
@@ -105,7 +102,7 @@ fn managed_impact_command(operation: &ImpactOperation, container_config: String)
 fn managed_verify_command(operation: &VerifyOperation, container_config: String) -> Vec<String> {
     let mut command = vec![
         String::from("verify"),
-        crate::signal_kind_slug(operation.signal).to_owned(),
+        crate::analysis::signal_kind_slug(operation.signal).to_owned(),
         String::from("--host"),
         String::from("--config"),
         container_config,
@@ -154,21 +151,17 @@ fn prepared_quality_environment(
         .unwrap_or_else(|| Path::new("."));
     let (root, plan) = current_plan(repo_root, registry)?;
     let preparations = dependency_preparations(&root, registry, &plan)?;
-    let config = config
-        .canonicalize()
-        .map_err(|error| ayni_environment::BackendError {
-            code: 2,
-            message: format!(
-                "failed to resolve environment contract {}: {error}",
-                config.display()
-            ),
-        })?;
-    let relative = config
-        .strip_prefix(&root)
-        .map_err(|_| ayni_environment::BackendError {
-            code: 2,
-            message: String::from("environment contract escapes the repository root"),
-        })?;
+    let config = config.canonicalize().map_err(|error| {
+        ayni_environment::BackendError::input(format!(
+            "failed to resolve environment contract {}: {error}",
+            config.display()
+        ))
+    })?;
+    let relative = config.strip_prefix(&root).map_err(|_| {
+        ayni_environment::BackendError::input(String::from(
+            "environment contract escapes the repository root",
+        ))
+    })?;
     let container_config = format!("./{}", relative.to_string_lossy().replace('\\', "/"));
     Ok((root, preparations, container_config))
 }
@@ -229,15 +222,12 @@ fn current_plan(
     repo_root: &Path,
     registry: &AdapterRegistry,
 ) -> Result<(std::path::PathBuf, EnvironmentPlan), ayni_environment::BackendError> {
-    let canonical = repo_root
-        .canonicalize()
-        .map_err(|error| ayni_environment::BackendError {
-            code: 2,
-            message: format!(
-                "failed to establish repository root {}: {error}",
-                repo_root.display()
-            ),
-        })?;
+    let canonical = repo_root.canonicalize().map_err(|error| {
+        ayni_environment::BackendError::input(format!(
+            "failed to establish repository root {}: {error}",
+            repo_root.display()
+        ))
+    })?;
     let lock = ayni_environment::read_lock(&canonical)?;
     let operation = EnvShowOperation {
         config: lock.repository().contract_path.clone().into(),
@@ -246,7 +236,17 @@ fn current_plan(
     };
     let plan = crate::environment::build_plan(&operation, registry).map_err(|error| {
         ayni_environment::BackendError {
-            code: error.code,
+            kind: match error.kind {
+                crate::application_error::ApplicationErrorKind::InvalidInput => {
+                    ayni_environment::BackendErrorKind::Input
+                }
+                crate::application_error::ApplicationErrorKind::Environment => {
+                    ayni_environment::BackendErrorKind::Environment
+                }
+                crate::application_error::ApplicationErrorKind::Execution => {
+                    ayni_environment::BackendErrorKind::Execution
+                }
+            },
             message: format!(
                 "environment lock is stale or unsupported: {}; run `ayni env lock`",
                 error.message
@@ -256,12 +256,9 @@ fn current_plan(
     if plan.conflicts().is_empty() && ayni_environment::plan_matches_lock(&plan, &lock) {
         Ok((canonical, plan))
     } else {
-        Err(ayni_environment::BackendError {
-            code: 3,
-            message: String::from(
-                "environment lock is stale because discovered requirements changed; run `ayni env lock`",
-            ),
-        })
+        Err(ayni_environment::BackendError::environment(String::from(
+            "environment lock is stale because discovered requirements changed; run `ayni env lock`",
+        )))
     }
 }
 
@@ -277,25 +274,20 @@ fn dependency_preparations(
                 .adapters()
                 .iter()
                 .find(|adapter| adapter.language() == target.target.language)
-                .ok_or_else(|| ayni_environment::BackendError {
-                    code: 3,
-                    message: format!(
+                .ok_or_else(|| {
+                    ayni_environment::BackendError::environment(format!(
                         "no adapter can prepare dependencies for {}",
                         target.target.language
-                    ),
+                    ))
                 })?;
             let request =
                 DependencyPreparationRequest::new(repo_root.to_path_buf(), target.clone())
-                    .map_err(|error| ayni_environment::BackendError {
-                        code: 3,
-                        message: error.to_string(),
+                    .map_err(|error| {
+                        ayni_environment::BackendError::environment(error.to_string())
                     })?;
             adapter
                 .prepare_dependencies(&request)
-                .map_err(|error| ayni_environment::BackendError {
-                    code: 3,
-                    message: error.to_string(),
-                })
+                .map_err(|error| ayni_environment::BackendError::environment(error.to_string()))
         })
         .collect()
 }
@@ -322,8 +314,7 @@ fn launch(
 }
 
 fn render_error(error: ayni_environment::BackendError) -> ExitCode {
-    eprintln!("{}", error.message);
-    ExitCode::from(error.code)
+    crate::application_error::render_error(error.into())
 }
 
 #[cfg(test)]

@@ -32,7 +32,7 @@ fn managed_check_and_verify_require_a_lock_without_implicit_provisioning() {
 
 #[test]
 fn invalid_and_superseded_commands_use_cli_input_exit() {
-    for command in ["analyze", "install", "artifact"] {
+    for command in ["analyze", "install", "artifact", "init"] {
         let output = ayni().arg(command).output().expect("launch ayni");
         assert_eq!(output.status.code(), Some(2), "{command}");
         assert!(output.stdout.is_empty(), "{command}");
@@ -63,4 +63,16 @@ fn version_flag_remains_successful_without_a_command_alias() {
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
     assert!(String::from_utf8_lossy(&output.stdout).starts_with("ayni "));
+}
+
+#[test]
+fn unfinished_results_show_is_not_publicly_available() {
+    let output = ayni()
+        .args(["results", "show", "--file", "result.json"])
+        .output()
+        .expect("launch ayni");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
 }

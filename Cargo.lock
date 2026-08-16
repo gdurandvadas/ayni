@@ -93,10 +93,12 @@ name = "ayni-adapters-common"
 version = "0.8.1"
 dependencies = [
  "ayni-core",
+ "glob",
  "libc",
  "regex",
  "serde_json",
  "tempfile",
+ "walkdir",
 ]
 
 [[package]]
@@ -210,13 +212,10 @@ dependencies = [
 name = "ayni-core"
 version = "0.8.1"
 dependencies = [
- "glob",
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
  "toml",
- "walkdir",
 ]
 
 [[package]]

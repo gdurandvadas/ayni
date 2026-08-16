@@ -152,6 +152,13 @@ This is illustrative, not a required exact filesystem layout. The important
 boundary is between argument parsing, application orchestration, product
 semantics, and rendering.
 
+## Initial public-surface decision
+
+The checkout exposes only implemented commands. Target commands such as `init`
+and `results show` remain in this roadmap but stay out of generated help until
+their application operation is functional. Public parsing never routes to a
+placeholder or a generic "not implemented" execution failure.
+
 ## Non-goals
 
 - Old command aliases or deprecation periods.

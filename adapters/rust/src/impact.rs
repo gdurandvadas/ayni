@@ -1,3 +1,4 @@
+use ayni_adapters_common::repository::read_contained_string;
 use ayni_core::{
     AdapterError, ChangeKind, ImpactCapability, ImpactConfidence, ImpactContribution, ImpactReason,
     ImpactReasonKind, ImpactRequest, ImpactUncertainty, ImpactUncertaintyKind, Language,
@@ -227,10 +228,9 @@ fn cargo_topology_root(request: &ImpactRequest) -> Result<std::path::PathBuf, St
     loop {
         let manifest = current.join("Cargo.toml");
         if manifest.is_file() {
-            let value: toml::Value = toml::from_str(
-                &std::fs::read_to_string(&manifest).map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| error.to_string())?;
+            let value: toml::Value =
+                toml::from_str(&read_contained_string(request.repo_root(), &manifest)?)
+                    .map_err(|error| error.to_string())?;
             if value.get("workspace").is_some() {
                 return Ok(current.to_path_buf());
             }
@@ -267,11 +267,10 @@ struct CargoWorkspaceMembership {
 }
 
 impl CargoWorkspaceMembership {
-    fn load(root: &std::path::Path) -> Result<Self, String> {
-        let value: toml::Value = toml::from_str(
-            &std::fs::read_to_string(root.join("Cargo.toml")).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
+    fn load(repo_root: &std::path::Path, root: &std::path::Path) -> Result<Self, String> {
+        let value: toml::Value =
+            toml::from_str(&read_contained_string(repo_root, &root.join("Cargo.toml"))?)
+                .map_err(|error| error.to_string())?;
         let workspace = value.get("workspace");
         Ok(Self {
             members: compile_cargo_patterns(workspace.and_then(|value| value.get("members")))?,
@@ -327,8 +326,8 @@ fn packages(
     topology_root: &std::path::Path,
     repo_root: &std::path::Path,
 ) -> Result<(BTreeMap<String, Package>, Vec<String>), String> {
-    let membership = CargoWorkspaceMembership::load(topology_root)?;
-    let aliases = workspace_dependency_aliases(topology_root)?;
+    let membership = CargoWorkspaceMembership::load(repo_root, topology_root)?;
+    let aliases = workspace_dependency_aliases(repo_root, topology_root)?;
     let mut output = BTreeMap::new();
     let mut nonmember_dirs = Vec::new();
     for entry in WalkDir::new(topology_root)
@@ -372,9 +371,8 @@ fn classify_manifest(
     membership: &CargoWorkspaceMembership,
     aliases: &BTreeMap<String, String>,
 ) -> Result<ManifestClassification, String> {
-    let value: toml::Value =
-        toml::from_str(&std::fs::read_to_string(path).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?;
+    let value: toml::Value = toml::from_str(&read_contained_string(repo_root, path)?)
+        .map_err(|error| error.to_string())?;
     let parent = path.parent().expect("manifest parent");
     let topology_dir = repository_relative_dir(topology_root, parent);
     let repository_dir = repository_relative_dir(repo_root, parent);
@@ -415,15 +413,15 @@ fn package_dependencies(
 }
 
 fn workspace_dependency_aliases(
+    repo_root: &std::path::Path,
     root: &std::path::Path,
 ) -> Result<BTreeMap<String, String>, String> {
     let manifest = root.join("Cargo.toml");
     if !manifest.is_file() {
         return Ok(BTreeMap::new());
     }
-    let value: toml::Value =
-        toml::from_str(&std::fs::read_to_string(manifest).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?;
+    let value: toml::Value = toml::from_str(&read_contained_string(repo_root, &manifest)?)
+        .map_err(|error| error.to_string())?;
     Ok(value
         .get("workspace")
         .and_then(|workspace| workspace.get("dependencies"))
@@ -840,5 +838,34 @@ mod tests {
                 .iter()
                 .all(|check| { check.package.is_none() && check.file.is_none() })
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn rejects_manifest_symlink_that_escapes_repository() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = tempdir().expect("fixture");
+        let outside_fixture = tempdir().expect("outside fixture");
+        let outside = outside_fixture.path().join("outside");
+        std::fs::write(&outside, "[workspace]\n").expect("outside manifest");
+        symlink(&outside, fixture.path().join("Cargo.toml")).expect("manifest link");
+        let request = ImpactRequest::new(
+            fixture.path().canonicalize().expect("canonical"),
+            Language::Rust,
+            String::from("."),
+            vec![ChangedPath {
+                kind: ChangeKind::Modified,
+                path: String::from("src/lib.rs"),
+                previous_path: None,
+            }],
+            [SignalKind::Test],
+        )
+        .expect("request");
+
+        let error = RustImpactCapability
+            .analyze(&request)
+            .expect_err("symlink escape");
+
+        assert!(error.to_string().contains("escapes repository containment"));
     }
 }

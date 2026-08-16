@@ -16,7 +16,6 @@ pub(crate) enum ExecutionMode {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Operation {
-    Init(RepositoryOperation),
     EnvShow(EnvShowOperation),
     EnvDoctor(RepositoryOperation),
     EnvLock(EnvLockOperation),
@@ -30,7 +29,6 @@ pub(crate) enum Operation {
     ImpactRun(ImpactOperation),
     Check(CheckOperation),
     AgentsSync(RepositoryOperation),
-    ResultsShow(ResultsShowOperation),
     ResultsCompare(ResultsCompareOperation),
     GenerateDocs,
 }
@@ -104,12 +102,6 @@ pub(crate) struct ImpactOperation {
     pub output: OutputFormat,
     pub execution_mode: ExecutionMode,
     pub debug: bool,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ResultsShowOperation {
-    pub file: PathBuf,
-    pub output: OutputFormat,
 }
 
 #[derive(Debug, PartialEq, Eq)]

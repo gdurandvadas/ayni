@@ -4,7 +4,7 @@ use ayni_core::{Architecture, Libc, OperatingSystem, TargetIdentity, TargetPlatf
 use std::fs;
 use tempfile::TempDir;
 fn request(root: &Path, signals: Vec<SignalKind>) -> EnvironmentDiscoveryRequest {
-    EnvironmentDiscoveryRequest::new(
+    ayni_adapters_common::environment::environment_discovery_request(
         root.to_path_buf(),
         TargetIdentity::new(Language::Python, ".").expect("target"),
         signals,
@@ -102,7 +102,7 @@ fn uv_workspace_requires_membership_and_signal_tool_declaration() {
     .expect("target manifest");
     let contribution = PythonEnvironmentCapability
         .discover(
-            &EnvironmentDiscoveryRequest::new(
+            &ayni_adapters_common::environment::environment_discovery_request(
                 d.path().to_path_buf(),
                 TargetIdentity::new(Language::Python, "packages/ignored").expect("target"),
                 [],

@@ -183,6 +183,13 @@ The first lock-driven OCI backend establishes these rules:
   are path-sensitive; Go and Gradle reuse cache-only state. All materialization
   occurs below `.ayni/environment/` with no network and a read-only checkout.
   Unknown providers and unsupported managers fail explicitly.
+- Managed `check`, `verify`, and `impact run` mount repository source read-only
+  and add a narrow writable mount for generated `.ayni/` evidence and caches.
+  Gradle quality execution redirects every project build directory and project
+  cache into target- and signal-specific paths below `.ayni/quality/kotlin/`,
+  so reports remain writable without weakening the source mount. Interactive
+  `env shell` and `env run` retain a read-write checkout because editing is
+  their declared purpose.
 - Target activation now includes Go toolchain/cache controls, uv frozen/offline
   state, Gradle cache controls, and a backend-derived `JAVA_HOME` for the exact
   mise-managed JDK. Gradle collectors add `--offline --no-daemon` only when the

@@ -1,13 +1,15 @@
-use super::{
+use crate::analysis::{
     AnalyzePlanning, OutputArg, VERIFY_SIGNALS_ARTIFACT, build_analyze_targets,
-    build_artifact_metadata_for_command, build_registry, emit_analyze_outputs, failed_signal_row,
-    persist_artifact_at, serialize_artifact, signal_kind_slug, verification_command,
+    build_artifact_metadata_for_command, emit_analyze_outputs, failed_signal_row,
+    managed_execution_active, persist_artifact_at, serialize_artifact, signal_kind_slug,
     workspace_root_from_config_path,
 };
+use crate::policy::load_from_path;
+use crate::{build_registry, verification_command};
 use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
-    AdapterRegistry, AyniPolicy, CompletionScope, CompletionState, Language, RunArtifact,
-    SignalKind, SignalRow, VerificationSelection,
+    AdapterRegistry, AyniPolicy, CompletionScope, Language, RunArtifact, RunOutcome, SignalKind,
+    SignalRow, VerificationSelection,
 };
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
@@ -30,27 +32,9 @@ struct ConfiguredTarget {
     root: String,
 }
 
-pub(crate) struct Outcome {
-    pub has_quality_failures: bool,
-    pub has_execution_failures: bool,
-}
+pub(crate) type Error = crate::application_error::ApplicationError;
 
-pub(crate) struct Error {
-    pub code: u8,
-    pub message: String,
-}
-
-impl Error {
-    fn input(message: String) -> Self {
-        Self { code: 2, message }
-    }
-
-    fn execution(message: String) -> Self {
-        Self { code: 4, message }
-    }
-}
-
-pub(crate) fn run(mut request: Request) -> Result<Outcome, Error> {
+pub(crate) fn run(mut request: Request) -> Result<RunOutcome, Error> {
     let (workspace_root, policy) = prepare_request(&mut request).map_err(Error::input)?;
     let (registry, planning) =
         plan_verification(&workspace_root, &policy, &request).map_err(Error::input)?;
@@ -62,7 +46,7 @@ pub(crate) fn run(mut request: Request) -> Result<Outcome, Error> {
 
 fn prepare_request(request: &mut Request) -> Result<(PathBuf, AyniPolicy), String> {
     let workspace_root = workspace_root_from_config_path(&request.config_path);
-    let policy = AyniPolicy::load_from_path(&request.config_path)?;
+    let policy = load_from_path(&request.config_path)?;
     validate_configured_root_containment(&workspace_root, &policy)?;
     validate_signal_enabled(&policy, request.kind)?;
     validate_selector_shape(request)?;
@@ -106,7 +90,7 @@ fn build_verification_artifact(
     request: &Request,
 ) -> Result<RunArtifact, String> {
     let rows = collect_rows(planning, registry, request);
-    let (completion, rows) = super::completion::reconcile(
+    let (completion, rows) = crate::analysis::reconcile(
         planning,
         CompletionScope::Requested,
         Some(request.kind),
@@ -131,26 +115,17 @@ fn persist_and_emit_verification(
     policy: &AyniPolicy,
     registry: &AdapterRegistry,
     request: &Request,
-) -> Result<Outcome, String> {
+) -> Result<RunOutcome, String> {
     verification_command::materialize_finding_commands(
         &mut artifact,
         registry,
-        !crate::managed_execution_active(),
+        !managed_execution_active(),
     )?;
     let serialized = serialize_artifact(&artifact)?;
     persist_artifact_at(workspace_root, VERIFY_SIGNALS_ARTIFACT, &serialized)?;
     emit_analyze_outputs(request.output_mode, policy, &artifact, &serialized)?;
 
-    let has_execution_failures = artifact.completion.state == CompletionState::Incomplete
-        || artifact
-            .rows
-            .iter()
-            .any(|row| row.result.command_failure().is_some());
-    let has_quality_failures = artifact.rows.iter().any(|row| !row.pass) && !has_execution_failures;
-    Ok(Outcome {
-        has_quality_failures,
-        has_execution_failures,
-    })
+    Ok(artifact.outcome())
 }
 
 fn validate_signal_enabled(policy: &AyniPolicy, kind: SignalKind) -> Result<(), String> {

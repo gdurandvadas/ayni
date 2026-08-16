@@ -1,4 +1,6 @@
-use super::util::{find_reports, gradle_command, resolve_gradle_task};
+use super::util::{
+    find_reports, gradle_command, prepare_gradle_execution, report_root, resolve_gradle_task,
+};
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{
@@ -17,6 +19,7 @@ use std::fs;
 use std::path::Path;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
+    prepare_gradle_execution(context, SignalKind::Coverage).map_err(CollectorError::Adapter)?;
     let task = resolve_coverage_task(context)?;
     let (program, args) = gradle_command(context, SignalKind::Coverage, &task);
     let engine = format_command(&program, &args);
@@ -114,11 +117,10 @@ fn resolve_coverage_task(
 }
 
 fn coverage_report_paths(context: &RunContext, task: &str) -> Vec<std::path::PathBuf> {
+    let root = report_root(context, SignalKind::Coverage);
     match task {
-        "jacocoTestReport" => {
-            find_reports(&context.workdir, &["build", "reports", "jacoco"], "xml")
-        }
-        _ => find_reports(&context.workdir, &["build", "reports", "kover"], "xml"),
+        "jacocoTestReport" => find_reports(&root, &["build", "reports", "jacoco"], "xml"),
+        _ => find_reports(&root, &["build", "reports", "kover"], "xml"),
     }
 }
 

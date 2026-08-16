@@ -65,9 +65,8 @@ cargo install --path cli
 
 ## Quick Start
 
-The clean-slate command model is now active. Repository initialization remains
-unavailable. Rust and npm-based Node repositories can lock and build a managed
-OCI environment, warm locked native dependencies, and run the repository gate
+Rust and npm-based Node repositories can lock and build a managed OCI
+environment, warm locked native dependencies, and run the repository gate
 offline by default:
 
 ```sh
@@ -156,9 +155,8 @@ focused verification support locked Rust, npm Node, Go module, uv Python, and
 Gradle Kotlin targets. pnpm, Yarn, Bun, non-uv Python managers, and unsupported
 Gradle build shapes remain explicit failures.
 
-`ayni init` will own repository bootstrap without installation or agent-guidance
-mutation. Run `ayni agents sync` explicitly when you want the managed guidance
-block created or refreshed.
+Run `ayni agents sync` explicitly when you want the managed guidance block
+created or refreshed.
 
 Generate Markdown output:
 

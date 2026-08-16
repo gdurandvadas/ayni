@@ -15,9 +15,13 @@ The `math` library exports 10 functions and includes tests for 8/10 to make cove
 Kotlin examples use Gradle Kotlin DSL. `single/` is intentionally missing Ayni
 files; `mono/` includes `.ayni.toml` and Gradle quality plugins.
 
-Bootstrap a single fixture with its explicit language (for example,
-`ayni install --repo-root examples/go/single --language go`), or exercise
-polyglot setup by repeating `--language` (for example `--language rust
---language node`). Bare `ayni install` uses the Rust policy template.
-`install` does not create `AGENTS.md`; use `ayni agents sync --repo-root <path>`
+The `mono/` fixtures include `.ayni.toml` and can be exercised with the
+explicit host workflow, for example:
+
+```sh
+ayni check --host --config examples/go/mono/.ayni.toml
+```
+
+The `single/` fixtures intentionally omit Ayni configuration so they can be
+used as raw language examples. Use `ayni agents sync --repo-root <path>` only
 when a fixture needs the managed guidance block.

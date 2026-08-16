@@ -30,7 +30,7 @@ impl TargetKey {
 /// Reconcile collection evidence with the exact row set planned for runnable
 /// targets. Rows outside that set and repeated rows are not serialized: their
 /// evidence is retained as a collection-stage completion issue instead.
-pub(super) fn reconcile(
+pub(crate) fn reconcile(
     planning: &AnalyzePlanning,
     scope: CompletionScope,
     requested_kind: Option<SignalKind>,

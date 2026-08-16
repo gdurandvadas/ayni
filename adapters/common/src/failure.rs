@@ -1,10 +1,7 @@
 //! Shared command-failure classification and `CommandFailure` construction.
 
 use crate::exec::{ExecutionError, ExecutionErrorKind, format_command};
-use ayni_core::{
-    CatalogOperation, CatalogOperationError, CatalogOperationErrorKind, CommandFailure,
-    ConfiguredMetricEvaluation, RunContext, SignalKind,
-};
+use ayni_core::{CommandFailure, ConfiguredMetricEvaluation, RunContext, SignalKind};
 use std::process::Output;
 
 /// Maps a signal kind to its documented failure category (see
@@ -40,6 +37,17 @@ pub fn concise_failure_message(output: &Output) -> String {
         .find(|line| !line.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| String::from("command failed without stdout/stderr output"))
+}
+
+/// Whether a non-zero test runner exit represents incomplete execution.
+///
+/// A parseable report with at least one failed test is complete quality
+/// evidence: the command failed because the repository's tests failed. Missing
+/// tests or a non-zero exit without reported failures instead indicates that
+/// setup, collection, or execution did not complete.
+#[must_use]
+pub fn test_execution_incomplete(success: bool, total_tests: u64, failed_tests: u64) -> bool {
+    !success && (total_tests == 0 || failed_tests == 0)
 }
 
 /// Builds a `CommandFailure` with the default `command_error` classification.
@@ -78,26 +86,6 @@ pub fn command_failure_from_execution_error(
         exit_code: error.status.and_then(|status| status.code()),
         message: format!("{}{timeout_detail}{diagnostics}", error),
     }
-}
-
-/// Preserve runner-owned diagnostics at the language-neutral catalog boundary.
-pub fn catalog_error_from_execution_error(
-    operation: CatalogOperation,
-    error: &ExecutionError,
-) -> CatalogOperationError {
-    let kind = match error.kind {
-        ExecutionErrorKind::Spawn => CatalogOperationErrorKind::Spawn,
-        ExecutionErrorKind::Wait => CatalogOperationErrorKind::Wait,
-        ExecutionErrorKind::Timeout => CatalogOperationErrorKind::Timeout,
-    };
-    CatalogOperationError::new(
-        operation,
-        kind,
-        Some(error.command.clone()),
-        Some(error.cwd.clone()),
-        error.status.and_then(|status| status.code()),
-        error.to_string(),
-    )
 }
 
 fn execution_diagnostics(error: &ExecutionError) -> String {
@@ -192,7 +180,7 @@ pub fn coverage_metric_failure(
 mod tests {
     use super::{
         combined_output, command_failure_from_execution_error, concise_failure_message,
-        coverage_metric_failure, failure_category,
+        coverage_metric_failure, failure_category, test_execution_incomplete,
     };
     use crate::exec::{ExecutionError, ExecutionErrorKind};
     use ayni_core::{
@@ -209,6 +197,14 @@ mod tests {
             stdout: stdout.as_bytes().to_vec(),
             stderr: stderr.as_bytes().to_vec(),
         }
+    }
+
+    #[test]
+    fn parsed_test_failures_are_complete_quality_evidence() {
+        assert!(!test_execution_incomplete(false, 3, 1));
+        assert!(test_execution_incomplete(false, 0, 0));
+        assert!(test_execution_incomplete(false, 3, 0));
+        assert!(!test_execution_incomplete(true, 3, 0));
     }
 
     #[test]

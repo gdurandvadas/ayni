@@ -1,9 +1,10 @@
+use crate::workspace::WorkspacePatterns;
+use ayni_adapters_common::repository::read_contained_string;
 use ayni_core::{
     AdapterError, ChangeKind, ImpactCapability, ImpactConfidence, ImpactContribution, ImpactReason,
     ImpactReasonKind, ImpactRequest, ImpactUncertainty, ImpactUncertaintyKind, Language,
     SelectedCheck, SignalKind,
 };
-use glob::{MatchOptions, Pattern};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use walkdir::{DirEntry, WalkDir};
@@ -202,10 +203,9 @@ fn node_topology_root(request: &ImpactRequest) -> Result<std::path::PathBuf, Str
     loop {
         let manifest = current.join("package.json");
         if manifest.is_file() {
-            let value: Value = serde_json::from_str(
-                &std::fs::read_to_string(&manifest).map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| error.to_string())?;
+            let value: Value =
+                serde_json::from_str(&read_contained_string(request.repo_root(), &manifest)?)
+                    .map_err(|error| error.to_string())?;
             if value.get("workspaces").is_some() {
                 return Ok(current.to_path_buf());
             }
@@ -236,44 +236,21 @@ fn repository_relative_dir(repo_root: &std::path::Path, path: &std::path::Path) 
     }
 }
 
-fn workspace_pattern_matches(pattern: &Pattern, path: &str) -> bool {
-    pattern.matches_with(
-        path,
-        MatchOptions {
-            case_sensitive: true,
-            require_literal_separator: true,
-            require_literal_leading_dot: false,
-        },
-    )
-}
-
-fn node_workspace_patterns(root: &std::path::Path) -> Result<Vec<Pattern>, String> {
-    let value: Value = serde_json::from_str(
-        &std::fs::read_to_string(root.join("package.json")).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    let patterns = match value.get("workspaces") {
-        Some(Value::Array(patterns)) => Some(patterns),
-        Some(Value::Object(workspaces)) => workspaces.get("packages").and_then(Value::as_array),
-        _ => None,
-    };
-    patterns
-        .into_iter()
-        .flatten()
-        .map(|value| {
-            let pattern = value
-                .as_str()
-                .ok_or_else(|| String::from("Node workspace path pattern must be a string"))?;
-            Pattern::new(pattern.trim_end_matches('/')).map_err(|error| error.to_string())
-        })
-        .collect()
+fn node_workspace_patterns(
+    repo_root: &std::path::Path,
+    root: &std::path::Path,
+) -> Result<WorkspacePatterns, String> {
+    let manifest = root.join("package.json");
+    let value: Value = serde_json::from_str(&read_contained_string(repo_root, &manifest)?)
+        .map_err(|error| error.to_string())?;
+    WorkspacePatterns::parse(&value, &manifest)
 }
 
 fn packages(
     topology_root: &std::path::Path,
     repo_root: &std::path::Path,
 ) -> Result<(BTreeMap<String, Package>, Vec<String>), String> {
-    let workspace_patterns = node_workspace_patterns(topology_root)?;
+    let workspace_patterns = node_workspace_patterns(repo_root, topology_root)?;
     let mut output = BTreeMap::new();
     let mut nonmember_dirs = Vec::new();
     for entry in WalkDir::new(topology_root)
@@ -305,21 +282,16 @@ fn classify_manifest(
     path: &std::path::Path,
     topology_root: &std::path::Path,
     repo_root: &std::path::Path,
-    workspace_patterns: &[Pattern],
+    workspace_patterns: &WorkspacePatterns,
 ) -> Result<ManifestClassification, String> {
     let parent = path.parent().expect("manifest parent");
     let topology_dir = repository_relative_dir(topology_root, parent);
     let repository_dir = repository_relative_dir(repo_root, parent);
-    if topology_dir != "."
-        && !workspace_patterns
-            .iter()
-            .any(|pattern| workspace_pattern_matches(pattern, &topology_dir))
-    {
+    if topology_dir != "." && !workspace_patterns.matches(&topology_dir) {
         return Ok(ManifestClassification::Nonmember(repository_dir));
     }
-    let value: Value =
-        serde_json::from_str(&std::fs::read_to_string(path).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?;
+    let value: Value = serde_json::from_str(&read_contained_string(repo_root, path)?)
+        .map_err(|error| error.to_string())?;
     let name = value
         .get("name")
         .and_then(Value::as_str)
@@ -647,6 +619,68 @@ mod tests {
                 .selected_checks
                 .iter()
                 .all(|check| check.package.is_none() && check.file.is_none())
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn rejects_manifest_symlink_that_escapes_repository() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = tempdir().expect("fixture");
+        let outside_fixture = tempdir().expect("outside fixture");
+        let outside = outside_fixture.path().join("outside");
+        std::fs::write(&outside, "{\"workspaces\":[] }\n").expect("outside manifest");
+        symlink(&outside, fixture.path().join("package.json")).expect("manifest link");
+        let request = ImpactRequest::new(
+            fixture.path().canonicalize().expect("canonical"),
+            Language::Node,
+            String::from("."),
+            vec![ChangedPath {
+                kind: ChangeKind::Modified,
+                path: String::from("src/index.ts"),
+                previous_path: None,
+            }],
+            [SignalKind::Test],
+        )
+        .expect("request");
+
+        let error = NodeImpactCapability
+            .analyze(&request)
+            .expect_err("symlink escape");
+
+        assert!(error.to_string().contains("escapes repository containment"));
+    }
+
+    #[test]
+    fn negated_workspace_pattern_broadens_for_an_excluded_member() {
+        let dir = tempdir().expect("repo");
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"workspaces":["packages/**","!packages/excluded/**"]}"#,
+        )
+        .expect("workspace");
+        let excluded = dir.path().join("packages/excluded");
+        std::fs::create_dir_all(excluded.join("src")).expect("package");
+        std::fs::write(excluded.join("package.json"), r#"{"name":"excluded"}"#).expect("manifest");
+        let request = ImpactRequest::new(
+            dir.path().canonicalize().expect("canonical"),
+            Language::Node,
+            String::from("."),
+            vec![ChangedPath {
+                kind: ChangeKind::Modified,
+                path: String::from("packages/excluded/src/index.ts"),
+                previous_path: None,
+            }],
+            [SignalKind::Test],
+        )
+        .expect("request");
+
+        let contribution = NodeImpactCapability.analyze(&request).expect("impact");
+
+        assert_eq!(contribution.uncertainties.len(), 1);
+        assert_eq!(
+            contribution.uncertainties[0].kind,
+            ImpactUncertaintyKind::UnknownPathOwnership
         );
     }
 }

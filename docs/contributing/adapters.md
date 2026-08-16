@@ -8,9 +8,9 @@ rules](../product/runtime.md).
 
 Keep the dependency flow `core <- adapters/common <- adapters/<lang> <- cli`.
 `core` owns signal and policy contracts; `adapters/common` owns shared command,
-path, discovery, parsing, and neutral catalog execution infrastructure; a
-language adapter owns local detection, runner resolution, tool invocation,
-parsing, normalization, and any adapter-managed catalog behavior; and the CLI
+path, discovery, and parsing infrastructure; a language adapter owns local
+detection, runner resolution, tool invocation, parsing, normalization, and
+declarative catalog metadata; and the CLI
 owns orchestration and presentation.
 
 An adapter must detect language presence, declare tool requirements, collect
@@ -26,7 +26,7 @@ Implement `LanguageAdapter` and `SignalCollector` from `ayni-core`.
 - `detect(root) -> DetectResult` reports language presence and confidence.
 - `resolve_execution(repo_root, root) -> ExecutionResolution` resolves the
   ancestry-aware runner and setup context.
-- `catalog() -> &[CatalogEntry]` declares install requirements.
+- `catalog() -> &[CatalogEntry]` declares signal tool requirements.
 - `collector() -> &dyn SignalCollector` provides typed collection.
 
 Collectors return `SignalRow` values with a canonical `SignalKind`, language,
@@ -72,15 +72,11 @@ for missing evidence. Follow the
 
 ## Catalog conventions
 
-Every external tool invoked for collection is a `CatalogEntry`; the catalog is
-the source of truth for future environment provisioning. Include a stable tool name, a typed
-installer (`Cargo`, `GoInstall`, `Bundled`, `Custom`, `AdapterManaged`, or the
-language-appropriate alternative), an optional check command or version probe,
-the `for_signals` mapping, and `opt_in` for expensive checks such as mutation.
-The common catalog runtime is deliberately neutral: an adapter-managed entry
-must be handled by its owning adapter runtime, including its manager selection,
-status, preparation, and apply behavior. Status inspection must be read-only; preparation belongs only to explicit
-future environment provisioning.
+Every external tool invoked for collection is a `CatalogEntry`. Include a
+stable tool name, the `for_signals` mapping, and `opt_in` for expensive checks
+such as mutation. Catalogs are declarative: they do not probe tool status,
+install dependencies, or mutate a checkout. Environment capabilities own
+managed provisioning requirements, while host prerequisites remain user-owned.
 
 ## Policy conventions
 
@@ -103,9 +99,7 @@ requested-scope evidence is written to `.ayni/verify/last/signals.json` rather
 than the repository completion artifact. Document policy fields, command
 overrides, and missing-policy behavior with a language-specific TOML example.
 
-Catalog-managed dependencies are selected only when their related check is
-enabled; future provisioning must apply that selection explicitly. Runtime and package-manager prerequisites
-without catalog installers remain user-owned. Mark mutation tooling optional
+Catalog entries identify signal dependencies. Mark mutation tooling optional
 when its catalog entry is `opt_in`.
 
 ## Prohibited patterns
@@ -116,7 +110,7 @@ Do not:
 - emit free-form untyped top-level payloads;
 - parse source directly when an available tool supplies the metric;
 - couple adapter internals to CLI crates; or
-- bypass the catalog provisioning boundary.
+- make catalog metadata execute or mutate the checkout.
 
 ## Validation checklist
 
@@ -134,8 +128,7 @@ Before merging an adapter:
    controls.
 7. Exercise the adapter with real tool fixtures in local and CI coverage,
    including collection, configured thresholds, missing/unparseable configured
-   evidence, supported selectors, catalog readiness, and applied installation
-   where its manager can make changes. Do not satisfy the contract only with
+   evidence, and supported selectors. Do not satisfy the contract only with
    mocked command output.
 8. Run `cargo fmt --all -- --check`,
    `cargo clippy --workspace --all-targets --all-features -- -D warnings`,

@@ -766,7 +766,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn request(repo: &Path, target: &str, signals: Vec<SignalKind>) -> EnvironmentDiscoveryRequest {
-        EnvironmentDiscoveryRequest::new(
+        ayni_adapters_common::environment::environment_discovery_request(
             repo.to_path_buf(),
             TargetIdentity::new(Language::Kotlin, target).expect("target"),
             signals,

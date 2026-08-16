@@ -3,6 +3,7 @@ use super::util::{
     prepare_report_path, run_command_for_context_structured,
 };
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::failure::test_execution_incomplete;
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
     TestFailure, TestResult, VerificationSelection,
@@ -90,17 +91,6 @@ fn collect_with_command(
     let runner = format_command(&program, &args);
     let output = run_command_for_context_structured(context, &program, &args)?;
     let success = output.status.success();
-    let failure = if success {
-        None
-    } else {
-        Some(command_failure_from_output(
-            context,
-            SignalKind::Test,
-            &program,
-            &args,
-            &output,
-        ))
-    };
 
     let report = read_report(&report_path).map_err(|error| {
         if is_no_tests_collected(&output) {
@@ -138,6 +128,8 @@ fn collect_with_command(
     let passed = summary.passed.unwrap_or(0);
     let failed = summary.failed.unwrap_or(0) + summary.error.unwrap_or(0);
     let duration_ms = report.duration.map(|value| (value * 1000.0) as u64);
+    let failure = test_execution_incomplete(success, total_tests, failed)
+        .then(|| command_failure_from_output(context, SignalKind::Test, &program, &args, &output));
     let mut offenders = report
         .tests
         .unwrap_or_default()

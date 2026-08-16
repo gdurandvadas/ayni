@@ -1,6 +1,6 @@
 //! Read-only Node environment discovery.
 
-use crate::package_manager::PackageManager;
+use crate::{package_manager::PackageManager, workspace::WorkspacePatterns};
 use ayni_adapters_common::repository::{
     read_contained_string, read_optional_contained_bytes, read_optional_contained_string,
     repository_relative,
@@ -12,7 +12,6 @@ use ayni_core::{
     RuntimeRequirement, SignalKind, SignalToolRequirement, TargetEnvironment,
     ToolInstallationScope, VersionRequirement,
 };
-use glob::Pattern;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
@@ -644,7 +643,7 @@ fn workspace_owner(repo_root: &Path, target_root: &Path) -> Result<PathBuf, Adap
                 .map_err(|_| adapter_error("Node target escapes workspace root"))?
                 .to_string_lossy()
                 .replace('\\', "/");
-            if workspace_matches(&patterns, &relative_target)? {
+            if patterns.matches(&relative_target) {
                 return Ok(root.to_path_buf());
             }
         }
@@ -659,53 +658,8 @@ fn workspace_owner(repo_root: &Path, target_root: &Path) -> Result<PathBuf, Adap
 fn workspace_patterns(
     manifest: &serde_json::Value,
     path: &Path,
-) -> Result<Vec<String>, AdapterError> {
-    let Some(workspaces) = manifest.get("workspaces") else {
-        return Ok(Vec::new());
-    };
-    let values = if let Some(array) = workspaces.as_array() {
-        array
-    } else if let Some(array) = workspaces
-        .get("packages")
-        .and_then(serde_json::Value::as_array)
-    {
-        array
-    } else {
-        return Err(adapter_error(format!(
-            "{} workspaces must be an array or an object with a packages array",
-            path.display()
-        )));
-    };
-    values
-        .iter()
-        .map(|value| {
-            value.as_str().map(str::to_owned).ok_or_else(|| {
-                adapter_error(format!(
-                    "{} workspaces must contain only string patterns",
-                    path.display()
-                ))
-            })
-        })
-        .collect()
-}
-
-fn workspace_matches(patterns: &[String], target: &str) -> Result<bool, AdapterError> {
-    let mut included = false;
-    for raw in patterns {
-        let (excluded, pattern) = raw
-            .strip_prefix('!')
-            .map_or((false, raw.as_str()), |value| (true, value));
-        let pattern = Pattern::new(pattern).map_err(|error| {
-            adapter_error(format!("invalid Node workspace pattern {raw}: {error}"))
-        })?;
-        if pattern.matches(target) {
-            if excluded {
-                return Ok(false);
-            }
-            included = true;
-        }
-    }
-    Ok(included)
+) -> Result<WorkspacePatterns, AdapterError> {
+    WorkspacePatterns::parse(manifest, path).map_err(adapter_error)
 }
 
 fn node_manifest_inputs(
@@ -727,7 +681,7 @@ fn node_manifest_inputs(
                 .map_err(|_| adapter_error("Node workspace member escapes its owner"))?
                 .to_string_lossy()
                 .replace('\\', "/");
-            if workspace_matches(&patterns, &relative)? {
+            if patterns.matches(&relative) {
                 manifests.push(candidate);
             }
         }

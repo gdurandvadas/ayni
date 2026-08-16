@@ -1,4 +1,4 @@
-use crate::catalog::{CatalogEntry, CatalogRuntime};
+use crate::catalog::CatalogEntry;
 use crate::language::Language;
 use crate::runtime::Scope;
 use crate::runtime::{AdapterError, ExecutionResolution, RunContext};
@@ -271,8 +271,6 @@ pub trait LanguageAdapter: Send + Sync {
     }
     fn profile(&self) -> LanguageProfile;
     fn catalog(&self) -> &'static [CatalogEntry];
-    /// Runtime behavior for the ordered declarative catalog.
-    fn catalog_runtime(&self) -> &dyn CatalogRuntime;
     fn collector(&self) -> &dyn SignalCollector;
 
     /// Optional, read-only impact capability. Unsupported is explicit so callers can broaden safely.
@@ -551,15 +549,13 @@ fn signal_name(kind: SignalKind) -> &'static str {
 mod tests {
     use super::{VerificationSelection, VerificationSelectorSupport, validate_selector_support};
     use crate::{
-        AdapterError, Architecture, CatalogEntry, CatalogRuntime, DetectResult,
-        EnvironmentCapability, EnvironmentContribution, EnvironmentDiscoveryRequest,
-        ExecutionResolution, Language, LanguageAdapter, LanguageProfile, Libc, OperatingSystem,
-        RequirementConfidence, RequirementSource, RunContext, RuntimeRequirement, SignalCollector,
-        SignalKind, SignalRow, TargetEnvironment, TargetIdentity, TargetPlatform,
-        VerificationTarget, VersionRequirement,
+        AdapterError, Architecture, CatalogEntry, DetectResult, EnvironmentCapability,
+        EnvironmentContribution, EnvironmentDiscoveryRequest, Language, LanguageAdapter,
+        LanguageProfile, Libc, OperatingSystem, RequirementConfidence, RequirementSource,
+        RunContext, RuntimeRequirement, SignalCollector, SignalKind, SignalRow, TargetEnvironment,
+        TargetIdentity, TargetPlatform, VerificationTarget, VersionRequirement,
     };
     use std::path::Path;
-    use std::time::Duration;
 
     struct TestAdapter<'a> {
         capability: Option<&'a dyn EnvironmentCapability>,
@@ -571,10 +567,8 @@ mod tests {
     }
 
     struct TestCollector;
-    struct TestCatalogRuntime;
 
     static TEST_COLLECTOR: TestCollector = TestCollector;
-    static TEST_CATALOG_RUNTIME: TestCatalogRuntime = TestCatalogRuntime;
 
     impl EnvironmentCapability for TestCapability {
         fn language(&self) -> Language {
@@ -625,27 +619,6 @@ mod tests {
         }
     }
 
-    impl CatalogRuntime for TestCatalogRuntime {
-        fn status(
-            &self,
-            _entry: &CatalogEntry,
-            _execution: &ExecutionResolution,
-            _timeout: Duration,
-        ) -> Result<crate::ToolStatus, crate::CatalogOperationError> {
-            panic!("catalog execution is outside this test")
-        }
-
-        fn install(
-            &self,
-            _entry: &CatalogEntry,
-            _execution: &ExecutionResolution,
-            _timeout: Duration,
-            _on_line: &mut dyn FnMut(&str),
-        ) -> Result<(), crate::CatalogOperationError> {
-            panic!("catalog execution is outside this test")
-        }
-    }
-
     impl LanguageAdapter for TestAdapter<'_> {
         fn language(&self) -> Language {
             Language::Rust
@@ -668,10 +641,6 @@ mod tests {
 
         fn catalog(&self) -> &'static [CatalogEntry] {
             &[]
-        }
-
-        fn catalog_runtime(&self) -> &dyn CatalogRuntime {
-            &TEST_CATALOG_RUNTIME
         }
 
         fn collector(&self) -> &dyn SignalCollector {

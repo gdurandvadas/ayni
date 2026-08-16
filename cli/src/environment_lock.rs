@@ -10,31 +10,7 @@ use std::process::ExitCode;
 
 const LOCK_FILE: &str = ".ayni.lock";
 
-#[derive(Debug)]
-struct LockError {
-    code: u8,
-    message: String,
-}
-impl LockError {
-    fn input(message: impl Into<String>) -> Self {
-        Self {
-            code: 2,
-            message: message.into(),
-        }
-    }
-    fn environment(message: impl Into<String>) -> Self {
-        Self {
-            code: 3,
-            message: message.into(),
-        }
-    }
-    fn execution(message: impl Into<String>) -> Self {
-        Self {
-            code: 4,
-            message: message.into(),
-        }
-    }
-}
+type LockError = crate::application_error::ApplicationError;
 
 pub(crate) fn run(operation: EnvLockOperation, registry: &AdapterRegistry) -> ExitCode {
     match lock(&operation, registry) {
@@ -53,10 +29,7 @@ pub(crate) fn run(operation: EnvLockOperation, registry: &AdapterRegistry) -> Ex
             );
             ExitCode::SUCCESS
         }
-        Err(error) => {
-            eprintln!("{}", error.message);
-            ExitCode::from(error.code)
-        }
+        Err(error) => crate::application_error::render_error(error),
     }
 }
 
@@ -110,10 +83,7 @@ fn prepare_lock(
         repo_root: operation.repo_root.clone(),
         output: OutputFormat::Json,
     };
-    let plan = environment::build_plan(&show, registry).map_err(|error| LockError {
-        code: error.code,
-        message: error.message,
-    })?;
+    let plan = environment::build_plan(&show, registry)?;
     ensure_no_conflicts(&plan)?;
     let repo_root = canonical_repo_root(operation)?;
     let destination = repo_root.join(LOCK_FILE);
@@ -153,10 +123,7 @@ fn create_lock(
         env!("CARGO_PKG_VERSION"),
         operation.base.as_deref(),
     )
-    .map_err(|error| LockError {
-        code: error.code,
-        message: error.message,
-    })?;
+    .map_err(LockError::from)?;
     let contract_path = contract_path(operation, repo_root)?;
     EnvironmentLock::from_resolved_plan(
         resolved_plan,

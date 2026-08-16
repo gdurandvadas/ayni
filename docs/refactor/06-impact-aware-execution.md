@@ -135,6 +135,12 @@ artifact unchanged. Impact uses its own versioned envelope and the dedicated
 rows, records exact selected-job accounting, and always carries an explicit
 `ayni check` requirement.
 
+Impact artifacts and their aggregate accounting are core product contracts, not
+renderer-owned payloads. Every returned signal row must exactly match its
+selected check before it increments completed-job accounting. Unexpected or
+missing evidence makes execution incomplete, even when the returned row itself
+passes.
+
 The frozen CLI requires `--base`; the candidate is the complete current working
 tree: commits through `HEAD`, index changes, unstaged changes, and untracked
 non-ignored files. Both identities and a deterministic candidate fingerprint

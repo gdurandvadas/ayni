@@ -292,8 +292,7 @@ because Cargo serializes builds on the target-directory lock.
 
 Use `[execution]` to bound how long a single tool invocation may run. When a
 command exceeds the timeout, Ayni kills and reaps it, preserves any captured
-diagnostics, and reports a typed failed signal row (or structured catalog
-failure) rather than hanging the run. Command output is streamed as it arrives,
+diagnostics, and reports a typed failed signal row rather than hanging the run. Command output is streamed as it arrives,
 so interactive progress reflects live tool output rather than a post-process
 summary.
 

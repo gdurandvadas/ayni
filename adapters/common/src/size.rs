@@ -1,6 +1,6 @@
-use crate::SizeThreshold;
-use crate::signal::{Level, SizeOffender, SizeResult};
-use crate::threshold::classify_maximum;
+use crate::paths::to_repo_relative_path;
+use ayni_core::signal::{Level, SizeOffender, SizeResult};
+use ayni_core::{SizeThreshold, classify_maximum};
 use glob::Pattern;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -191,24 +191,11 @@ fn is_excluded_path(workdir: &Path, path: &Path, excluded_dir_names: &[&str]) ->
         })
 }
 
-fn to_repo_relative_path(repo_root: &Path, candidate: &Path) -> String {
-    if let Ok(relative) = candidate.strip_prefix(repo_root) {
-        return relative.to_string_lossy().replace('\\', "/");
-    }
-    if let Ok(canonical_repo_root) = repo_root.canonicalize()
-        && let Ok(canonical_candidate) = candidate.canonicalize()
-        && let Ok(relative) = canonical_candidate.strip_prefix(canonical_repo_root)
-    {
-        return relative.to_string_lossy().replace('\\', "/");
-    }
-    candidate.to_string_lossy().replace('\\', "/")
-}
-
 #[cfg(test)]
 mod tests {
     use super::{collect_size, collect_size_file};
-    use crate::SizeThreshold;
-    use crate::signal::Level;
+    use ayni_core::SizeThreshold;
+    use ayni_core::signal::Level;
     use std::collections::BTreeMap;
     use std::fs;
     use tempfile::TempDir;

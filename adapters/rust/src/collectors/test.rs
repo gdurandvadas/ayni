@@ -1,5 +1,6 @@
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{format_command, run_command_for_context_streaming_structured};
+use ayni_adapters_common::failure::test_execution_incomplete;
 use ayni_core::{
     Budget, CommandFailure, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
     TestFailure, TestResult, VerificationSelection,
@@ -90,6 +91,7 @@ fn build_test_row(
 ) -> SignalRow {
     let parsed = parse_all_test_result_lines(stdout);
     let (total_tests, passed, failed) = parsed.unwrap_or((0, 0, 0));
+    let execution_incomplete = test_execution_incomplete(success, total_tests, failed);
 
     let mut offenders = Vec::new();
     if !success {
@@ -122,7 +124,7 @@ fn build_test_row(
             failed,
             duration_ms: None,
             runner: runner.to_string(),
-            failure: (!success).then(|| CommandFailure {
+            failure: execution_incomplete.then(|| CommandFailure {
                 category: String::from("repo_code_issue"),
                 classification: String::from("command_error"),
                 command: runner.to_string(),
@@ -375,6 +377,26 @@ enabled = ["rust"]
             panic!("test result");
         };
         assert_eq!(result.failure.expect("failure").exit_code, Some(17));
+    }
+
+    #[test]
+    fn parsed_test_failure_is_quality_evidence_not_execution_failure() {
+        let row = build_test_row(
+            &context_with_policy("[checks]\ntest = true\n[languages]\nenabled = [\"rust\"]"),
+            false,
+            Some(101),
+            "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out",
+            "test failed",
+            "cargo test",
+        );
+
+        assert!(!row.pass);
+        let SignalResult::Test(result) = row.result else {
+            panic!("test result");
+        };
+        assert_eq!(result.total_tests, 3);
+        assert_eq!(result.failed, 1);
+        assert!(result.failure.is_none());
     }
 
     #[test]

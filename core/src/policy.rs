@@ -3,7 +3,6 @@ use crate::language::Language;
 use crate::signal::SignalKind;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
@@ -142,18 +141,6 @@ impl Default for ConcurrencyPolicy {
 }
 
 impl AyniPolicy {
-    pub fn load(repo_root: &Path) -> Result<Self, String> {
-        let path = repo_root.join(AYNI_POLICY_FILE);
-        Self::load_from_path(&path)
-    }
-
-    pub fn load_from_path(config_path: &Path) -> Result<Self, String> {
-        let content = fs::read_to_string(config_path)
-            .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
-        Self::parse(&content)
-            .map_err(|error| format!("failed to parse {}: {error}", config_path.display()))
-    }
-
     /// Parse and normalize one policy snapshot already read by the caller.
     /// This lets consumers hash and interpret the exact same bytes.
     pub fn parse(content: &str) -> Result<Self, String> {

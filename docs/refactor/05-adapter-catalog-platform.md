@@ -88,11 +88,19 @@ workflow, not quality execution.
 - report parsing helpers for genuinely shared formats;
 - deterministic failure scaffolding;
 - cache primitives;
-- generic catalog status and installation execution.
+- deterministic catalog projection into environment requirements.
 
 Shared code must not contain Node lockfile precedence, Python manager
 resolution, Gradle plugin policy, Cargo component selection, or similar
 language semantics.
+
+### Initial declarative-catalog decision
+
+The clean-slate adapter contract exposes declarative catalog entries only. The
+removed runtime `status`, `prepare`, and `install` hooks are not retained: they
+created a second provisioning system and allowed checkout mutation. Environment
+planning converts catalog metadata into locked requirements; quality execution
+never invokes an installer or edits project build files.
 
 ## Built-in adapters
 

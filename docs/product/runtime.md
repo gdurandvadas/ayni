@@ -9,7 +9,7 @@ Ayni discovers language roots separately from execution context.
 
 - `target_root` is the repository root or leaf package being analyzed.
 - `resolved_from` is the file or ancestor directory that determined the runner.
-- `install_cwd` is where setup commands add or validate tools.
+- `install_cwd` is the package-manager or workspace root used for environment preparation.
 - `exec_cwd` is where analysis commands run.
 
 Resolution must be ancestry-aware. A leaf package may execute through a manager
@@ -47,7 +47,7 @@ Every analyzed root records:
 
 ## Environment provisioning status
 
-The clean-slate `init` and `env` command vocabulary is active. `env show`
+The `env` command vocabulary is active. `env show`
 builds a read-only, deterministic environment plan for configured Rust, Node,
 Go, uv Python, and Gradle Kotlin targets. `env lock` resolves exact requirements
 and atomically writes schema `0.3.0`, a versioned, fingerprinted `.ayni.lock`;

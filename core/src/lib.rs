@@ -10,12 +10,13 @@ pub mod environment_preparation;
 pub mod environment_resolution;
 pub mod finding;
 pub mod impact;
+pub mod impact_result;
 pub mod language;
 pub mod policy;
 pub mod registry;
+pub mod run_outcome;
 pub mod runtime;
 pub mod signal;
-pub mod size;
 pub mod threshold;
 
 pub use adapter::{
@@ -23,10 +24,7 @@ pub use adapter::{
     PolicyEffectivenessFacts, ProjectDiscovery, ProjectLayout, SignalCollector,
     VerificationSelection, VerificationSelectorSupport,
 };
-pub use catalog::{
-    CatalogEntry, CatalogOperation, CatalogOperationError, CatalogOperationErrorKind,
-    CatalogRuntime, Installer, ToolStatus, VersionCheck,
-};
+pub use catalog::CatalogEntry;
 pub use comparison::{
     ARTIFACT_COMPARISON_SCHEMA_VERSION, ArtifactComparison, ArtifactComparisonError,
     FindingIdChanges, MatchedRowComparison, MetricChange, MetricValue, RowChangeSet, SignalRowKey,
@@ -57,6 +55,10 @@ pub use impact::{
     ImpactIdentity, ImpactIdentityKind, ImpactPlan, ImpactReason, ImpactReasonKind, ImpactRequest,
     ImpactUncertainty, ImpactUncertaintyKind, SelectedCheck,
 };
+pub use impact_result::{
+    IMPACT_SCHEMA_VERSION, ImpactAggregate, ImpactArtifact, ImpactExecution, ImpactExecutionIssue,
+    ImpactExecutionState, RepositoryCompletionMarker,
+};
 pub use language::Language;
 pub use policy::{
     AYNI_POLICY_FILE, AyniPolicy, ComplexityPolicy, ConcurrencyPolicy, CoveragePolicy, DepsPolicy,
@@ -65,6 +67,7 @@ pub use policy::{
     SizeThreshold, ThresholdFloat, ThresholdInt, ToolCommandOverride,
 };
 pub use registry::AdapterRegistry;
+pub use run_outcome::RunOutcome;
 pub use runtime::{AdapterError, AdapterErrorKind, ExecutionResolution, RunContext, Scope};
 pub use signal::{
     AYNI_SIGNAL_SCHEMA_VERSION, AggregateStatus, AggregateSummary, AppliedThreshold, Budget,

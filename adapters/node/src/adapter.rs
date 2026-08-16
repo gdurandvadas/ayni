@@ -1,4 +1,4 @@
-use crate::catalog::{NODE_CATALOG, NODE_CATALOG_RUNTIME};
+use crate::catalog::NODE_CATALOG;
 use crate::collectors::NodeCollector;
 use crate::discovery;
 use crate::environment::NodeEnvironmentCapability;
@@ -8,10 +8,9 @@ use crate::package_manager;
 use crate::preparation::NodeDependencyPreparationCapability;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
-    CatalogEntry, CatalogRuntime, ComplexityThresholdKind, DetectResult, ExecutionResolution,
-    Language, LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts,
-    ProjectDiscovery, Scope, SignalCollector, SignalKind, VerificationSelectorSupport,
-    VerificationTarget,
+    CatalogEntry, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
+    LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts, ProjectDiscovery,
+    Scope, SignalCollector, SignalKind, VerificationSelectorSupport, VerificationTarget,
 };
 use std::path::Path;
 
@@ -94,10 +93,6 @@ impl LanguageAdapter for NodeAdapter {
 
     fn catalog(&self) -> &'static [CatalogEntry] {
         NODE_CATALOG
-    }
-
-    fn catalog_runtime(&self) -> &dyn CatalogRuntime {
-        &NODE_CATALOG_RUNTIME
     }
 
     fn impact_capability(&self) -> Option<&dyn ayni_core::ImpactCapability> {

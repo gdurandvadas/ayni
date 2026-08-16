@@ -110,10 +110,14 @@ rather than synthesize selectors.
 
 ## Failure semantics
 
-A quality failure is not a command failure. The result model distinguishes:
+A quality failure is not a command failure. A test runner's non-zero exit is
+ordinary quality evidence when a parseable report identifies failed tests; it
+is incomplete execution only when failed-test evidence is absent. The result
+model distinguishes:
 
 - a tool ran successfully and measured a policy violation;
-- a tool exited unsuccessfully;
+- a test runner reported failed tests and exited non-zero;
+- a tool exited unsuccessfully without complete quality evidence;
 - output was missing or unparseable;
 - a target could not be detected or resolved;
 - the environment was not ready;
@@ -133,6 +137,16 @@ with no parsed measurement cannot pass.
 - Cancellation terminates process trees, not only immediate children.
 - Command evidence records executable, arguments, working directory, outcome,
   and classified failure without losing typed context.
+
+## Initial execution-boundary decisions
+
+- Full and focused artifacts derive one core `RunOutcome`: incomplete execution
+  takes precedence over quality failure, which takes precedence over pass.
+- CLI application services own scheduling and persistence, while core owns
+  outcome and result semantics. Argument parsing and the binary entrypoint do
+  not calculate aggregate status.
+- Reconciliation validates emitted language, signal, root, package, and file
+  identity against the planned row before evidence can count as completed.
 
 ## Non-goals
 

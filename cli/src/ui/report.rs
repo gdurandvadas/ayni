@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::policy::load_from_path;
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::fs;
@@ -5,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 #[cfg(test)]
-use ayni_core::{AYNI_POLICY_FILE, AyniPolicy};
+use ayni_core::AYNI_POLICY_FILE;
 use ayni_core::{
     Budget, CommandFailure, CompletionScope, CompletionStage, CompletionState, ComplexityOffender,
     CoverageOffender, DepsOffender, Level, MutationOffender, RunArtifact, RunCompletion,
@@ -75,7 +77,7 @@ fn load_offenders_limit(signals_path: &Path) -> usize {
         return usize::MAX;
     };
 
-    match AyniPolicy::load(&root) {
+    match load_from_path(&root.join(AYNI_POLICY_FILE)) {
         Ok(policy) => policy.report.offenders_limit,
         Err(error) => {
             eprintln!("warning: {error}; using default report.offenders_limit (unlimited)");

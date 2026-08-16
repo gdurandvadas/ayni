@@ -250,11 +250,24 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         .unwrap();
     assert_eq!(managed.status.code(), Some(1));
     let managed_args = fs::read_to_string(format!("{}.check", record.display())).unwrap();
+    let managed_root = root.path().canonicalize().unwrap();
     assert!(managed_args.contains("AYNI_MANAGED_TARGET_ENVIRONMENTS="));
     assert!(managed_args.contains("rust:one"));
     assert!(managed_args.contains("rust:two"));
     assert!(managed_args.ends_with("--output\nhuman\n"));
     assert!(!managed_args.contains("--entrypoint"));
+    assert!(managed_args.contains(&format!(
+        "type=bind,source={},target=/workspace,readonly",
+        managed_root.display()
+    )));
+    assert!(managed_args.contains(&format!(
+        "type=bind,source={},target=/workspace/.ayni",
+        managed_root.join(".ayni").display()
+    )));
+    assert!(!managed_args.contains(&format!("{}:/workspace:rw", managed_root.display())));
+    // The writable nested mount preserves materialized cache/state while the
+    // checkout-wide mount remains read-only for managed quality execution.
+    assert!(cache_marker.exists());
 
     let managed_verify = command(&root, &["verify", "coverage", "--config"])
         .arg(root.path().join(".ayni.toml"))
@@ -278,6 +291,15 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         "verify\ncoverage\n--host\n--config\n./.ayni.toml\n--output\njson\n--language\nrust\n--root\none\n--debug\n"
     ));
     assert!(!managed_verify_args.contains("--entrypoint"));
+    assert!(managed_verify_args.contains(&format!(
+        "type=bind,source={},target=/workspace,readonly",
+        managed_root.display()
+    )));
+    assert!(managed_verify_args.contains(&format!(
+        "type=bind,source={},target=/workspace/.ayni",
+        managed_root.join(".ayni").display()
+    )));
+    assert!(cache_marker.exists());
 
     fs::write(root.path().join("one/rust-toolchain"), "stable\n").unwrap();
     let stale = command(&root, &["env", "doctor", "--repo-root"])
@@ -514,10 +536,11 @@ fn polyglot_build_stages_go_uv_and_gradle_preparation_without_source() {
     write_executable(
         &bin.join("docker"),
         &format!(
-            "case \"$1\" in\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\";;\nbuild) shift; file=''; context=''; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; cat \"$context/mise.toml\" > '{}.mise'; find \"$context/repository\" -type f | sed \"s|$context/repository/||\" | sort > '{}.inputs'; touch '{}.built';;\nesac\nexit 0",
+            "case \"$1\" in\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\";;\nbuild) shift; file=''; context=''; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; cat \"$context/mise.toml\" > '{}.mise'; find \"$context/repository\" -type f | sed \"s|$context/repository/||\" | sort > '{}.inputs'; touch '{}.built';;\nrun) printf '%s\\n' \"$@\" > '{}.run';;\nesac\nexit 0",
             record.display(),
             record.display(),
             labels,
+            record.display(),
             record.display(),
             record.display(),
             record.display(),
@@ -556,4 +579,20 @@ fn polyglot_build_stages_go_uv_and_gradle_preparation_without_source() {
     assert!(!inputs.contains("go/main.go"));
     assert!(!inputs.contains("python/app.py"));
     assert!(!inputs.contains("kotlin/src/main/kotlin/App.kt"));
+
+    let managed = command(&root, &["check", "--config"])
+        .arg(root.path().join(".ayni.toml"))
+        .output()
+        .unwrap();
+    assert!(
+        managed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&managed.stderr)
+    );
+    let run = fs::read_to_string(format!("{}.run", record.display())).unwrap();
+    assert!(run.contains("AYNI_MANAGED_TARGET_ENVIRONMENTS="));
+    assert!(run.contains("AYNI_GRADLE_OUTPUT_ROOT"));
+    assert!(run.contains("/workspace/.ayni/quality/kotlin/6b6f746c696e"));
+    assert!(run.contains("target=/workspace,readonly"));
+    assert!(run.contains("target=/workspace/.ayni"));
 }

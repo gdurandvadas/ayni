@@ -828,7 +828,7 @@ mod tests {
         root: &str,
         signals: Vec<SignalKind>,
     ) -> EnvironmentDiscoveryRequest {
-        EnvironmentDiscoveryRequest::new(
+        ayni_adapters_common::environment::environment_discovery_request(
             repo.path().to_path_buf(),
             TargetIdentity::new(Language::Go, root).expect("target"),
             signals,
@@ -944,7 +944,7 @@ mod tests {
         .expect("module");
         let contribution = GoEnvironmentCapability
             .discover(
-                &EnvironmentDiscoveryRequest::new(
+                &ayni_adapters_common::environment::environment_discovery_request(
                     repo.clone(),
                     TargetIdentity::new(Language::Go, "app").expect("target"),
                     [],
@@ -969,7 +969,7 @@ mod tests {
             "module example.com/app\n\ngo 1.22\nreplace example.com/outside => ../../outside\n",
         )
         .expect("module");
-        let request = EnvironmentDiscoveryRequest::new(
+        let request = ayni_adapters_common::environment::environment_discovery_request(
             repo,
             TargetIdentity::new(Language::Go, "app").expect("target"),
             [],
@@ -995,7 +995,7 @@ mod tests {
         symlink(&outside, repo.join("outside")).expect("link");
         module(&repo.join("api"), "example.com/api", "1.22");
         fs::write(repo.join("go.work"), "go 1.22\nuse ./outside\n").expect("work");
-        let request = EnvironmentDiscoveryRequest::new(
+        let request = ayni_adapters_common::environment::environment_discovery_request(
             repo,
             TargetIdentity::new(Language::Go, "api").expect("target"),
             [],

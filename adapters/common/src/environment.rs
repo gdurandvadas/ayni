@@ -6,8 +6,112 @@ use ayni_core::{
 };
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
+
+/// Creates an environment discovery request after enforcing canonical
+/// filesystem containment for the selected target.
+///
+/// The core request stays lexical so adapter contracts do not perform I/O;
+/// application callers must use this factory for repository-backed requests.
+pub fn environment_discovery_request(
+    repo_root: PathBuf,
+    target: ayni_core::TargetIdentity,
+    enabled_signals: impl IntoIterator<Item = ayni_core::SignalKind>,
+    requested_platforms: Vec<ayni_core::TargetPlatform>,
+) -> Result<EnvironmentDiscoveryRequest, AdapterError> {
+    if !repo_root.is_absolute() {
+        return Err(AdapterError::new(
+            target.language,
+            "environment discovery repository root must be absolute",
+        ));
+    }
+    let target = ayni_core::TargetIdentity::new(target.language, &target.root)
+        .map_err(|error| AdapterError::new(target.language, error.to_string()))?;
+    let canonical_repo_root = repo_root.canonicalize().map_err(|error| {
+        AdapterError::new(
+            target.language,
+            format!(
+                "failed to establish environment discovery repository containment for {}: {error}",
+                repo_root.display()
+            ),
+        )
+    })?;
+    validate_environment_target_containment(&canonical_repo_root, &target)?;
+    EnvironmentDiscoveryRequest::new(
+        canonical_repo_root,
+        target,
+        enabled_signals,
+        requested_platforms,
+    )
+}
+
+fn validate_environment_target_containment(
+    canonical_repo_root: &Path,
+    target: &ayni_core::TargetIdentity,
+) -> Result<(), AdapterError> {
+    let candidate = canonical_repo_root.join(&target.root);
+    let mut existing_ancestor = candidate.as_path();
+    loop {
+        match fs::symlink_metadata(existing_ancestor) {
+            Ok(_) => break,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                existing_ancestor = existing_ancestor.parent().ok_or_else(|| {
+                    AdapterError::new(
+                        target.language,
+                        format!(
+                            "environment target '{}' has no existing repository ancestor",
+                            target.root
+                        ),
+                    )
+                })?;
+            }
+            Err(error) => {
+                return Err(AdapterError::new(
+                    target.language,
+                    format!(
+                        "environment target '{}' violates repository containment: cannot inspect {}: {error}",
+                        target.root,
+                        existing_ancestor.display()
+                    ),
+                ));
+            }
+        }
+    }
+    let resolved = existing_ancestor.canonicalize().map_err(|error| {
+        AdapterError::new(
+            target.language,
+            format!(
+                "environment target '{}' violates repository containment: cannot resolve {}: {error}",
+                target.root,
+                existing_ancestor.display()
+            ),
+        )
+    })?;
+    if !resolved.starts_with(canonical_repo_root) {
+        return Err(AdapterError::new(
+            target.language,
+            format!(
+                "environment target '{}' escapes repository containment: {} resolves outside {}",
+                target.root,
+                candidate.display(),
+                canonical_repo_root.display()
+            ),
+        ));
+    }
+    if candidate.exists() && !resolved.is_dir() {
+        return Err(AdapterError::new(
+            target.language,
+            format!(
+                "environment target '{}' is not a directory: {}",
+                target.root,
+                candidate.display()
+            ),
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SnapshotMetadata {
@@ -280,7 +384,7 @@ pub fn assert_dependency_preparation_conformance(
 
 #[cfg(test)]
 mod tests {
-    use super::assert_environment_capability_conformance;
+    use super::{assert_environment_capability_conformance, environment_discovery_request};
     use ayni_core::{
         AdapterError, Architecture, EnvironmentCapability, EnvironmentContribution,
         EnvironmentDiscoveryRequest, Language, Libc, OperatingSystem, RequirementConfidence,
@@ -373,7 +477,7 @@ mod tests {
     }
 
     fn request(root: &std::path::Path) -> EnvironmentDiscoveryRequest {
-        EnvironmentDiscoveryRequest::new(
+        environment_discovery_request(
             root.to_path_buf(),
             TargetIdentity::new(Language::Rust, ".").expect("target"),
             [],
@@ -391,6 +495,66 @@ mod tests {
             language: Language::Rust,
             mode,
             calls: AtomicUsize::new(0),
+        }
+    }
+
+    #[test]
+    fn request_factory_rejects_a_file_target() {
+        let repository = TempDir::new().expect("repository");
+        fs::write(repository.path().join("target"), "not a directory").expect("target file");
+        let error = environment_discovery_request(
+            repository.path().to_path_buf(),
+            TargetIdentity::new(Language::Rust, "target").expect("target"),
+            [],
+            vec![TargetPlatform {
+                os: OperatingSystem::Linux,
+                architecture: Architecture::Amd64,
+                libc: Libc::Glibc,
+            }],
+        )
+        .expect_err("file target");
+        assert!(error.message.contains("is not a directory"));
+    }
+
+    #[test]
+    fn request_factory_canonicalizes_and_rejects_symlink_escapes() {
+        let fixture = TempDir::new().expect("fixture");
+        let repository = fixture.path().join("repository");
+        let outside = fixture.path().join("outside");
+        fs::create_dir(&repository).expect("repository");
+        fs::create_dir(&outside).expect("outside");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            symlink(&repository, fixture.path().join("repository-link")).expect("repository link");
+            symlink(&outside, repository.join("escape")).expect("escape link");
+            let platform = TargetPlatform {
+                os: OperatingSystem::Linux,
+                architecture: Architecture::Amd64,
+                libc: Libc::Glibc,
+            };
+            let request = environment_discovery_request(
+                fixture.path().join("repository-link"),
+                TargetIdentity::new(Language::Rust, ".").expect("target"),
+                [],
+                vec![platform],
+            )
+            .expect("contained request");
+            assert_eq!(
+                request.repo_root(),
+                repository.canonicalize().expect("canonical")
+            );
+
+            let error = environment_discovery_request(
+                repository,
+                TargetIdentity::new(Language::Rust, "escape").expect("target"),
+                [],
+                vec![platform],
+            )
+            .expect_err("escaping target");
+            assert!(error.message.contains("escapes repository containment"));
         }
     }
 

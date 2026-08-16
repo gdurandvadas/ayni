@@ -1,7 +1,7 @@
 use crate::application::{
     CheckOperation, ContractOperation, EnvLockOperation, EnvRunOperation, EnvShellOperation,
     EnvShowOperation, ExecutionMode, ImpactOperation, Operation, OutputFormat, RepositoryOperation,
-    ResultsCompareOperation, ResultsShowOperation, VerifyOperation,
+    ResultsCompareOperation, VerifyOperation,
 };
 use ayni_core::{Language, SignalKind};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -28,8 +28,6 @@ impl Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Prepare a repository for Ayni.
-    Init(RepositoryOptions),
     /// Inspect and manage the repository code environment.
     Env {
         #[command(subcommand)]
@@ -69,7 +67,6 @@ enum Commands {
 impl Commands {
     fn into_operation(self) -> Operation {
         match self {
-            Self::Init(options) => Operation::Init(options.into()),
             Self::Env { command } => command.into_operation(),
             Self::Contract { command } => command.into_operation(),
             Self::Verify { command } => Operation::Verify(command.into_operation()),
@@ -228,8 +225,6 @@ enum AgentsCommands {
 
 #[derive(Subcommand, Debug)]
 enum ResultsCommands {
-    /// Render one explicit local result file.
-    Show(ResultsShowOptions),
     /// Compare two explicit compatible result files.
     Compare(ResultsCompareOptions),
 }
@@ -237,10 +232,6 @@ enum ResultsCommands {
 impl ResultsCommands {
     fn into_operation(self) -> Operation {
         match self {
-            Self::Show(options) => Operation::ResultsShow(ResultsShowOperation {
-                file: options.file,
-                output: options.output.into(),
-            }),
             Self::Compare(options) => Operation::ResultsCompare(ResultsCompareOperation {
                 baseline: options.baseline,
                 candidate: options.candidate,
@@ -447,15 +438,6 @@ impl ImpactOptions {
 }
 
 #[derive(Args, Debug)]
-struct ResultsShowOptions {
-    /// Result file to render.
-    #[arg(long)]
-    file: PathBuf,
-    #[arg(long, value_enum, default_value_t)]
-    output: OutputArg,
-}
-
-#[derive(Args, Debug)]
 struct ResultsCompareOptions {
     /// Earlier result file.
     #[arg(long)]
@@ -554,7 +536,7 @@ mod tests {
         assert_eq!(
             names,
             [
-                "init", "env", "contract", "verify", "impact", "check", "agents", "results"
+                "env", "contract", "verify", "impact", "check", "agents", "results"
             ]
         );
     }
@@ -562,7 +544,6 @@ mod tests {
     #[test]
     fn every_public_command_maps_to_one_typed_operation() {
         let cases = [
-            (vec!["ayni", "init"], "Init"),
             (vec!["ayni", "env", "show"], "EnvShow"),
             (vec!["ayni", "env", "doctor"], "EnvDoctor"),
             (vec!["ayni", "env", "lock"], "EnvLock"),
@@ -579,10 +560,6 @@ mod tests {
             (vec!["ayni", "impact", "run", "--base", "main"], "ImpactRun"),
             (vec!["ayni", "check"], "Check"),
             (vec!["ayni", "agents", "sync"], "AgentsSync"),
-            (
-                vec!["ayni", "results", "show", "--file", "result.json"],
-                "ResultsShow",
-            ),
             (
                 vec![
                     "ayni",

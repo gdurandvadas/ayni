@@ -5,7 +5,7 @@ use std::fs;
 use tempfile::TempDir;
 
 fn request(root: &Path, target: &str, signals: Vec<SignalKind>) -> EnvironmentDiscoveryRequest {
-    EnvironmentDiscoveryRequest::new(
+    ayni_adapters_common::environment::environment_discovery_request(
         root.to_path_buf(),
         TargetIdentity::new(Language::Node, target).expect("target"),
         signals,
@@ -293,7 +293,7 @@ fn source_file_symlink_escape_fails_closed() {
     fs::write(&outside, r#"{"engines":{"node":"22"}}"#).expect("outside");
     symlink(&outside, repository.join("package.json")).expect("link");
     assert!(
-        EnvironmentDiscoveryRequest::new(
+        ayni_adapters_common::environment::environment_discovery_request(
             repository.clone(),
             TargetIdentity::new(Language::Node, ".").expect("target"),
             Vec::new(),

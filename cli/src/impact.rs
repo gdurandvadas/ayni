@@ -1,117 +1,32 @@
-use crate::application::{ExecutionMode, ImpactOperation, OutputFormat};
-use crate::{
-    build_analyze_targets, build_registry, enabled_signal_kinds, failed_signal_row,
-    managed_execution_active, persist_artifact_at, signal_kind_slug,
-    workspace_root_from_config_path,
+use crate::analysis::{
+    build_analyze_targets, enabled_signal_kinds, failed_signal_row, managed_execution_active,
+    persist_artifact_at, signal_kind_slug, workspace_root_from_config_path,
 };
+use crate::application::{ExecutionMode, ImpactOperation, OutputFormat};
+use crate::build_registry;
+use crate::policy::load_from_path;
 use ayni_adapters_common::exec::run_command_structured;
 use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
-    AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, AyniPolicy, ChangeKind, ChangedPath, Findings,
-    ImpactConfidence, ImpactIdentity, ImpactIdentityKind, ImpactPlan, ImpactReason,
-    ImpactReasonKind, ImpactRequest, ImpactUncertainty, ImpactUncertaintyKind, SelectedCheck,
-    SignalRow, VerificationSelection,
+    AdapterRegistry, AyniPolicy, ChangedPath, Findings, IMPACT_SCHEMA_VERSION, ImpactArtifact,
+    ImpactConfidence, ImpactExecutionIssue, ImpactIdentity, ImpactIdentityKind, ImpactPlan,
+    ImpactReason, ImpactReasonKind, ImpactRequest, ImpactUncertainty, ImpactUncertaintyKind,
+    RunOutcome, SelectedCheck, SignalRow, VerificationSelection,
 };
-use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-const IMPACT_SCHEMA_VERSION: &str = "0.1.0";
 const IMPACT_ARTIFACT: &str = ".ayni/impact/last/impact.json";
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[derive(Debug)]
-struct Error {
-    code: u8,
-    message: String,
-}
+mod git;
+mod render;
+use git::{GitSnapshot, git_snapshot};
+use render::{effective_execution_mode, emit_artifact, emit_plan, execution_mode_name};
 
-impl Error {
-    fn input(message: impl Into<String>) -> Self {
-        Self {
-            code: 2,
-            message: message.into(),
-        }
-    }
-
-    fn execution(message: impl Into<String>) -> Self {
-        Self {
-            code: 4,
-            message: message.into(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct GitSnapshot {
-    requested_base: String,
-    base_commit: String,
-    head_commit: String,
-    fingerprint: String,
-    changes: Vec<ChangedPath>,
-}
-
-#[derive(Serialize)]
-struct PlanEnvelope<'a> {
-    schema_version: &'static str,
-    execution_mode: &'static str,
-    plan: &'a ImpactPlan,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum ImpactExecutionState {
-    Complete,
-    Incomplete,
-}
-
-#[derive(Debug, Serialize)]
-struct ImpactExecutionIssue {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    check: Option<SelectedCheck>,
-    message: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ImpactExecution {
-    state: ImpactExecutionState,
-    planned_jobs: u64,
-    completed_jobs: u64,
-    skipped_jobs: u64,
-    issues: Vec<ImpactExecutionIssue>,
-}
-
-#[derive(Debug, Serialize)]
-struct RepositoryCompletionMarker {
-    evaluated: bool,
-    required_command: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct ImpactAggregate {
-    status: &'static str,
-    passing_rows: u64,
-    failing_rows: u64,
-    scope: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct ImpactArtifact {
-    schema_version: &'static str,
-    signal_schema_version: &'static str,
-    generated_at: String,
-    execution_mode: &'static str,
-    plan: ImpactPlan,
-    execution: ImpactExecution,
-    repository_completion: RepositoryCompletionMarker,
-    aggregate: ImpactAggregate,
-    rows: Vec<SignalRow>,
-    findings: Vec<Findings>,
-}
+type Error = crate::application_error::ApplicationError;
 
 pub(crate) fn show(operation: ImpactOperation) -> ExitCode {
     match prepare_plan(&operation) {
@@ -133,8 +48,7 @@ pub(crate) fn run(operation: ImpactOperation) -> ExitCode {
 }
 
 fn fail(error: Error) -> ExitCode {
-    eprintln!("{}", error.message);
-    ExitCode::from(error.code)
+    crate::application_error::render_error(error)
 }
 
 fn prepare_plan(
@@ -151,7 +65,7 @@ fn prepare_plan(
     if !config.starts_with(&workspace_root) {
         return Err(Error::input("impact contract escapes the repository root"));
     }
-    let policy = AyniPolicy::load_from_path(&config).map_err(Error::input)?;
+    let policy = load_from_path(&config).map_err(Error::input)?;
     validate_configured_root_containment(&workspace_root, &policy).map_err(Error::input)?;
     let snapshot = git_snapshot(&workspace_root, &operation.base)?;
     let config_path = config
@@ -333,10 +247,11 @@ fn run_inner(operation: &ImpactOperation) -> Result<(bool, bool), Error> {
         })?;
     persist_artifact_at(&workspace_root, IMPACT_ARTIFACT, &serialized).map_err(Error::execution)?;
     emit_artifact(&artifact, &serialized, operation.output)?;
-    Ok((
-        artifact.aggregate.failing_rows > 0,
-        artifact.execution.state == ImpactExecutionState::Incomplete,
-    ))
+    Ok(match artifact.outcome() {
+        RunOutcome::Passed => (false, false),
+        RunOutcome::QualityFailed => (true, false),
+        RunOutcome::ExecutionIncomplete => (false, true),
+    })
 }
 
 struct CollectedImpact {
@@ -399,6 +314,15 @@ fn execute_checks(
                     error.to_string(),
                 )
             });
+        if let Err(message) =
+            reconcile_signal_row(check, &row, &target.run_context.scope.workspace_root)
+        {
+            collected.issues.push(ImpactExecutionIssue {
+                check: Some(check.clone()),
+                message,
+            });
+            continue;
+        }
         if let Some(failure) = row.result.command_failure() {
             collected.issues.push(ImpactExecutionIssue {
                 check: Some(check.clone()),
@@ -413,6 +337,39 @@ fn execute_checks(
         collected.rows.push(row);
     }
     Ok(collected)
+}
+
+fn reconcile_signal_row(
+    check: &SelectedCheck,
+    row: &SignalRow,
+    expected_workspace_root: &str,
+) -> Result<(), String> {
+    let expected_path = (check.configured_root != ".").then_some(check.configured_root.as_str());
+    let actual_path = row.scope.path.as_deref();
+    if row.language == check.language
+        && row.kind == check.signal
+        && row.scope.workspace_root == expected_workspace_root
+        && actual_path == expected_path
+        && row.scope.package == check.package
+        && row.scope.file == check.file
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "impact execution returned a row that does not match its selected check (expected language={}, signal={}, workspace_root={}, root={}, package={:?}, file={:?}; got language={}, signal={}, workspace_root={}, root={:?}, package={:?}, file={:?})",
+        check.language,
+        signal_kind_slug(check.signal),
+        expected_workspace_root,
+        check.configured_root,
+        check.package,
+        check.file,
+        row.language,
+        signal_kind_slug(row.kind),
+        row.scope.workspace_root,
+        actual_path,
+        row.scope.package,
+        row.scope.file,
+    ))
 }
 
 fn log_check(check: &SelectedCheck, message: &str) {
@@ -439,51 +396,17 @@ fn build_artifact(
     findings: Vec<Findings>,
     operation: &ImpactOperation,
 ) -> Result<ImpactArtifact, Error> {
-    let state = if collected.issues.is_empty() {
-        ImpactExecutionState::Complete
-    } else {
-        ImpactExecutionState::Incomplete
-    };
-    let passing_rows = collected.rows.iter().filter(|row| row.pass).count() as u64;
-    let failing_rows = collected.rows.len() as u64 - passing_rows;
-    let planned_jobs = plan.selected_checks.len() as u64;
-    let completed_jobs = collected.executed_checks.len() as u64;
-    Ok(ImpactArtifact {
-        schema_version: IMPACT_SCHEMA_VERSION,
-        signal_schema_version: AYNI_SIGNAL_SCHEMA_VERSION,
-        generated_at: time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .map_err(|error| Error::execution(format!("failed to format timestamp: {error}")))?,
-        execution_mode: execution_mode_name(effective_execution_mode(operation.execution_mode)),
+    let generated_at = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|error| Error::execution(format!("failed to format timestamp: {error}")))?;
+    Ok(ImpactArtifact::new(
+        generated_at,
+        execution_mode_name(effective_execution_mode(operation.execution_mode)),
         plan,
-        repository_completion: RepositoryCompletionMarker {
-            evaluated: false,
-            required_command: "ayni check",
-        },
-        aggregate: ImpactAggregate {
-            status: aggregate_status(state, failing_rows),
-            passing_rows,
-            failing_rows,
-            scope: "selected_impact_plan_only",
-        },
-        execution: ImpactExecution {
-            state,
-            planned_jobs,
-            completed_jobs,
-            skipped_jobs: planned_jobs.saturating_sub(completed_jobs),
-            issues: collected.issues,
-        },
-        rows: collected.rows,
+        collected.issues,
+        collected.rows,
         findings,
-    })
-}
-
-fn aggregate_status(state: ImpactExecutionState, failing_rows: u64) -> &'static str {
-    if state == ImpactExecutionState::Complete && failing_rows == 0 {
-        "pass"
-    } else {
-        "fail"
-    }
+    ))
 }
 
 fn materialize_findings(
@@ -522,510 +445,12 @@ fn materialize_findings(
     Ok(result)
 }
 
-fn emit_plan(plan: &ImpactPlan, operation: &ImpactOperation) -> Result<(), Error> {
-    match operation.output {
-        OutputFormat::Json => {
-            let envelope = PlanEnvelope {
-                schema_version: IMPACT_SCHEMA_VERSION,
-                execution_mode: execution_mode_name(effective_execution_mode(
-                    operation.execution_mode,
-                )),
-                plan,
-            };
-            let serialized = serde_json::to_string_pretty(&envelope).map_err(|error| {
-                Error::execution(format!("failed to serialize impact plan: {error}"))
-            })?;
-            println!("{serialized}");
-        }
-        OutputFormat::Markdown => {
-            print_plan_markdown(plan, effective_execution_mode(operation.execution_mode));
-        }
-        OutputFormat::Human => {
-            print_plan_human(plan, effective_execution_mode(operation.execution_mode));
-        }
-    }
-    Ok(())
-}
-
-fn emit_artifact(
-    artifact: &ImpactArtifact,
-    serialized: &str,
-    output: OutputFormat,
-) -> Result<(), Error> {
-    match output {
-        OutputFormat::Json => print!("{serialized}"),
-        OutputFormat::Markdown => {
-            print_plan_markdown(&artifact.plan, mode_from_name(artifact.execution_mode));
-            println!("\n## Impact execution\n");
-            println!(
-                "- State: `{:?}`\n- Jobs: {}/{}\n- Selected rows passing: {}/{}",
-                artifact.execution.state,
-                artifact.execution.completed_jobs,
-                artifact.execution.planned_jobs,
-                artifact.aggregate.passing_rows,
-                artifact.rows.len()
-            );
-        }
-        OutputFormat::Human => {
-            print_plan_human(&artifact.plan, mode_from_name(artifact.execution_mode));
-            println!("execution: {:?}", artifact.execution.state);
-            println!(
-                "selected jobs: {}/{} completed; {} passing, {} failing",
-                artifact.execution.completed_jobs,
-                artifact.execution.planned_jobs,
-                artifact.aggregate.passing_rows,
-                artifact.aggregate.failing_rows
-            );
-            for issue in &artifact.execution.issues {
-                println!("  issue: {}", issue.message);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn print_plan_human(plan: &ImpactPlan, mode: ExecutionMode) {
-    println!("ayni impact plan");
-    println!(
-        "base: {} -> {}",
-        plan.base.requested.as_deref().unwrap_or("<unknown>"),
-        plan.base.revision
-    );
-    println!(
-        "candidate: working tree at {} ({})",
-        plan.candidate.revision,
-        plan.candidate.fingerprint.as_deref().unwrap_or("<unknown>")
-    );
-    println!("execution mode: {}", execution_mode_name(mode));
-    println!("changes: {}", plan.changes.len());
-    for change in &plan.changes {
-        println!("  {:?} {}", change.kind, change.path);
-    }
-    println!("selected checks: {}", plan.selected_checks.len());
-    for check in &plan.selected_checks {
-        let scope = check
-            .package
-            .as_deref()
-            .map(|value| format!("package {value}"))
-            .or_else(|| check.file.as_deref().map(|value| format!("file {value}")))
-            .unwrap_or_else(|| String::from("configured root"));
-        println!(
-            "  {}:{} {} ({scope}, {:?})",
-            check.language,
-            check.configured_root,
-            signal_kind_slug(check.signal),
-            check.confidence
-        );
-        for reason in &check.reasons {
-            println!("    because {:?}: {}", reason.kind, reason.detail);
-        }
-    }
-    for uncertainty in &plan.uncertainties {
-        println!(
-            "  uncertainty {:?}: {}",
-            uncertainty.kind, uncertainty.detail
-        );
-    }
-    println!("impact evidence is not repository completion; run `ayni check`");
-}
-
-fn print_plan_markdown(plan: &ImpactPlan, mode: ExecutionMode) {
-    println!("# Ayni impact plan\n");
-    println!(
-        "> Impact evidence covers only the selected change. Run `ayni check` for repository completion.\n"
-    );
-    println!("- Base: `{}`", plan.base.revision);
-    println!("- Candidate HEAD: `{}`", plan.candidate.revision);
-    println!("- Execution mode: `{}`", execution_mode_name(mode));
-    println!("- Changed paths: {}", plan.changes.len());
-    println!("- Selected checks: {}\n", plan.selected_checks.len());
-    for check in &plan.selected_checks {
-        println!(
-            "- `{}` `{}` `{}`",
-            check.language,
-            check.configured_root,
-            signal_kind_slug(check.signal)
-        );
-        for reason in &check.reasons {
-            println!("  - {:?}: {}", reason.kind, reason.detail);
-        }
-    }
-}
-
-fn effective_execution_mode(requested: ExecutionMode) -> ExecutionMode {
-    effective_execution_mode_when(requested, managed_execution_active())
-}
-
-fn effective_execution_mode_when(requested: ExecutionMode, managed: bool) -> ExecutionMode {
-    if managed {
-        ExecutionMode::Managed
-    } else {
-        requested
-    }
-}
-
-fn execution_mode_name(mode: ExecutionMode) -> &'static str {
-    match mode {
-        ExecutionMode::Managed => "managed",
-        ExecutionMode::Host => "host",
-    }
-}
-
-fn mode_from_name(name: &str) -> ExecutionMode {
-    if name == "managed" {
-        ExecutionMode::Managed
-    } else {
-        ExecutionMode::Host
-    }
-}
-
-fn git_snapshot(workspace_root: &Path, requested_base: &str) -> Result<GitSnapshot, Error> {
-    let context = resolve_git_context(workspace_root, requested_base)?;
-    reject_conflicts(&context.root)?;
-    let tracked = git_bytes(
-        &context.root,
-        &[
-            "diff",
-            "--name-status",
-            "-z",
-            "--find-renames",
-            &context.base_commit,
-            "--",
-        ],
-    )?;
-    let untracked = nul_strings(&git_bytes(
-        &context.root,
-        &["ls-files", "--others", "--exclude-standard", "-z"],
-    )?)?;
-    let changes = collect_workspace_changes(&tracked, &untracked, &context.prefix)?;
-    let fingerprint = candidate_fingerprint(&context, &untracked)?;
-    Ok(GitSnapshot {
-        requested_base: requested_base.to_owned(),
-        base_commit: context.base_commit,
-        head_commit: context.head_commit,
-        fingerprint,
-        changes,
-    })
-}
-
-struct GitContext {
-    root: PathBuf,
-    prefix: String,
-    base_commit: String,
-    head_commit: String,
-}
-
-fn resolve_git_context(workspace_root: &Path, requested_base: &str) -> Result<GitContext, Error> {
-    let root = PathBuf::from(git_text(workspace_root, &["rev-parse", "--show-toplevel"])?.trim())
-        .canonicalize()
-        .map_err(|error| Error::input(format!("failed to resolve Git root: {error}")))?;
-    let prefix = workspace_root
-        .strip_prefix(&root)
-        .map_err(|_| Error::input("configured repository root is outside the Git worktree"))?
-        .to_string_lossy()
-        .replace('\\', "/");
-    let base_arg = format!("{requested_base}^{{commit}}");
-    let base_commit = git_text(
-        &root,
-        &["rev-parse", "--verify", "--end-of-options", &base_arg],
-    )?
-    .trim()
-    .to_owned();
-    let head_commit = git_text(
-        &root,
-        &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
-    )?
-    .trim()
-    .to_owned();
-    Ok(GitContext {
-        root,
-        prefix,
-        base_commit,
-        head_commit,
-    })
-}
-
-fn reject_conflicts(git_root: &Path) -> Result<(), Error> {
-    let conflicts = git_bytes(
-        git_root,
-        &["diff", "--name-only", "--diff-filter=U", "-z", "--"],
-    )?;
-    if conflicts.is_empty() {
-        Ok(())
-    } else {
-        Err(Error::input(
-            "impact planning requires a working tree without unresolved Git conflicts",
-        ))
-    }
-}
-
-fn collect_workspace_changes(
-    tracked: &[u8],
-    untracked: &[String],
-    prefix: &str,
-) -> Result<Vec<ChangedPath>, Error> {
-    let mut changes = Vec::new();
-    for change in parse_name_status(tracked)? {
-        changes.extend(change_for_workspace(change, prefix));
-    }
-    for path in untracked {
-        let normalized = normalize_git_path(path)?;
-        if let Some(path) = path_for_workspace(&normalized, prefix) {
-            changes.push(ChangedPath {
-                kind: ChangeKind::Added,
-                path,
-                previous_path: None,
-            });
-        }
-    }
-    changes.sort();
-    changes.dedup();
-    Ok(changes)
-}
-
-fn candidate_fingerprint(context: &GitContext, untracked: &[String]) -> Result<String, Error> {
-    let binary_diff = git_bytes(
-        &context.root,
-        &["diff", "--binary", &context.base_commit, "--"],
-    )?;
-    let mut hasher = Sha256::new();
-    hash_segment(&mut hasher, b"base", context.base_commit.as_bytes());
-    hash_segment(&mut hasher, b"head", context.head_commit.as_bytes());
-    hash_segment(&mut hasher, b"tracked_diff", &binary_diff);
-    for path in untracked {
-        hash_untracked_path(&mut hasher, &context.root, path)?;
-    }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
-}
-
-fn hash_untracked_path(hasher: &mut Sha256, git_root: &Path, path: &str) -> Result<(), Error> {
-    hash_segment(hasher, b"untracked_path", path.as_bytes());
-    let candidate = git_root.join(path);
-    let metadata = fs::symlink_metadata(&candidate).map_err(|error| {
-        Error::input(format!("failed to inspect untracked path {path}: {error}"))
-    })?;
-    if metadata.file_type().is_symlink() {
-        hash_segment(hasher, b"untracked_type", b"symlink");
-        let target = fs::read_link(&candidate).map_err(|error| {
-            Error::input(format!("failed to read untracked symlink {path}: {error}"))
-        })?;
-        hash_segment(
-            hasher,
-            b"untracked_symlink_target",
-            target.as_os_str().as_encoded_bytes(),
-        );
-    } else if metadata.is_file() {
-        hash_segment(hasher, b"untracked_type", b"file");
-        hash_segment(
-            hasher,
-            b"untracked_executable",
-            &[executable_bit(&metadata)],
-        );
-        let contents = fs::read(&candidate).map_err(|error| {
-            Error::input(format!("failed to read untracked file {path}: {error}"))
-        })?;
-        hash_segment(hasher, b"untracked_contents", &contents);
-    } else {
-        return Err(Error::input(format!(
-            "unsupported untracked filesystem entry {path}"
-        )));
-    }
-    Ok(())
-}
-
-fn hash_segment(hasher: &mut Sha256, label: &[u8], value: &[u8]) {
-    hasher.update((label.len() as u64).to_be_bytes());
-    hasher.update(label);
-    hasher.update((value.len() as u64).to_be_bytes());
-    hasher.update(value);
-}
-
-#[cfg(unix)]
-fn executable_bit(metadata: &fs::Metadata) -> u8 {
-    use std::os::unix::fs::PermissionsExt;
-    u8::from(metadata.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn executable_bit(_metadata: &fs::Metadata) -> u8 {
-    0
-}
-
-fn git_text(workdir: &Path, args: &[&str]) -> Result<String, Error> {
-    let bytes = git_bytes(workdir, args)?;
-    String::from_utf8(bytes).map_err(|_| Error::input("Git returned a non-UTF-8 identity or path"))
-}
-
-fn git_bytes(workdir: &Path, args: &[&str]) -> Result<Vec<u8>, Error> {
-    let args = args
-        .iter()
-        .map(|value| (*value).to_owned())
-        .collect::<Vec<_>>();
-    let output = run_command_structured(workdir, "git", &args, GIT_TIMEOUT)
-        .map_err(|error| Error::execution(error.to_string()))?;
-    if !output.status.success() {
-        return Err(Error::input(format!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(output.stdout)
-}
-
-fn parse_name_status(bytes: &[u8]) -> Result<Vec<ChangedPath>, Error> {
-    let tokens = nul_strings(bytes)?;
-    let mut index = 0;
-    let mut changes = Vec::new();
-    while let Some(token) = tokens.get(index) {
-        index += 1;
-        let (status, first_path) = status_and_path(token, &tokens, &mut index)?;
-        changes.push(parse_status(status, first_path, &tokens, &mut index)?);
-    }
-    Ok(changes)
-}
-
-fn status_and_path(
-    token: &str,
-    tokens: &[String],
-    index: &mut usize,
-) -> Result<(char, String), Error> {
-    let (status, inline_path) = token
-        .split_once('\t')
-        .map_or((token, None), |(status, path)| (status, Some(path)));
-    let code = status
-        .chars()
-        .next()
-        .ok_or_else(|| Error::input("Git emitted an empty change status"))?;
-    let path = if let Some(path) = inline_path {
-        path.to_owned()
-    } else {
-        let path = tokens
-            .get(*index)
-            .ok_or_else(|| Error::input("Git change status is missing a path"))?
-            .clone();
-        *index += 1;
-        path
-    };
-    Ok((code, path))
-}
-
-fn parse_status(
-    code: char,
-    first_path: String,
-    tokens: &[String],
-    index: &mut usize,
-) -> Result<ChangedPath, Error> {
-    match code {
-        'R' | 'C' => {
-            let destination = tokens
-                .get(*index)
-                .ok_or_else(|| Error::input("Git rename/copy status is missing a destination"))?;
-            *index += 1;
-            Ok(ChangedPath {
-                kind: if code == 'R' {
-                    ChangeKind::Renamed
-                } else {
-                    ChangeKind::Copied
-                },
-                path: normalize_git_path(destination)?,
-                previous_path: Some(normalize_git_path(&first_path)?),
-            })
-        }
-        'A' | 'M' | 'D' | 'T' => Ok(ChangedPath {
-            kind: simple_change_kind(code),
-            path: normalize_git_path(&first_path)?,
-            previous_path: None,
-        }),
-        other => Err(Error::input(format!(
-            "unsupported Git change status {other:?}; resolve the worktree state first"
-        ))),
-    }
-}
-
-fn simple_change_kind(code: char) -> ChangeKind {
-    match code {
-        'A' => ChangeKind::Added,
-        'D' => ChangeKind::Deleted,
-        'T' => ChangeKind::TypeChanged,
-        _ => ChangeKind::Modified,
-    }
-}
-
-fn nul_strings(bytes: &[u8]) -> Result<Vec<String>, Error> {
-    bytes
-        .split(|byte| *byte == 0)
-        .filter(|token| !token.is_empty())
-        .map(|token| {
-            String::from_utf8(token.to_vec())
-                .map_err(|_| Error::input("Git returned a non-UTF-8 repository path"))
-        })
-        .collect()
-}
-
-fn normalize_git_path(path: &str) -> Result<String, Error> {
-    if path.is_empty()
-        || path.contains('\\')
-        || path.starts_with('/')
-        || path.split('/').any(|part| part == "..")
-    {
-        return Err(Error::input(format!(
-            "Git returned an unsafe path: {path:?}"
-        )));
-    }
-    Ok(path.to_owned())
-}
-
-fn path_for_workspace(path: &str, prefix: &str) -> Option<String> {
-    if prefix.is_empty() {
-        return Some(path.to_owned());
-    }
-    path.strip_prefix(prefix)
-        .and_then(|path| path.strip_prefix('/'))
-        .map(str::to_owned)
-}
-
-fn change_for_workspace(change: ChangedPath, prefix: &str) -> Vec<ChangedPath> {
-    let current = path_for_workspace(&change.path, prefix);
-    let previous = change
-        .previous_path
-        .as_deref()
-        .and_then(|path| path_for_workspace(path, prefix));
-    match (change.kind, current, previous) {
-        (ChangeKind::Renamed | ChangeKind::Copied, Some(path), Some(previous_path)) => {
-            vec![ChangedPath {
-                kind: change.kind,
-                path,
-                previous_path: Some(previous_path),
-            }]
-        }
-        (ChangeKind::Renamed, Some(path), None) | (ChangeKind::Copied, Some(path), None) => {
-            vec![ChangedPath {
-                kind: ChangeKind::Added,
-                path,
-                previous_path: None,
-            }]
-        }
-        (ChangeKind::Renamed, None, Some(path)) => vec![ChangedPath {
-            kind: ChangeKind::Deleted,
-            path,
-            previous_path: None,
-        }],
-        (_, Some(path), _) => vec![ChangedPath {
-            kind: change.kind,
-            path,
-            previous_path: None,
-        }],
-        _ => Vec::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        ExecutionMode, effective_execution_mode_when, hash_untracked_path, parse_name_status,
-    };
-    use ayni_core::ChangeKind;
+    use super::git::{hash_untracked_path, parse_name_status};
+    use super::render::effective_execution_mode_when;
+    use super::{ExecutionMode, failed_signal_row, reconcile_signal_row};
+    use ayni_core::{ChangeKind, Language, RunContext, Scope, SelectedCheck, SignalKind};
     use sha2::{Digest, Sha256};
 
     #[test]
@@ -1089,5 +514,49 @@ mod tests {
         let mut hasher = Sha256::new();
         hash_untracked_path(&mut hasher, root, path).expect("hash");
         format!("{:x}", hasher.finalize())
+    }
+    #[test]
+    fn rejects_mismatched_adapter_row_as_completed_impact_evidence() {
+        let check = SelectedCheck::root(
+            Language::Rust,
+            String::from("crates/api"),
+            SignalKind::Test,
+            ayni_core::ImpactReason {
+                kind: ayni_core::ImpactReasonKind::ChangedFile,
+                detail: String::from("test"),
+            },
+            ayni_core::ImpactConfidence::High,
+        );
+        let context = RunContext {
+            repo_root: std::path::PathBuf::from("."),
+            target_root: std::path::PathBuf::from("."),
+            workdir: std::path::PathBuf::from("."),
+            policy: ayni_core::AyniPolicy::default(),
+            scope: Scope {
+                workspace_root: String::from("."),
+                path: Some(String::from("crates/api")),
+                package: None,
+                file: None,
+            },
+            execution: ayni_core::ExecutionResolution::direct(
+                "test",
+                std::path::PathBuf::from("."),
+                "test",
+                1,
+            ),
+            debug: false,
+        };
+        let mut row = failed_signal_row(
+            Language::Node,
+            SignalKind::Test,
+            &context,
+            String::from("faulty adapter"),
+        );
+        row.scope.file = Some(String::from("other.rs"));
+
+        let error = reconcile_signal_row(&check, &row, ".").expect_err("mismatched row");
+
+        assert!(error.contains("does not match its selected check"));
+        assert!(error.contains("language=rust"));
     }
 }

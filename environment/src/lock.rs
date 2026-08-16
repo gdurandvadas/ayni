@@ -314,7 +314,7 @@ mod tests {
             Architecture::Arm64
         );
         let error = architecture_from_name("riscv64").expect_err("unsupported architecture");
-        assert_eq!(error.code, 3);
+        assert_eq!(error.kind, crate::BackendErrorKind::Environment);
         assert!(
             error
                 .message

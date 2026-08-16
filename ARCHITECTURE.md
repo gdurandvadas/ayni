@@ -11,7 +11,7 @@ core  <-  adapters/common  <-  environment      <-  cli
 
 Changes flow outward: core defines contracts, `adapters/common` provides shared
 execution infrastructure (command runner with timeouts, path normalization,
-failure scaffolding, catalog execution), language adapters implement local
+failure scaffolding), language adapters implement local
 signal collection and ecosystem interpretation, `environment` consumes validated
 locks for OCI execution, and the CLI orchestrates user intent and output.
 

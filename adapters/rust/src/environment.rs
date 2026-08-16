@@ -1,5 +1,7 @@
 //! Read-only Rust environment discovery.
 
+use crate::catalog::CARGO_LLVM_COV_VERSION;
+
 use ayni_adapters_common::repository::{
     read_contained_string, read_optional_contained_bytes, read_optional_contained_string,
     repository_relative,
@@ -566,7 +568,7 @@ fn signal_tools(
     if request.requires_any(&[SignalKind::Coverage]) {
         tools.push(tool(
             "cargo-llvm-cov",
-            VersionRequirement::exact("0.8.5").map_err(plan_error)?,
+            VersionRequirement::exact(CARGO_LLVM_COV_VERSION).map_err(plan_error)?,
             "cargo-install",
             ToolInstallationScope::Isolated,
             vec![SignalKind::Coverage],
@@ -890,7 +892,7 @@ mod tests {
         target: &str,
         signals: Vec<SignalKind>,
     ) -> EnvironmentDiscoveryRequest {
-        EnvironmentDiscoveryRequest::new(
+        ayni_adapters_common::environment::environment_discovery_request(
             root.to_path_buf(),
             TargetIdentity::new(Language::Rust, target).expect("target"),
             signals,

@@ -1,3 +1,4 @@
+use crate::workspace::WorkspacePatterns;
 use ayni_adapters_common::discovery::{dedupe_and_sort_roots, discover_file_parent_roots};
 use ayni_adapters_common::paths::canonicalize_relative_posix;
 use ayni_core::{DiscoveredRoot, ProjectDiscovery, ProjectLayout};
@@ -9,45 +10,25 @@ pub fn discover_roots(repo_root: &Path) -> Vec<String> {
 }
 
 pub fn discover_project_roots(repo_root: &Path) -> ProjectDiscovery {
-    let mut roots = discover_file_parent_roots(repo_root, "package.json", |parts| {
-        parts.contains(&"node_modules")
-    });
+    let roots = dedupe_and_sort_roots(discover_file_parent_roots(
+        repo_root,
+        "package.json",
+        |parts| parts.contains(&"node_modules"),
+    ));
 
-    let mut workspace_patterns = Vec::new();
     let root_package_json = repo_root.join("package.json");
-    if root_package_json.is_file()
-        && let Ok(content) = fs::read_to_string(&root_package_json)
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&content)
-    {
-        if let Some(array) = value.get("workspaces").and_then(|v| v.as_array()) {
-            workspace_patterns.extend(
-                array
-                    .iter()
-                    .filter_map(|item| item.as_str())
-                    .map(String::from),
-            );
-        }
-        if let Some(array) = value
-            .get("workspaces")
-            .and_then(|v| v.get("packages"))
-            .and_then(|v| v.as_array())
-        {
-            workspace_patterns.extend(
-                array
-                    .iter()
-                    .filter_map(|item| item.as_str())
-                    .map(String::from),
-            );
-        }
-        for pattern in &workspace_patterns {
-            append_workspace_roots(repo_root, pattern, &mut roots);
-        }
-    }
-
-    let roots = dedupe_and_sort_roots(roots);
-    let controlled = !workspace_patterns.is_empty();
+    let controlled = fs::read_to_string(&root_package_json)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .and_then(|manifest| WorkspacePatterns::parse(&manifest, &root_package_json).ok())
+        .is_some_and(|patterns| !patterns.is_empty());
     let root_analyzable = if controlled {
-        root_has_source_files_outside_workspace_members(repo_root, &workspace_patterns)
+        let package_roots = roots
+            .iter()
+            .filter(|root| root.as_str() != ".")
+            .cloned()
+            .collect::<Vec<_>>();
+        root_has_source_files_outside_packages(repo_root, &package_roots)
     } else {
         root_package_json.is_file()
     };
@@ -70,32 +51,7 @@ pub fn discover_project_roots(repo_root: &Path) -> ProjectDiscovery {
     }
 }
 
-fn append_workspace_roots(repo_root: &Path, pattern: &str, roots: &mut Vec<String>) {
-    if !pattern.ends_with("/*") {
-        return;
-    }
-    let base = pattern.trim_end_matches("/*").trim_matches('/');
-    if base.is_empty() {
-        return;
-    }
-    let base_path = repo_root.join(base);
-    if let Ok(entries) = fs::read_dir(base_path) {
-        for entry in entries.flatten() {
-            let candidate_dir = entry.path();
-            if !candidate_dir.is_dir() {
-                continue;
-            }
-            if candidate_dir.join("package.json").is_file()
-                && let Ok(relative) = candidate_dir.strip_prefix(repo_root)
-            {
-                roots.push(canonicalize_relative_posix(&relative.to_string_lossy()));
-            }
-        }
-    }
-}
-
-fn root_has_source_files_outside_workspace_members(repo_root: &Path, patterns: &[String]) -> bool {
-    let workspace_bases = workspace_base_dirs(patterns);
+fn root_has_source_files_outside_packages(repo_root: &Path, package_roots: &[String]) -> bool {
     let mut stack = vec![repo_root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let entries = match fs::read_dir(&dir) {
@@ -105,7 +61,7 @@ fn root_has_source_files_outside_workspace_members(repo_root: &Path, patterns: &
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                if should_skip_dir(repo_root, &path, &workspace_bases) {
+                if should_skip_dir(repo_root, &path, package_roots) {
                     continue;
                 }
                 stack.push(path);
@@ -119,16 +75,7 @@ fn root_has_source_files_outside_workspace_members(repo_root: &Path, patterns: &
     false
 }
 
-fn workspace_base_dirs(patterns: &[String]) -> Vec<String> {
-    patterns
-        .iter()
-        .filter_map(|pattern| pattern.strip_suffix("/*"))
-        .map(|base| canonicalize_relative_posix(base.trim_matches('/')))
-        .filter(|base| base != ".")
-        .collect()
-}
-
-fn should_skip_dir(repo_root: &Path, path: &Path, workspace_bases: &[String]) -> bool {
+fn should_skip_dir(repo_root: &Path, path: &Path, package_roots: &[String]) -> bool {
     let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
         return false;
     };
@@ -142,9 +89,7 @@ fn should_skip_dir(repo_root: &Path, path: &Path, workspace_bases: &[String]) ->
         return false;
     };
     let text = canonicalize_relative_posix(&relative.to_string_lossy());
-    workspace_bases
-        .iter()
-        .any(|base| text == *base || text.starts_with(&format!("{base}/")))
+    package_roots.contains(&text)
 }
 
 fn is_node_source_file(path: &Path) -> bool {
@@ -178,6 +123,32 @@ mod tests {
         assert_eq!(
             discover_roots(dir.path()),
             vec![String::from("packages/api")]
+        );
+    }
+
+    #[test]
+    fn general_and_negated_workspace_patterns_keep_nonmembers_standalone() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"workspaces":["packages/**","!packages/excluded/**"]}"#,
+        )
+        .expect("root package");
+        for root in ["packages/api", "packages/excluded/app", "tools/standalone"] {
+            fs::create_dir_all(dir.path().join(root)).expect("package dir");
+            fs::write(dir.path().join(root).join("package.json"), "{}").expect("package manifest");
+        }
+
+        let discovery = discover_project_roots(dir.path());
+
+        assert_eq!(discovery.layout, ProjectLayout::ControlledMonorepo);
+        assert_eq!(
+            discover_roots(dir.path()),
+            vec![
+                String::from("packages/api"),
+                String::from("packages/excluded/app"),
+                String::from("tools/standalone"),
+            ]
         );
     }
 

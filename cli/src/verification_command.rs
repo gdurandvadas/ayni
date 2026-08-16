@@ -1,6 +1,6 @@
 //! Materialization of adapter-owned finding targets into public CLI commands.
 
-use crate::signal_kind_slug;
+use crate::analysis::signal_kind_slug;
 use ayni_core::{
     AdapterRegistry, FindingError, Language, RunArtifact, SignalKind, VerificationTarget,
 };

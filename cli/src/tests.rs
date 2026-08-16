@@ -1,4 +1,7 @@
-use super::{SIGNALS_ARTIFACT, VERIFY_SIGNALS_ARTIFACT, persist_artifact_at, serialize_artifact};
+use crate::analysis::{
+    SIGNALS_ARTIFACT, VERIFY_SIGNALS_ARTIFACT, build_analyze_targets, failed_signal_row,
+    persist_artifact_at, serialize_artifact,
+};
 
 #[test]
 fn verify_artifact_does_not_replace_analyze_artifact() {
@@ -29,7 +32,7 @@ roots = ["missing"]
     .expect("policy");
 
     let planning =
-        super::build_analyze_targets(dir.path(), &policy, None, None, Some(Language::Rust), false)
+        build_analyze_targets(dir.path(), &policy, None, None, Some(Language::Rust), false)
             .expect("planning");
 
     assert_eq!(planning.expected_targets, 1);
@@ -209,7 +212,7 @@ roots = ["."]
     )
     .expect("policy");
 
-    let planning = super::build_analyze_targets(
+    let planning = build_analyze_targets(
         dir.path(),
         &policy,
         None,
@@ -250,7 +253,7 @@ roots = ["."]
     )
     .expect("policy");
 
-    let planning = super::build_analyze_targets(
+    let planning = build_analyze_targets(
         dir.path(),
         &policy,
         None,
@@ -305,7 +308,7 @@ enabled = ["python"]
         debug: false,
     };
 
-    let row = super::failed_signal_row(
+    let row = failed_signal_row(
         Language::Python,
         SignalKind::Coverage,
         &context,
