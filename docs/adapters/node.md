@@ -2,30 +2,30 @@
 
 ## Installation
 
-Node roots are discovered from `package.json`, excluding `node_modules`; a
-root workspace declaration also discovers direct `/*` workspace members.
-Configure the roots in `[node].roots`. For each root, package-manager
-resolution prefers `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`,
-`bun.lock`/`bun.lockb`, the `packageManager` field, then an ancestor workspace
-package manifest; otherwise it uses npm-compatible behavior.
-
-Node and the selected package manager are user-owned prerequisites. When
-installation is applied, Ayni adds catalog packages as root-local development
-dependencies using that resolved manager. Catalog status inspection during
-listing and `ayni install --check` is read-only for that manager; normal applied
-setup may run the resolved manager's dependency preparation before adding
-enabled requirements.
+Configure roots in `.ayni.toml` and provide the documented runtime, package
+manager, and signal tools when using `--host`. `ayni env show` discovers Node
+requirements, and `ayni env lock` resolves runtime/package-manager ranges using
+`mise` candidates while reading exact project-tool versions from
+`package-lock.json`. Locking does not install dependencies or modify the
+checkout. For npm with `package-lock.json`, `env build` stages only locked
+manifests, runs `npm ci --ignore-scripts`, and stores `node_modules` as an image
+seed. Shell, run, managed check, and managed focused verification copy the seed
+below `.ayni/environment/`, mount it over the target, and run
+`npm rebuild --offline` with the checkout read-only. npm `file:` and `link:`
+dependencies are rejected because their referenced content is not part of the
+staged input contract. pnpm, Yarn, and Bun remain unsupported for managed
+execution; use `--host` for those package managers.
 
 ## Signal Coverage
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | `vitest` | pinned to 3.2.4 when Ayni installs it |
-| `coverage` | `vitest`; `@vitest/coverage-v8` | each package pinned to 3.2.4 when Ayni installs it |
-| `size` | built-in Node source scan | no version enforced |
-| `complexity` | `eslint`; `@stylistic/eslint-plugin` | no version enforced |
-| `deps` | package and workspace manifest graph | no version enforced |
-| `mutation` | `@stryker-mutator/core` (opt-in) | no version enforced |
+| `test` | `vitest` | managed: exact project version from `package-lock.json`; host: no version enforced |
+| `coverage` | `vitest`; `@vitest/coverage-v8` | managed: exact project versions from `package-lock.json`; host: no version enforced |
+| `size` | built-in JavaScript/TypeScript source scan | no external tool |
+| `complexity` | `eslint`; `@typescript-eslint/parser` | managed: exact project versions from `package-lock.json`; host: no version enforced |
+| `deps` | built-in package and workspace manifest graph | no external tool |
+| `mutation` | `@stryker-mutator/core` (opt-in) | managed: exact project version from `package-lock.json`; host: no version enforced |
 
 ## Focused verification
 
@@ -47,9 +47,22 @@ path. `--name` is test-only, and `--file` cannot be combined with `--package`.
 Unsupported or ambiguous selectors are rejected before a tool runs.
 
 Verification commands carry their originating contract and target, for example:
-`ayni verify test --config './.ayni.toml' --language node --root 'apps/web'
+`ayni verify test --host --config './.ayni.toml' --language node --root 'apps/web'
 --file 'src/example.test.ts' --name 'renders'`. Use only the selectors marked
 above; copy the exact command in an artifact finding rather than synthesizing one.
+
+## Impact planning
+
+`impact show` and `impact run` resolve the governing Node workspace, map changed
+JavaScript and TypeScript files to the deepest owning package, then include
+transitive reverse dependencies even when configured roots name individual
+workspace members. Only manifests matched by the workspace patterns enter the
+graph. npm, pnpm, Yarn, and Bun lock changes broaden the plan, and package-
+scoped dependency execution resolves the governing workspace. Tests and dependency checks use package scope;
+coverage and mutation broaden to the configured root; size and complexity use
+exact changed-file scope when safe. Package manifests, npm lockfiles, common
+JSON/YAML/TOML and `*.config.*` inputs, environment files, and ambiguous
+ownership broaden every enabled signal and record an uncertainty.
 
 ## Contract
 

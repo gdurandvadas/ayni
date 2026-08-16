@@ -4,19 +4,20 @@ Thanks for helping improve Ayni.
 
 ## Scope
 
-The open-source version currently supports:
+The open-source CLI supports:
 
-- `install` (list required tools; `install --apply` runs catalog installers)
-- `analyze`
-- `verify` (focused evidence for one of the six signals)
-- `contract display` and `artifact compare`
-- `agents sync` (explicitly create or refresh Ayni's marked `AGENTS.md` section)
+- managed and explicit host execution for `check`, focused `verify`, and
+  `impact run`
+- the lock-driven `env show`, `env lock`, `env doctor`, `env build`, `env shell`,
+  and `env run` lifecycle
+- `contract show`, `contract validate`, and `results compare`
+- `agents sync` to create or refresh only Ayni's marked `AGENTS.md` section
 
 Out of scope:
 
-- Managed service workflows
-- Managed product features
-- External run storage
+- hosted service workflows and external run storage
+- forge-specific GitHub, GitLab, or Bitbucket integration
+- implicit remote Git fetches or baseline selection
 
 ## Development
 
@@ -38,9 +39,9 @@ cargo run -p ayni-cli -- verify test --language rust --package ayni-cli
 ```
 
 Do not use focused evidence as repository completion evidence. An unscoped
-`cargo run -p ayni-cli -- analyze --config ./.ayni.toml` is the sole writer of
-`.ayni/last/signals.json` and belongs at the caller's final completion boundary.
-Focused runs write only `.ayni/verify/last/signals.json`. Re-run the exact
+`cargo run -p ayni-cli -- check --config ./.ayni.toml` is the repository gate
+and sole writer of `.ayni/last/signals.json`; use `--host` only as the explicit
+escape hatch. Focused runs write only `.ayni/verify/last/signals.json`. Re-run the exact
 `verification.command` attached to a finding when one is available.
 
 ## Documentation
@@ -72,20 +73,23 @@ For language adapter implementation guidance, see
 ## Architecture
 
 - CLI handles arguments, orchestration, and local output.
-- Core owns analysis policy, signal types, and adapter contracts.
-- Adapters own language-specific local tool execution.
-- Default analysis runs from the repository checkout and writes local artifacts.
-- No reverse dependencies are allowed: `core` <- `adapters` <- `cli`.
+- Core owns policy, signal, environment-plan, lock, impact, and adapter contracts.
+- `adapters/common` owns shared safe execution and filesystem plumbing.
+- Language adapters own ecosystem-specific discovery, version resolution,
+  dependency preparation, tool execution, and impact mapping.
+- The environment crate consumes validated locks and preparation plans; it does
+  not interpret language manifests.
+- Dependencies point inward along the flows documented in `ARCHITECTURE.md`.
 
 ## Pull Request Checklist
 
 - Tests added or updated when behavior changes.
 - No managed service dependency introduced.
 - Local artifact behavior preserved.
-- Repository completion uses only unscoped `analyze`; focused verification has
-  not replaced `.ayni/last/signals.json`.
+- Repository completion uses only unscoped `check`; focused or impact evidence
+  has not replaced `.ayni/last/signals.json`.
 - README or docs updated if behavior changed.
-- `install` does not modify `AGENTS.md`; `ayni agents sync` is idempotent and preserves user content outside Ayni's marked block.
+- `ayni agents sync` is idempotent and preserves user content outside Ayni's marked block.
 - `cargo fmt`, `cargo clippy`, `cargo test`, and `cargo check` pass.
 
 ## Licensing

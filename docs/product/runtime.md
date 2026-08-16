@@ -9,7 +9,7 @@ Ayni discovers language roots separately from execution context.
 
 - `target_root` is the repository root or leaf package being analyzed.
 - `resolved_from` is the file or ancestor directory that determined the runner.
-- `install_cwd` is where setup commands add or validate tools.
+- `install_cwd` is the package-manager or workspace root used for environment preparation.
 - `exec_cwd` is where analysis commands run.
 
 Resolution must be ancestry-aware. A leaf package may execute through a manager
@@ -45,72 +45,53 @@ Every analyzed root records:
 - Kotlin resolves Gradle from the configured root, preferring `./gradlew`, then
   `gradlew.bat`, then `gradle`.
 
-## Install Validation
+## Environment provisioning status
 
-`ayni install --apply` must prove the foundation is usable before succeeding.
-For every enabled detected language/root it validates:
+The `env` command vocabulary is active. `env show`
+builds a read-only, deterministic environment plan for configured Rust, Node,
+Go, uv Python, and Gradle Kotlin targets. `env lock` resolves exact requirements
+and atomically writes schema `0.3.0`, a versioned, fingerprinted `.ayni.lock`;
+unchanged inputs produce byte-stable output across equivalent checkout directory
+names, and failed resolution preserves the previous lock. Adapter-owned
+resolvers interpret each ecosystem's selectors. Project tools must already be
+present in the native npm/uv/Gradle inputs, while isolated Cargo and Go tools
+are provisioned from exact provider coordinates. A lock contains a validated immutable OCI base
+reference and SHA-256 digest. The default release-base digest is resolved with
+Docker Buildx; `env lock --base <reference>@sha256:<digest>` accepts an explicit
+base. `env doctor`, `env build`, `env shell`, and `env run` use Docker first and
+compatible Podman second. They derive generic mise input from the validated
+lock and image identity from both the lock fingerprint and canonical dependency
+preparation digest; they never implicitly create a lock or image. Adapters additionally provide structured Cargo, npm, Go module, uv, and Gradle
+preparation commands over lock-digested inputs; the temporary build context
+contains only those allowlisted manifests, locks, wrapper files, and generated
+scaffolds—never application source or credentials. Image labels are checked
+before reuse and launch.
 
-- execution resolution exists
-- required catalog tools are invocable through the resolved setup context
-- generated artifact paths under `.ayni/work/<language>/<root>/` are writable
+Launch mounts the canonical checkout at `/workspace`, selects one locked target,
+uses the invoking identity, disables mise auto-install and networking, mounts a
+writable generated home, and applies read-only-root and privilege restrictions.
+Interactive `env shell` and arbitrary `env run` intentionally mount the checkout
+read-write so their declared development commands can edit it. Managed `check`,
+`verify`, and `impact run` instead mount repository source read-only and expose
+only generated `.ayni/` state as writable. Multi-target shell/run requests
+require `--language` and `--root`.
 
-Set `[<language>.foundation].validate_install = false` only when a repository
-intentionally wants scaffolding or installation without validation.
+`env build` runs adapter-owned preparation plans only in the isolated staged
+context. Managed launch copies seeded npm dependencies, creates fresh
+non-relocatable uv environments, and reuses prepared Cargo, Go, uv, and Gradle
+caches from fingerprinted state below `.ayni/environment/`. Outputs are mounted
+over their repository locations with the checkout read-only. Per-target runtime
+and offline variables—including Go cache/toolchain controls, uv frozen state,
+and Gradle/JDK activation—are injected only into that target's collector
+process. Normal managed launch, check, and focused verification remain
+network-disabled.
 
-Catalog execution is neutral shared infrastructure: core defines catalog
-contracts, the common runtime runs declarative entries, and each adapter owns
-language-specific status, preparation, and installation behavior. In
-particular, Node selects its resolved npm/pnpm/Yarn/Bun manager and Python
-selects its resolved manager (with `uv tool` where applicable). Applied install
-may prepare those local environments before installing missing or outdated
-enabled catalog requirements. Catalog status
-inspection during listing and readiness checking is read-only: it does not
-prepare a manager or install a package. Normal `install` may still perform its
-documented policy and `.gitignore` scaffolding; `install --check` writes no
-repository files.
-
-## Read-only Install Readiness
-
-`ayni install --check` evaluates an existing repository setup without changing
-it. Unlike normal `install` and `install --apply`, check mode requires an
-existing valid `.ayni.toml` and never scaffolds policy, edits `.gitignore`,
-prepares a package manager, installs a tool, creates validation directories, or
-writes an artifact. It uses the same adapter-owned configured-target detection,
-execution resolution, catalog selection, and requirement status checks used by
-the install runtime. Repeated `--language` selectors filter the enabled,
-configured policy targets; without selectors every enabled target is checked.
-
-Human-readable output is the default. `--output json` is valid only with
-`--check` and emits exactly one pretty-printed JSON document on stdout, ending
-in a newline. Diagnostics for policy loading, validation, or internal command
-failure are written to stderr, with no JSON document on stdout. Check mode
-conflicts with `--apply`.
-
-The JSON readiness contract is versioned independently from signal artifacts:
-
-- `readiness_version`: currently `0.1.0`.
-- `state`: `ready` or `not_ready`.
-- `targets`: selected configured targets in validated policy order. Each entry
-  contains `language`, `configured_root`, `detection` (`detected` and optional
-  `reason`), nullable `execution`, and `requirements`.
-- `execution`: when resolved, the adapter-owned `runner`, `resolved_from`,
-  `kind`, `source`, `confidence`, `ambiguous`, `install_cwd`, and `exec_cwd`.
-- `requirements`: enabled catalog entries in adapter catalog order, with
-  `name`, ordered `signals`, and `status` (`current`, `missing`, or `outdated`).
-- `issues`: an ordered array following target and catalog traversal. Each issue
-  has `language`, `configured_root`, `stage` (`detection`, `resolution`, or
-  `requirement`), `message`, and an optional `requirement` name.
-
-The state is `not_ready`, and the process exits non-zero, when any configured
-target is undetected or unresolved or any enabled requirement is missing or
-outdated. `ready` exits zero. Paths in detection and resolution details reflect
-the supplied repository root, so callers that need byte-identical output across
-invocations should supply the same root spelling.
-
-Catalog status, preparation, and installation failures are structured with the
-operation, command, working directory, exit status when available, and concise
-diagnostics. They are reported against the affected language/root/requirement;
-they are not silently converted to a missing tool.
+Managed `check` and focused `verify` are available for locked Rust, npm Node,
+Go modules, uv Python projects, and locked Gradle Kotlin builds, preserving
+inner quality exit codes. pnpm, Yarn, Bun, non-uv Python managers, and unsupported
+Gradle build shapes fail explicitly. `--host` retains adapter-owned runner
+resolution as an escape hatch; it does not install tools or mutate repository
+dependencies. No operation reuses removed `install` behavior.
 
 ## Failure Categories
 
@@ -133,20 +114,18 @@ captures stdout and stderr concurrently, forwards complete output lines while
 the command is still running for live progress, and on timeout kills and reaps
 the child before returning typed timeout diagnostics with captured output.
 
-## Config Materialization
-
-Generated config should stay small. Ayni materializes foundation settings only
-when behavior would otherwise be surprising, such as workspace-ancestor runner
-resolution or explicit validation opt-out.
-
 ## Partial Success
 
 Ayni should report the full repository state whenever possible. A failed tool
 row should not suppress valid rows from other roots or languages.
 
-`ayni analyze` is repository-only: it plans and evaluates every configured
-language root and is the sole writer of `.ayni/last/signals.json`. Use
-`ayni verify <signal>` for focused evidence for one of the six canonical
-signals. Its adapter-owned selectors are validated before tool invocation, and
+`ayni check` is repository-only: it plans and evaluates every configured
+language root and is the sole writer of `.ayni/last/signals.json`; `--host`
+changes execution location, not completion semantics. Use
+`ayni verify <signal>` for managed focused evidence, or add `--host` as the
+explicit escape hatch, for one of the six canonical signals. Its adapter-owned selectors are validated before tool invocation, and
 its requested-scope evidence is written separately to
-`.ayni/verify/last/signals.json`.
+`.ayni/verify/last/signals.json`. Terminal and Markdown run reports never append
+rerun commands; commands remain available in structured artifacts. Use
+`ayni verify list` for the last repository artifact or pass
+`--artifact .ayni/verify/last/signals.json` for focused evidence.

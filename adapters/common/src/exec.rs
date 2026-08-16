@@ -4,6 +4,7 @@
 //! Gradle daemon, a wedged test run) can never block an analyze run forever.
 
 use ayni_core::RunContext;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,10 @@ use std::time::{Duration, Instant};
 
 /// How often the runner checks a live child when no output arrives.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// Maximum time spent draining child pipes after the direct process exits or
+/// is terminated. Descendants must not be able to retain a pipe indefinitely.
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Fallback timeout for invocations that have no `RunContext` (and therefore
 /// no policy) available. Matches the `execution.tool_timeout_seconds` default.
@@ -130,16 +135,40 @@ pub fn run_command_streaming_structured(
     program: &str,
     args: &[String],
     timeout: Duration,
+    on_line: impl FnMut(&str),
+) -> ExecutionResult {
+    run_command_streaming_structured_with_environment(
+        workdir,
+        program,
+        args,
+        timeout,
+        &BTreeMap::new(),
+        on_line,
+    )
+}
+
+fn run_command_streaming_structured_with_environment(
+    workdir: &Path,
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+    environment: &BTreeMap<String, String>,
     mut on_line: impl FnMut(&str),
 ) -> ExecutionResult {
     let command_text = format_command(program, args);
     let mut command = Command::new(program);
     command
         .args(args.iter().map(String::as_str))
+        .envs(environment)
         .current_dir(workdir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = command.spawn().map_err(|error| {
         Box::new(ExecutionError {
             kind: ExecutionErrorKind::Spawn,
@@ -189,7 +218,7 @@ pub fn run_command_streaming_structured(
 
     if let Some((kind, mut detail)) = execution_failure {
         let cleanup_status = terminate_and_reap(&mut child, &mut detail);
-        capture.drain_to_end(&receiver, &mut on_line, &mut detail);
+        capture.drain_to_end(&receiver, &mut on_line, &mut detail, OUTPUT_DRAIN_TIMEOUT);
         return Err(Box::new(ExecutionError {
             kind,
             command: command_text,
@@ -203,7 +232,7 @@ pub fn run_command_streaming_structured(
     }
 
     let mut detail = String::new();
-    capture.drain_to_end(&receiver, &mut on_line, &mut detail);
+    capture.drain_to_end(&receiver, &mut on_line, &mut detail, OUTPUT_DRAIN_TIMEOUT);
     if !detail.is_empty() {
         return Err(Box::new(ExecutionError {
             kind: ExecutionErrorKind::Wait,
@@ -260,11 +289,12 @@ pub fn run_command_for_context_streaming_structured(
     args: &[String],
     on_line: impl FnMut(&str),
 ) -> ExecutionResult {
-    let output = run_command_streaming_structured(
+    let output = run_command_streaming_structured_with_environment(
         &context.execution.exec_cwd,
         program,
         args,
         context_timeout(context),
+        &context.execution.environment,
         on_line,
     )?;
     debug_output(context, program, args, &output);
@@ -430,9 +460,16 @@ impl Capture {
         receiver: &mpsc::Receiver<ReaderEvent>,
         on_line: &mut impl FnMut(&str),
         detail: &mut String,
+        timeout: Duration,
     ) {
+        let started = Instant::now();
         while !self.stdout.done || !self.stderr.done {
-            match receiver.recv() {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                append_detail(detail, "timed out while draining child output pipes");
+                break;
+            }
+            match receiver.recv_timeout(remaining) {
                 Ok(event) => {
                     let mut failure = None;
                     self.handle(event, on_line, &mut failure);
@@ -440,8 +477,12 @@ impl Capture {
                         append_detail(detail, &error);
                     }
                 }
-                Err(error) => {
-                    append_detail(detail, &format!("output readers disconnected: {error}"));
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    append_detail(detail, "timed out while draining child output pipes");
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    append_detail(detail, "output readers disconnected");
                     break;
                 }
             }
@@ -470,6 +511,24 @@ fn drain_available(
 }
 
 fn terminate_and_reap(child: &mut Child, detail: &mut String) -> Option<ExitStatus> {
+    #[cfg(unix)]
+    {
+        let process_group = -(i64::from(child.id()) as libc::pid_t);
+        // SAFETY: the spawned child is placed in a new process group whose ID
+        // equals its PID. `kill` receives that bounded process-group ID and a
+        // constant signal; no pointers or borrowed memory cross the FFI call.
+        let result = unsafe { libc::kill(process_group, libc::SIGKILL) };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                append_detail(
+                    detail,
+                    &format!("failed to kill child process group: {error}"),
+                );
+            }
+        }
+    }
+    #[cfg(not(unix))]
     if let Err(error) = child.kill() {
         append_detail(detail, &format!("failed to kill child: {error}"));
     }
@@ -492,14 +551,19 @@ fn append_detail(detail: &mut String, addition: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecutionErrorKind, format_command, run_command, run_command_streaming,
-        run_command_streaming_structured, run_command_structured,
+        ExecutionErrorKind, format_command, run_command, run_command_for_context_structured,
+        run_command_streaming, run_command_streaming_structured, run_command_structured,
     };
+    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use std::fs;
     use std::io::{self, Write};
     use std::path::Path;
     use std::process;
+    #[cfg(unix)]
+    use std::process::Command;
     use std::time::Duration;
+    #[cfg(unix)]
+    use std::time::Instant;
 
     fn test_child(test_name: &str, extra: &[String]) -> (String, Vec<String>) {
         let executable = std::env::current_exe().expect("test executable path");
@@ -520,6 +584,30 @@ mod tests {
             format_command("cargo", &[String::from("test")]),
             "cargo test"
         );
+    }
+
+    #[test]
+    fn context_environment_is_applied_only_to_the_child() {
+        const NAME: &str = "AYNI_TEST_CONTEXT_ENVIRONMENT";
+        let cwd = std::env::current_dir().expect("current directory");
+        let mut execution = ExecutionResolution::direct("runner", cwd.clone(), "test", 100);
+        execution
+            .environment
+            .insert(NAME.to_owned(), "target-value".to_owned());
+        let context = RunContext {
+            repo_root: cwd.clone(),
+            target_root: cwd.clone(),
+            workdir: cwd,
+            policy: AyniPolicy::default(),
+            scope: Scope::default(),
+            execution,
+            debug: false,
+        };
+        let (program, args) = test_child("fixture_prints_context_environment", &[]);
+        let output = run_command_for_context_structured(&context, &program, &args)
+            .expect("context command runs");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("target-value"));
+        assert!(std::env::var_os(NAME).is_none());
     }
 
     #[test]
@@ -559,6 +647,21 @@ mod tests {
         assert!(
             error.status.is_some_and(|status| !status.success()),
             "killed child must be reaped with an unsuccessful status"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_kills_descendants_that_retain_output_pipes() {
+        let (program, args) = test_child("fixture_spawns_descendant", &[]);
+        let started = Instant::now();
+        let error =
+            run_command_structured(Path::new("."), &program, &args, Duration::from_millis(100))
+                .expect_err("process tree must time out");
+        assert_eq!(error.kind, ExecutionErrorKind::Timeout);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "surviving descendant retained an output pipe"
         );
     }
 
@@ -661,6 +764,31 @@ mod tests {
         while !Path::new(&release).exists() {
             std::thread::yield_now();
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore]
+    #[allow(clippy::zombie_processes)]
+    fn fixture_spawns_descendant() {
+        let (program, args) = test_child("fixture_never_exits", &[]);
+        let _descendant = Command::new(program)
+            .args(args)
+            .spawn()
+            .expect("spawn descendant");
+        loop {
+            std::thread::park();
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn fixture_prints_context_environment() {
+        print!(
+            "{}",
+            std::env::var("AYNI_TEST_CONTEXT_ENVIRONMENT").unwrap_or_default()
+        );
+        io::stdout().flush().expect("flush fixture stdout");
     }
 
     #[test]

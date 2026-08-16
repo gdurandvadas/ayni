@@ -28,7 +28,7 @@ def artifact(*, policy_fail=False):
     return {
         "schema_version": "0.3.0",
         "repository_root": LEXICAL_ROOT,
-        "invocation": {"command": "analyze", "languages": ["python"]},
+        "invocation": {"command": "check", "languages": ["python"]},
         "completion": {
             "scope": "repository",
             "state": "complete",

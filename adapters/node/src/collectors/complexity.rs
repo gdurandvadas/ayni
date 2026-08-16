@@ -21,6 +21,13 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     })?;
 
     let target = complexity_target(context);
+    // Do not inherit a repository rule (or its absence): complexity policy is
+    // Ayni-owned evidence. ESLint's flat-config lookup is disabled and the
+    // policy warn threshold is injected as an error rule so every function at
+    // or above that boundary is reported. A cataloged TypeScript parser is
+    // selected explicitly so JavaScript and TypeScript evidence do not depend
+    // on repository ESLint configuration.
+    let rule = format!(r#"complexity: ["error", {}]"#, cyclomatic.warn);
     let output = run_tool(
         context,
         "eslint",
@@ -28,6 +35,11 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             &target,
             "--format",
             "json",
+            "--no-config-lookup",
+            "--rule",
+            &rule,
+            "--parser",
+            "@typescript-eslint/parser",
             "--ext",
             ".ts,.tsx,.js,.jsx,.mjs,.cjs",
             "--no-error-on-unmatched-pattern",
@@ -50,6 +62,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     let mut max_fn_cognitive = None::<f64>;
     let mut warn_count = 0_u64;
     let mut fail_count = 0_u64;
+    let mut measurement_error = false;
 
     for item in entries {
         let file = item
@@ -66,6 +79,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
                 .and_then(JsonValue::as_str)
                 .unwrap_or_default();
             if !rule_id.contains("complexity") {
+                // Parser/configuration errors do not have the complexity rule
+                // id. They mean ESLint could not produce policy evidence.
+                measurement_error = true;
                 continue;
             }
             let raw_message = message
@@ -125,12 +141,22 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         );
     }
 
-    let pass = output.status.success() && fail_count == 0 && !report_missing;
-    let failure = report_missing.then(|| {
+    // ESLint exits non-zero for the injected warn-boundary rule, so its exit
+    // status is not the policy verdict. It remains authoritative for output
+    // that cannot be attributed to complexity (parse/configuration failures).
+    let unmeasurable = report_missing || measurement_error;
+    let pass = fail_count == 0 && !unmeasurable;
+    let failure = unmeasurable.then(|| {
         setup_failure(
             context,
-            String::from("eslint . --format json"),
-            "eslint produced no parseable JSON report; complexity cannot be measured",
+            String::from(
+                "eslint --no-config-lookup --parser @typescript-eslint/parser --format json --rule complexity",
+            ),
+            if report_missing {
+                "eslint produced no parseable JSON report; complexity cannot be measured"
+            } else {
+                "eslint reported a parse or configuration error; complexity cannot be measured"
+            },
         )
     });
     Ok(SignalRow {

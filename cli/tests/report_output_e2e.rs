@@ -11,7 +11,8 @@ fn ayni() -> Command {
 fn run_analyze(fixture: &Fixture, args: &[&str]) -> Output {
     ayni()
         .args([
-            "analyze",
+            "check",
+            "--host",
             "--config",
             fixture.config.to_str().expect("config path"),
         ])
@@ -119,7 +120,10 @@ fn json_selectors_emit_only_json_and_match_persisted_artifacts() {
     let fixture = Fixture::new(true, false);
     let mut outputs = Vec::new();
 
-    for args in [["--json"].as_slice(), ["--output", "json"].as_slice()] {
+    for args in [
+        ["--output", "json"].as_slice(),
+        ["--output", "json"].as_slice(),
+    ] {
         fixture.clear_artifact();
         let output = run_analyze(&fixture, args);
         assert!(
@@ -158,9 +162,11 @@ fn json_selectors_emit_only_json_and_match_persisted_artifacts() {
 }
 
 #[test]
-fn conflicting_json_and_markdown_selectors_fail_before_analysis() {
+fn duplicate_output_selectors_fail_before_check() {
     let output = ayni()
-        .args(["analyze", "--json", "--output", "md"])
+        .args([
+            "check", "--host", "--output", "json", "--output", "markdown",
+        ])
         .output()
         .expect("launch ayni binary");
 
@@ -168,7 +174,7 @@ fn conflicting_json_and_markdown_selectors_fail_before_analysis() {
     assert!(String::from_utf8_lossy(&output.stdout).is_empty());
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("--json cannot be combined with --output md; use --output json or --json")
+            .contains("the argument '--output <OUTPUT>' cannot be used multiple times")
     );
 }
 
@@ -176,7 +182,7 @@ fn conflicting_json_and_markdown_selectors_fail_before_analysis() {
 fn analyze_rejects_focused_scope_selectors() {
     for selector in ["--file", "--package", "--language"] {
         let output = ayni()
-            .args(["analyze", selector, "value"])
+            .args(["check", "--host", selector, "value"])
             .output()
             .expect("launch ayni binary");
 
@@ -195,7 +201,7 @@ fn analyze_rejects_focused_scope_selectors() {
 #[test]
 fn markdown_reports_real_local_command_failures_to_stdout_and_stderr() {
     let fixture = Fixture::new(false, false);
-    let output = run_analyze(&fixture, &["--output", "md"]);
+    let output = run_analyze(&fixture, &["--output", "markdown"]);
     assert!(!output.status.success());
 
     let stdout = String::from_utf8(output.stdout).expect("UTF-8 Markdown stdout");
@@ -223,7 +229,7 @@ fn markdown_reports_real_local_command_failures_to_stdout_and_stderr() {
 #[test]
 fn successful_markdown_omits_failures_and_keeps_offenders() {
     let fixture = Fixture::new(true, true);
-    let output = run_analyze(&fixture, &["--output", "md"]);
+    let output = run_analyze(&fixture, &["--output", "markdown"]);
     assert!(
         output.status.success(),
         "stderr: {}",

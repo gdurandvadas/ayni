@@ -8,9 +8,9 @@ rules](../product/runtime.md).
 
 Keep the dependency flow `core <- adapters/common <- adapters/<lang> <- cli`.
 `core` owns signal and policy contracts; `adapters/common` owns shared command,
-path, discovery, parsing, and neutral catalog execution infrastructure; a
-language adapter owns local detection, runner resolution, tool invocation,
-parsing, normalization, and any adapter-managed catalog behavior; and the CLI
+path, discovery, and parsing infrastructure; a language adapter owns local
+detection, runner resolution, tool invocation, parsing, normalization, and
+declarative catalog metadata; and the CLI
 owns orchestration and presentation.
 
 An adapter must detect language presence, declare tool requirements, collect
@@ -26,8 +26,13 @@ Implement `LanguageAdapter` and `SignalCollector` from `ayni-core`.
 - `detect(root) -> DetectResult` reports language presence and confidence.
 - `resolve_execution(repo_root, root) -> ExecutionResolution` resolves the
   ancestry-aware runner and setup context.
-- `catalog() -> &[CatalogEntry]` declares install requirements.
+- `catalog() -> &[CatalogEntry]` declares external signal tool requirements.
 - `collector() -> &dyn SignalCollector` provides typed collection.
+- `environment_capability()` discovers runtime, package-manager, tool, and lock
+  requirements for one target.
+- `environment_resolution_capability()` resolves exact lock values.
+- `dependency_preparation_capability()` plans native locked dependency warming.
+- `impact_capability()` maps local Git changes conservatively to checks.
 
 Collectors return `SignalRow` values with a canonical `SignalKind`, language,
 typed `result`, `budget`, and `offenders`, plus deterministic `pass`
@@ -52,6 +57,11 @@ src/
 ├── lib.rs
 ├── adapter.rs
 ├── catalog.rs
+├── discovery.rs
+├── environment.rs
+├── environment_resolution.rs
+├── preparation.rs
+├── impact.rs
 └── collectors/
     ├── mod.rs
     ├── test.rs
@@ -61,6 +71,11 @@ src/
     ├── deps.rs
     └── mutation.rs
 ```
+
+Keep implementation modules private and re-export only the adapter type and any
+explicitly supported catalog API from `lib.rs`. Language-specific helper modules
+such as `package_manager.rs` or `workspace.rs` are expected when ecosystem
+semantics require them.
 
 Each collector module owns one signal kind. For coverage, populate
 `CoverageResult.percent` with the headline 0–100 percentage when available;
@@ -72,15 +87,14 @@ for missing evidence. Follow the
 
 ## Catalog conventions
 
-Every external tool invoked for collection is a `CatalogEntry`; the catalog is
-the source of truth for `ayni install`. Include a stable tool name, a typed
-installer (`Cargo`, `GoInstall`, `Bundled`, `Custom`, `AdapterManaged`, or the
-language-appropriate alternative), an optional check command or version probe,
-the `for_signals` mapping, and `opt_in` for expensive checks such as mutation.
-The common catalog runtime is deliberately neutral: an adapter-managed entry
-must be handled by its owning adapter runtime, including its manager selection,
-status, preparation, and apply behavior. List and `install --check` status
-paths must be read-only; preparation belongs only to normal applied setup.
+Every external tool invoked directly for collection is a `CatalogEntry`.
+Built-in source scans are not tools. Include a stable executable or project-tool
+identity, the exact `for_signals` mapping, and `opt_in` for expensive checks such
+as mutation. Reuse catalog mappings when selecting environment signal tools;
+do not maintain an independent list that can drift. Catalogs are declarative:
+they do not probe status, install dependencies, or mutate a checkout.
+Environment capabilities add version, provider, scope, platform, and native-lock
+semantics, while host prerequisites remain user-owned.
 
 ## Policy conventions
 
@@ -93,7 +107,8 @@ collector's required threshold is missing.
 ## Documentation format
 
 The adapter user page must use this ordered H2 outline: Installation; Signal
-Coverage; Focused verification; Contract; Configuration Example. State roots and detection,
+Coverage; Focused verification; Impact planning; Contract; Configuration
+Example. State roots and detection,
 language-specific package-manager or build-system resolution, each tool's
 required/optional ownership, and only versions enforced or selected by code;
 write “no version enforced” otherwise. Map all six canonical signals to their
@@ -103,9 +118,7 @@ requested-scope evidence is written to `.ayni/verify/last/signals.json` rather
 than the repository completion artifact. Document policy fields, command
 overrides, and missing-policy behavior with a language-specific TOML example.
 
-Catalog-managed dependencies are installed only when their related check is
-enabled and installation is applied. Runtime and package-manager prerequisites
-without catalog installers remain user-owned. Mark mutation tooling optional
+Catalog entries identify signal dependencies. Mark mutation tooling optional
 when its catalog entry is `opt_in`.
 
 ## Prohibited patterns
@@ -116,15 +129,15 @@ Do not:
 - emit free-form untyped top-level payloads;
 - parse source directly when an available tool supplies the metric;
 - couple adapter internals to CLI crates; or
-- bypass the catalog installation flow.
+- make catalog metadata execute or mutate the checkout.
 
 ## Validation checklist
 
 Before merging an adapter:
 
-1. `ayni install` installs or validates every catalog tool.
-2. Unscoped `ayni analyze` emits typed rows for every enabled signal kind and
-   is the only repository-completion artifact writer.
+1. Catalog selection includes every tool required by enabled signals.
+2. Unscoped `ayni check` and its explicit `--host` escape hatch emit typed rows
+   for every enabled signal kind; only check writes repository-completion evidence.
 3. Each supported focused selector is faithfully applied; unsupported selectors
    are rejected before tool invocation.
 4. Offender fields, stable IDs, and exact verification commands match the signal
@@ -134,8 +147,7 @@ Before merging an adapter:
    controls.
 7. Exercise the adapter with real tool fixtures in local and CI coverage,
    including collection, configured thresholds, missing/unparseable configured
-   evidence, supported selectors, catalog readiness, and applied installation
-   where its manager can make changes. Do not satisfy the contract only with
+   evidence, and supported selectors. Do not satisfy the contract only with
    mocked command output.
 8. Run `cargo fmt --all -- --check`,
    `cargo clippy --workspace --all-targets --all-features -- -D warnings`,

@@ -16,9 +16,11 @@ path = "src/lib.rs"
 ayni-adapters-common = { path = "../common" }
 ayni-core = { path = "../../core" }
 glob = "0.3"
+node-semver = "2.2.0"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 walkdir = "2"
 
 [dev-dependencies]

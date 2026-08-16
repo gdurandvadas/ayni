@@ -7,20 +7,27 @@ Rust roots are directories containing `Cargo.toml`; discovery skips `target`,
 controller, while the repository root is analyzed only when its manifest also
 has `[package]`. Cargo commands for a member run from its workspace root.
 
-`cargo` and a Rust toolchain are user-owned prerequisites. Ayni can install
-catalog-managed tools when their checks are enabled and installation is applied:
-`llvm-tools-preview` through Rustup, and the remaining tools through Cargo.
+`cargo` and a Rust toolchain remain user-owned prerequisites for `--host`
+execution. `ayni env show` discovers Rust requirements and `ayni env lock`
+resolves exact runtime and Cargo catalog-tool versions through `mise`; locking
+does not install tools or modify the checkout. `env build` stages the locked
+Cargo manifests, requires `Cargo.lock`, and runs `cargo fetch --locked` inside
+the image build. `env doctor`, `env shell`, `env run`, managed `check`, and
+managed focused `verify` consume that image with networking and Cargo online
+access disabled. Cargo `package.workspace` values that point to a non-ancestor
+workspace fail closed because the current environment ownership contract is
+ancestry-based.
 
 ## Signal Coverage
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | `cargo test` | no version enforced |
-| `coverage` | `llvm-tools-preview`; `cargo-llvm-cov` | `cargo-llvm-cov` pinned to 0.8.5; `llvm-tools-preview`: no version enforced |
-| `size` | built-in Rust source scan | no version enforced |
-| `complexity` | `rust-code-analysis-cli` | no version enforced |
-| `deps` | Cargo workspace/dependency graph scan | no version enforced |
-| `mutation` | `cargo-mutants` (opt-in) | no version enforced |
+| `test` | `cargo test` | managed: Cargo from the exact locked Rust toolchain; host: no version enforced |
+| `coverage` | `llvm-tools-preview`; `cargo-llvm-cov` | managed: component from the exact Rust toolchain and `cargo-llvm-cov` pinned to `0.8.5`; host: no version enforced |
+| `size` | built-in Rust source scan | no external tool |
+| `complexity` | `rust-code-analysis-cli`; Cargo metadata | managed: an exact tool version selected during locking plus exact-toolchain Cargo; host: no version enforced |
+| `deps` | Cargo workspace/dependency graph scan | managed: Cargo from the exact locked Rust toolchain; host: no version enforced |
+| `mutation` | `cargo-mutants` (opt-in) | managed: an exact version selected during locking; host: no version enforced |
 
 ## Focused verification
 
@@ -43,9 +50,24 @@ combined with `--package`. Unsupported or ambiguous selectors are rejected
 before Cargo or another tool runs.
 
 Verification commands carry their originating contract and target, for example:
-`ayni verify test --config './.ayni.toml' --language rust --root '.' --package
+`ayni verify test --host --config './.ayni.toml' --language rust --root '.' --package
 'my-crate' --name 'my_test'`. Use only the selectors marked above; copy the
 exact command in an artifact finding rather than synthesizing one.
+
+## Impact planning
+
+`impact show` and `impact run` resolve the governing Cargo workspace, map
+changed Rust source files to the deepest owning package, then include transitive
+reverse dependencies even when configured roots name individual members.
+Dependency mapping includes normal, development, build, target-specific, and
+workspace-inherited aliased Cargo tables. Declared workspace membership and
+exclusions are honored; a changed source below a non-member manifest broadens
+rather than being assigned to an enclosing package.
+Tests and dependency checks use package scope; coverage and mutation broaden to
+the configured root; size and complexity use exact changed-file scope when the
+file still exists. Cargo manifests, lockfiles, Rust toolchain files, `.cargo`
+configuration, other configuration-sensitive inputs, and ambiguous ownership
+broaden every enabled signal and record an uncertainty.
 
 ## Contract
 

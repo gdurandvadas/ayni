@@ -8,9 +8,11 @@ locally, and turn results into signals that humans and agents can act on.
 
 ## Start here
 
-- Run `ayni install` to bootstrap the Rust policy template. For non-Rust or
-  polyglot repositories, select every intended template explicitly with
-  repeatable `--language` values, then run `ayni agents sync` and `ayni analyze`.
+- For an already configured repository, run `ayni contract show`,
+  `ayni env show`, `ayni env lock`, `ayni env build`, `ayni agents sync`, and
+  `ayni check`. Managed execution is available for Rust, npm Node, Go modules,
+  uv Python projects, and locked Gradle Kotlin builds; unsupported ecosystem
+  variants fail explicitly and can use the explicit `--host` escape hatch.
 - [CLI reference](/cli)
 - [Configuration reference](/product/config)
 - [Signal contract index](/product/signals)
@@ -18,6 +20,7 @@ locally, and turn results into signals that humans and agents can act on.
 - [Historical signal schema v2](/product/signals/v2)
 - [Historical signal schema v1](/product/signals/v1)
 - [Runtime and setup rules](/product/runtime)
+- [Impact-aware execution](/product/impact)
 - [Rust adapter](/adapters/rust)
 - [Go adapter](/adapters/go)
 - [Node adapter](/adapters/node)

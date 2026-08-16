@@ -48,7 +48,7 @@ impl RustFixture {
         ayni()
             .args(["verify"])
             .args(args)
-            .args(["--config", self.config.to_str().expect("config")])
+            .args(["--host", "--config", self.config.to_str().expect("config")])
             .output()
             .expect("launch ayni")
     }
@@ -96,13 +96,15 @@ fn emitted_multi_root_command_is_reproducible() {
 
     let analyze = ayni()
         .args([
-            "analyze",
+            "check",
+            "--host",
             "--config",
             config.to_str().expect("config"),
-            "--json",
+            "--output",
+            "json",
         ])
         .output()
-        .expect("analyze");
+        .expect("check");
     assert!(!analyze.status.success(), "size findings must fail");
     let artifact: Value = serde_json::from_slice(&analyze.stdout).expect("artifact");
     let commands = artifact["rows"]
@@ -125,6 +127,7 @@ fn emitted_multi_root_command_is_reproducible() {
         .args([
             "verify",
             "size",
+            "--host",
             "--config",
             config.to_str().expect("config"),
             "--language",
@@ -133,11 +136,16 @@ fn emitted_multi_root_command_is_reproducible() {
             "services/one",
             "--file",
             "services/one/oversized.rs",
-            "--json",
+            "--output",
+            "json",
         ])
         .output()
         .expect("reproduce finding command");
-    assert!(!reproduced.status.success(), "finding remains reproducible");
+    assert_eq!(
+        reproduced.status.code(),
+        Some(1),
+        "finding remains a quality failure"
+    );
     let reproduced: Value = serde_json::from_slice(&reproduced.stdout).expect("verify artifact");
     assert_eq!(reproduced["completion"]["expected_targets"], 1);
     assert_eq!(reproduced["completion"]["completed_targets"], 1);
@@ -155,7 +163,7 @@ fn size_file_verification_is_exact_requested_evidence_and_preserves_analyze_arti
     fs::create_dir_all(analyze.parent().expect("parent")).expect("analyze dir");
     fs::write(&analyze, "repository evidence\n").expect("analyze evidence");
 
-    let output = fixture.run(&["size", "--file", "src/lib.rs", "--json"]);
+    let output = fixture.run(&["size", "--file", "src/lib.rs", "--output", "json"]);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -198,7 +206,11 @@ fn policy_and_selector_validation_happen_before_tool_execution() {
         ["size", "--language", "rust"].as_slice(),
     ] {
         let output = fixture.run(args);
-        assert!(!output.status.success(), "{args:?} unexpectedly succeeded");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?} must be rejected as invalid input"
+        );
     }
     let invalid_root = fixture.run(&[
         "test",
@@ -209,7 +221,7 @@ fn policy_and_selector_validation_happen_before_tool_execution() {
         "--file",
         "src/lib.rs",
     ]);
-    assert!(!invalid_root.status.success());
+    assert_eq!(invalid_root.status.code(), Some(2));
     assert!(
         String::from_utf8_lossy(&invalid_root.stderr).contains("not a normalized configured root"),
         "root validation must precede adapter rejection of test --file"
@@ -226,7 +238,8 @@ fn package_and_dependency_forms_select_one_rust_target() {
         "rust",
         "--package",
         "fixture",
-        "--json",
+        "--output",
+        "json",
     ]);
     assert!(
         output.status.success(),
@@ -253,11 +266,11 @@ fn ambiguous_language_and_unsafe_file_requests_fail_without_artifacts() {
     .expect("polyglot policy");
 
     let ambiguous = fixture.run(&["size"]);
-    assert!(!ambiguous.status.success());
+    assert_eq!(ambiguous.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("--language is required"));
     for file in ["../outside.rs", "/tmp/outside.rs"] {
         let output = fixture.run(&["size", "--file", file]);
-        assert!(!output.status.success());
+        assert_eq!(output.status.code(), Some(2));
     }
     assert!(!fixture.root.join(".ayni/verify/last/signals.json").exists());
 }
@@ -286,7 +299,7 @@ fn configured_root_escape_is_rejected_by_verify_before_artifact_writes() {
     .expect("policy");
 
     let output = fixture.run(&["test", "--language", "rust"]);
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("configured root 'escape-link'"), "{stderr}");
     assert!(stderr.contains("repository containment"), "{stderr}");

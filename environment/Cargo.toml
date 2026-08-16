@@ -1,0 +1,17 @@
+[package]
+name = "ayni-environment"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "OCI environment backend for Ayni"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+ayni-core = { path = "../core" }
+ayni-adapters-common = { path = "../adapters/common" }
+serde_json = "1"
+sha2 = "0.10"
+libc = "0.2"

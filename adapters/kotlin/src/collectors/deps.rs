@@ -1,4 +1,4 @@
-use super::util::gradle_command;
+use super::util::{gradle_command, prepare_gradle_execution};
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_adapters_common::failure::command_failure_from_output;
@@ -12,6 +12,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub fn collect(context: &RunContext) -> CollectorResult {
+    prepare_gradle_execution(context, SignalKind::Deps).map_err(CollectorError::Adapter)?;
     let rules = context
         .policy
         .kotlin

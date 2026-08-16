@@ -6,12 +6,15 @@
 //! marker-file root discovery. Language-specific behavior (which tools to
 //! run, how to parse their reports) stays in the per-language adapter crates.
 
-pub mod catalog;
 pub mod collector;
 pub mod discovery;
+pub mod environment;
 pub mod exec;
 pub mod failure;
 pub mod finding;
+pub mod impact;
 pub mod paths;
 pub mod reports;
+pub mod repository;
+pub mod size;
 pub mod xml;

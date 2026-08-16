@@ -1,4 +1,4 @@
-use super::util::{find_reports, gradle_command};
+use super::util::{find_reports, gradle_command, prepare_gradle_execution, report_root};
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
@@ -22,6 +22,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     let cyclomatic = config.fn_cyclomatic.ok_or_else(|| {
         CollectorError::Adapter(String::from("missing kotlin.complexity.fn_cyclomatic"))
     })?;
+    prepare_gradle_execution(context, SignalKind::Complexity).map_err(CollectorError::Adapter)?;
     let (program, args) = gradle_command(context, SignalKind::Complexity, "detekt");
     let engine = format_command(&program, &args);
     let output = run_command_for_context_structured(context, &program, &args)?;
@@ -32,7 +33,11 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             command_failure_from_output(context, SignalKind::Complexity, &program, &args, &output),
         ));
     }
-    let report_paths = find_reports(&context.workdir, &["build", "reports", "detekt"], "xml");
+    let report_paths = find_reports(
+        &report_root(context, SignalKind::Complexity),
+        &["build", "reports", "detekt"],
+        "xml",
+    );
     if report_paths.is_empty() {
         return Ok(error_row(
             context,

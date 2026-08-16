@@ -1,3 +1,4 @@
+use crate::policy::load_from_path;
 use ayni_core::{
     AyniPolicy, Language, PolicyEffectivenessFacts, PolicyEffectivenessWarning, SignalKind,
     ThresholdFloat, ToolCommandOverride,
@@ -92,7 +93,7 @@ pub(crate) fn display(
     adapter_facts: &[PolicyEffectivenessFacts],
     json: bool,
 ) -> Result<String, String> {
-    let policy = AyniPolicy::load_from_path(config_path)?;
+    let policy = load_from_path(config_path)?;
     let projection = project(&policy, adapter_facts)?;
     if json {
         serde_json::to_string_pretty(&projection)

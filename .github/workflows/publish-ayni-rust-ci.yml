@@ -27,17 +27,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          rust_version="$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
-          cargo_llvm_cov_version="$(sed -n '/crate_name: "cargo-llvm-cov"/{n;s/.*version: Some("\([^"]*\)").*/\1/p;}' adapters/rust/src/catalog.rs | head -n1)"
-          rust_code_analysis_cli_version="$(sed -n '/crate_name: "rust-code-analysis-cli"/{n;s/.*version: Some("\([^"]*\)").*/\1/p;}' adapters/rust/src/catalog.rs | head -n1)"
+          rust_version="$(jq -r '.targets[] | select(.target.language == "rust" and .target.root == ".") | .runtimes[] | select(.runtime == "rust") | .version' .ayni.lock)"
+          cargo_llvm_cov_version="$(jq -r '.targets[] | select(.target.language == "rust" and .target.root == ".") | .signal_tools[] | select(.tool == "cargo-llvm-cov") | .version' .ayni.lock)"
+          rust_code_analysis_cli_version="$(jq -r '.targets[] | select(.target.language == "rust" and .target.root == ".") | .signal_tools[] | select(.tool == "rust-code-analysis-cli") | .version' .ayni.lock)"
 
           if [ -z "${rust_version}" ]; then
-            echo "Missing workspace rust-version in Cargo.toml" >&2
+            echo "Missing locked Rust runtime in .ayni.lock" >&2
             exit 1
           fi
 
           if [ -z "${cargo_llvm_cov_version}" ]; then
-            echo "Missing cargo-llvm-cov version in adapters/rust/src/catalog.rs" >&2
+            echo "Missing cargo-llvm-cov version in .ayni.lock" >&2
+            exit 1
+          fi
+
+          if [ -z "${rust_code_analysis_cli_version}" ]; then
+            echo "Missing rust-code-analysis-cli version in .ayni.lock" >&2
             exit 1
           fi
 

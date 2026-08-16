@@ -46,7 +46,7 @@ optionally help add the install directory to `PATH` in interactive shells.
 Pin a specific release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | VERSION=v0.1.2 sh
+curl -fsSL https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | VERSION=ayni-v0.8.1 sh
 ```
 
 Choose a custom install directory:
@@ -65,19 +65,23 @@ cargo install --path cli
 
 ## Quick Start
 
+Rust, npm-based Node, Go module, uv Python, and locked Gradle Kotlin
+repositories can lock and build a managed OCI environment, warm locked native
+dependencies, and run the repository gate offline by default:
+
 ```sh
-ayni install
+ayni contract show
 ayni agents sync
-ayni analyze
+ayni env lock
+ayni env build
+ayni check
 ```
 
-Without `--language`, bare `ayni install` creates the Rust policy template. For
-a non-Rust or polyglot repository, select every intended language explicitly
-with repeatable `--language` values before synchronizing guidance or analyzing.
+Use `check --host` as the explicit escape hatch for repositories whose language
+or package manager does not yet support managed preparation.
 
-Use focused verification for the inner TDD loop. `analyze` always evaluates the
-configured repository and is the only completion gate and writer of
-`.ayni/last/signals.json`:
+Use focused verification for the inner TDD loop. `check` evaluates the configured
+repository and is the only completion gate and writer of `.ayni/last/signals.json`:
 
 ```sh
 ayni verify test --language rust --package my-crate --name test_filter
@@ -91,73 +95,94 @@ Focused evidence is written to `.ayni/verify/last/signals.json` and never
 replaces `.ayni/last/signals.json`. `verify` has one subcommand for each of the
 six signals; selector support is signal- and adapter-specific. Unsupported,
 conflicting, ambiguous, or out-of-scope selectors are rejected before a tool
-runs. Re-run the exact `verification.command` supplied with a finding rather
-than broadening it by hand.
+runs. Check and focused-run terminal or Markdown reports never include rerun
+commands; those remain structured artifact evidence. List the exact, deduplicated
+commands from the last repository artifact with `ayni verify list`,
+or inspect another artifact explicitly:
+
+```sh
+ayni verify list
+ayni verify list --artifact .ayni/verify/last/signals.json
+```
+
+Re-run these artifact-supplied commands rather than broadening them by hand.
+
+Use impact planning for a conservative change-scoped loop against an explicit
+Git base:
+
+```sh
+ayni impact show --base main
+ayni impact run --base main
+```
+
+The candidate is the final local working-tree state relative to the explicit
+base: commits through `HEAD`, tracked index/worktree changes, and non-ignored
+untracked files. Ayni invokes local Git only; it has no GitHub, GitLab,
+Bitbucket, pull-request, remote-fetch, or forge-specific integration. Rust and
+npm Node workspaces follow reverse dependencies; every other built-in adapter
+broadens uncertain work rather than omitting it. Impact results live at
+`.ayni/impact/last/impact.json`, explicitly require a final `ayni check`, and
+never replace full-check or focused evidence. See
+[`docs/product/impact.md`](docs/product/impact.md).
 
 Inspect the validated configured signal contract without running discovery,
 adapters, or analysis:
 
 ```sh
-ayni contract display
-ayni contract display --config path/to/.ayni.toml
+ayni contract show
+ayni contract show --config path/to/.ayni.toml
 ```
 
 This human-readable view shows enabled-language roots, all six signal states,
 configured thresholds and rules, and explicit tool overrides. It writes no
-artifact; use `ayni analyze` for measured results.
+artifact; use `ayni check` for managed measured results or `ayni check --host`
+for the explicit host path.
 
-Use `install --apply` when you want Ayni to install missing or outdated adapter
-tools from local language ecosystems:
-
-```sh
-ayni install --apply
-```
-
-`install` bootstraps policy, ignores `.ayni/`, and lists or (with `--apply`)
-installs catalog tools. It never changes `AGENTS.md`; run `ayni agents sync`
-when you intentionally want its marked Ayni section created or refreshed.
-
-To inspect whether an already-configured repository is ready without changing
-any files, use check mode:
+Managed environment setup is owned by the explicit `env` lifecycle:
 
 ```sh
-ayni install --check
-ayni install --check --output json
+ayni env show
+ayni env lock
+ayni env doctor
+ayni env build
+ayni env run -- cargo test
 ```
 
-Check mode requires an existing valid `.ayni.toml`. It only detects configured
-targets, resolves their execution contexts, and inspects enabled catalog
-requirements; it never scaffolds, prepares, installs, validates writable
-artifact paths, or writes output files. The human report is the default. JSON
-mode emits one deterministic readiness document on stdout and reserves stderr
-for command diagnostics. A missing or outdated requirement, undetected target,
-or unresolved target produces `not_ready` and a non-zero exit status. `--check`
-cannot be combined with `--apply`, and `--output` is check-only.
+Locking may query `mise` for exact adapter-owned runtime and tool versions and
+Docker Buildx for the published base-image digest.
+`--base <reference>@sha256:<digest>` supplies an explicit base instead. If the
+published base is unavailable, run `scripts/build-local-environment-image.sh`;
+it compiles Ayni inside a Linux container and prints the exact local
+`env lock --base` command. Project tools must already be represented in native
+npm, uv, or Gradle inputs. Doctor, build, shell, run, and managed check consume
+the validated lock without creating or refreshing it. Multi-target shell/run
+requests use `--language` and `--root`.
 
-For a non-Rust or polyglot repository, repeat `--language`; duplicate values
-are ignored:
+Environment builds stage only digest-verified Cargo/npm/Go/uv/Gradle inputs,
+warm provider caches, and retain only declared dependency outputs. Managed
+quality commands materialize seeded npm dependencies and fresh uv environments
+below `.ayni/environment/`, run without network access, and mount repository
+source read-only with only generated `.ayni/` state writable. Interactive
+`env shell` and arbitrary `env run` intentionally mount the checkout read-write
+so humans and agents can edit it. Managed check and focused verification support
+locked Rust, npm Node, Go module, uv Python, and Gradle Kotlin targets. pnpm,
+Yarn, Bun, non-uv Python managers, and unsupported Gradle build shapes remain
+explicit failures.
 
-```sh
-ayni install --repo-root . --language rust --language node --language python --apply
-```
-
-Single-language setup remains valid, for example `ayni install --language go`.
+Run `ayni agents sync` explicitly when you want the managed guidance block
+created or refreshed.
 
 Generate Markdown output:
 
 ```sh
-ayni analyze --output md
+ayni check --output markdown
 ```
 
-Emit the schema-v3 artifact for scripts with either equivalent selector:
+Emit the schema-v3 artifact for scripts:
 
 ```sh
-ayni analyze --json
-ayni analyze --output json
-```
-
-Do not combine `--json` with `--output stdout` or `--output md`; use one JSON
-selector instead. JSON is written to stdout and progress to stderr.
+ayni check --output json
+``` JSON is written to stdout and progress to stderr.
 
 Compare two already-produced complete schema-v3 artifacts explicitly. This
 command reads only the two supplied files: it does not discover a repository,
@@ -166,57 +191,13 @@ are reported successfully; invalid, incomplete, or incompatible inputs fail
 with diagnostics on stderr.
 
 ```sh
-ayni artifact compare --baseline before.json --candidate after.json
-ayni artifact compare --baseline before.json --candidate after.json --output json
+ayni results compare --baseline before.json --candidate after.json
+ayni results compare --baseline before.json --candidate after.json --output json
 ```
 
 The JSON form writes exactly one deterministic comparison document to stdout.
 
 For the full CLI reference, see [`docs/cli.md`](docs/cli.md).
-
-## Example Report
-
-This is an illustrative point-in-time snapshot from a validated repository run,
-not a promised baseline for every repository or release.
-
-# ayni analyze
-
-**5** / **5** checks passing · aggregate **pass** · schema `0.3.0`
-
-**Completion:** scope `repository` · state **complete** · targets **1** / **1** completed · **1** detected · **0** skipped
-
-The five rows shown here reflect a policy with mutation disabled. This snapshot
-recorded 310 passing tests, about 70.99% line coverage, and zero failing
-offenders. In schema v3, completion separately reconciles expected, detected,
-completed, and skipped targets; an incomplete artifact includes one ordered
-issue per skipped target and always aggregates to failure, even if its emitted
-rows pass.
-
-## rust (workspace) — 5/5 passing
-
-| # | Signal | Summary | Status |
-|---|--------|---------|--------|
-| **1** | **test** | `total=310 passed=310 failed=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
-| **2** | **coverage** | `percent=70.99% status=ok` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
-| **3** | **size** | `max_lines=1456 files=115 fail_count=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
-| **4** | **complexity** | `functions=1983 max_cyclo=14.0 fail_count=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/warn.svg" alt="warn" width="20" height="20"> warn |
-| **5** | **deps** | `crates=8 edges=18 violations=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
-
-<details>
-<summary>Offenders</summary>
-
-complexity
-- **WARN** `cli/src/completion.rs:33` reconcile cyclo=14.0
-- **WARN** `cli/src/install.rs:45` print_install_requirements cyclo=14.0
-- **WARN** `core/src/policy.rs:252` normalize_and_validate cyclo=14.0
-
-</details>
-
-Markdown always groups typed findings in **Offenders**. It adds **Failures** only
-when a collector command failed; each failure includes its category,
-classification, command, working directory, exit code when available, and message. Reports and
-JSON artifacts can therefore expose repository paths and raw tool output; treat
-them as repository diagnostics when sharing them.
 
 ## Signals
 
@@ -276,11 +257,14 @@ The platform keeps product semantics, language integrations, and CLI behavior
 separate:
 
 ```text
-core  <-  adapters  <-  cli
+core  <-  adapters/common  <-  adapters/<language>  <-  cli
+core  <-  adapters/common  <-  environment          <-  cli
 ```
 
-Adapters own language-specific tool invocation and normalization. Core owns the
-typed product contract. The CLI owns local orchestration and output.
+Language adapters own ecosystem-specific discovery, tool invocation, impact
+mapping, and normalization. Core owns typed product contracts. The environment
+backend consumes validated locks and preparation plans without interpreting
+language manifests. The CLI owns orchestration and output.
 
 For layer boundaries and change rules, see [ARCHITECTURE.md](ARCHITECTURE.md).
 

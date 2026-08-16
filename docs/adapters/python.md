@@ -2,31 +2,31 @@
 
 ## Installation
 
-Python roots are directories containing `pyproject.toml`, `requirements.txt`,
-or `Pipfile`; discovery excludes virtual environments, caches, `.git`, and
-`.ayni`. A uv workspace or root `uv.lock` controls workspace discovery, and uv
-workspace exclusions are respected. Configure roots in `[python].roots`.
+Managed Python support is intentionally bounded to uv-locked `pyproject.toml`
+projects. Add an exact or bounded `[tool.uv].required-version`, a
+`.python-version` or compatible `project.requires-python`, and commit `uv.lock`.
+Every enabled project tool (`pytest`, `pytest-json-report`, `pytest-cov`,
+`coverage`, `complexipy`, or opt-in `mutmut`) must be declared by the project
+and have one unambiguous exact version in `uv.lock`.
 
-Runner resolution prefers direct `uv.lock`, `poetry.lock`, `pdm.lock`,
-`Pipfile.lock`, or `hatch.toml`, then an ancestor uv workspace, then
-`pyproject.toml` or `requirements.txt` using `python -m`. Python and its
-resolved package manager are user-owned prerequisites. Applied installation
-uses the resolved manager for local development packages and `uv tool` for
-`complexipy`. Catalog status inspection during listing and `ayni install
---check` is read-only for that manager; it does not prepare a manager or modify
-dependencies. Applied setup performs only the adapter-owned manager operations
-required for enabled requirements.
+`env build` warms uv's cache from staged, digest-checked workspace manifests and
+the lock. Managed launch creates a fresh root-specific `.venv` offline, mounts
+it over the checkout without modifying repository files, and forces uv's frozen,
+o-sync, offline behavior. Poetry, PDM, Pipenv, Hatch, plain pip, excluded uv
+workspace members, ambiguous locked tool versions, and undeclared project tools
+fail closed for managed execution. They remain available through the explicit
+`--host` path with their documented user-owned prerequisites.
 
 ## Signal Coverage
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | `pytest`; `pytest-json-report` | no version enforced |
-| `coverage` | `pytest`; `pytest-cov`; `coverage` | no version enforced |
-| `size` | built-in Python source scan | no version enforced |
-| `complexity` | `complexipy` | no version enforced |
-| `deps` | Python import scan | no version enforced |
-| `mutation` | `mutmut` (opt-in) | no version enforced |
+| `test` | `pytest`; `pytest-json-report` | managed: exact `uv.lock`; host: no version enforced |
+| `coverage` | `pytest`; `pytest-cov`; `coverage` | managed: exact `uv.lock`; host: no version enforced |
+| `size` | built-in Python source scan | no external tool |
+| `complexity` | `complexipy` through the resolved package manager | managed: exact `uv.lock`; host: no version enforced |
+| `deps` | built-in Python import scan | no external tool |
+| `mutation` | `mutmut` (opt-in) | managed: exact `uv.lock`; host: no version enforced |
 
 ## Focused verification
 
@@ -49,15 +49,23 @@ combined with `--package`. Unsupported or ambiguous selectors are rejected
 before a tool runs.
 
 Verification commands carry their originating contract and target, for example:
-`ayni verify test --config './.ayni.toml' --language python --root '.' --file
+`ayni verify test --host --config './.ayni.toml' --language python --root '.' --file
 'tests/test_api.py' --name 'test_create'`. Use only the selectors marked above;
 copy the exact command in an artifact finding rather than synthesizing one.
+
+## Impact planning
+
+Python impact mapping currently treats every changed input below the configured
+root as relevant, along with governing ancestor project, package-manager lock,
+requirements, and runtime inputs. Because package topology is not yet used for narrowing, every enabled
+signal broadens to the configured Python root and records a `missing_topology`
+uncertainty. This is intentionally conservative and does not replace the final
+unscoped `ayni check`.
 
 ## Contract
 
 Enabled checks come from `[checks]`. Configure roots in `[python].roots`
-(default `["."]`), optional runner settings in `[python.foundation]`, size
-budgets in `[python.size]`, cognitive complexity in `[python.complexity]`,
+(default `["."]`), size budgets in `[python.size]`, cognitive complexity in `[python.complexity]`,
 coverage in `[python.coverage]`, and forbidden edges in
 `[python.deps.forbidden]`. Command overrides are optional in
 `[python.tooling.test]`, `[python.tooling.coverage]`, and
@@ -83,10 +91,6 @@ enabled = ["python"]
 
 [python]
 roots = ["."]
-
-[python.foundation]
-runner = "workspace"
-validate_install = true
 
 [python.tooling.test]
 command = "uv"

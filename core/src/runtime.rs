@@ -1,6 +1,7 @@
 use crate::language::Language;
 use crate::policy::AyniPolicy;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -35,6 +36,8 @@ pub struct ExecutionResolution {
     pub ambiguous: bool,
     pub install_cwd: PathBuf,
     pub exec_cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub environment: BTreeMap<String, String>,
 }
 
 impl ExecutionResolution {
@@ -54,13 +57,21 @@ impl ExecutionResolution {
             ambiguous: false,
             install_cwd: root.clone(),
             exec_cwd: root,
+            environment: BTreeMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterErrorKind {
+    Environment,
+    Execution,
 }
 
 #[derive(Debug, Clone)]
 pub struct AdapterError {
     pub language: Language,
+    pub kind: AdapterErrorKind,
     pub message: String,
 }
 
@@ -69,6 +80,16 @@ impl AdapterError {
     pub fn new(language: Language, message: impl Into<String>) -> Self {
         Self {
             language,
+            kind: AdapterErrorKind::Environment,
+            message: message.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn execution(language: Language, message: impl Into<String>) -> Self {
+        Self {
+            language,
+            kind: AdapterErrorKind::Execution,
             message: message.into(),
         }
     }

@@ -1,16 +1,14 @@
 SHELL := /bin/bash
 
 .PHONY: ayni \
-	docker-build docker-install docker-analyze docker-example docker-examples \
+	docker-build docker-check docker-example docker-examples \
 	docker-build-rust docker-build-go docker-build-node docker-build-python docker-build-kotlin \
-	docker-install-rust-single docker-install-go-single docker-install-node-single docker-install-python-single docker-install-kotlin-single \
-	docker-analyze-rust-mono docker-analyze-go-mono docker-analyze-node-mono docker-analyze-python-mono docker-analyze-kotlin-mono \
+	docker-check-rust-mono docker-check-go-mono docker-check-node-mono docker-check-python-mono docker-check-kotlin-mono \
 	docker-example-rust docker-example-go docker-example-node docker-example-python docker-example-kotlin \
 	tag tag-major tag-minor tag-patch
 
 LANG ?= go
-FIXTURE ?= single
-APPLY ?= true
+FIXTURE ?= mono
 DOCKER_IMAGE_PREFIX ?= ayni-example
 DOCKER_IMAGE = $(DOCKER_IMAGE_PREFIX)-$(LANG)
 DOCKERFILE = examples/$(LANG)/Dockerfile
@@ -30,34 +28,20 @@ DOCKER_RUN = docker run --rm \
 	$(DOCKER_IMAGE)
 
 ayni:
-	@cargo run -p ayni-cli -- analyze --config ./.ayni.toml
+	@cargo run -p ayni-cli -- check --host --config ./.ayni.toml
 
 docker-build:
 	@docker build -f $(DOCKERFILE) -t $(DOCKER_IMAGE) .
 
-docker-install:
+docker-check:
 	@$(DOCKER_RUN) bash -c 'set -euo pipefail; \
 		work=$$(mktemp -d -t ayni-$(LANG)-$(FIXTURE)-XXXXXX); \
 		cp -a /repo/$(FIXTURE_PATH)/. "$$work"; \
-		if [ "$(FIXTURE)" = "single" ]; then \
-			rm -rf "$$work/.ayni" "$$work/.ayni.toml" "$$work/.gitignore" "$$work/AGENTS.md"; \
-		fi; \
-		args=(install --repo-root "$$work" --language $(LANG)); \
-		if [ "$(APPLY)" = "true" ]; then args+=(--apply); fi; \
-		ayni "$${args[@]}"; \
-		rm -rf "$$work"'
-
-docker-analyze:
-	@$(DOCKER_RUN) bash -c 'set -euo pipefail; \
-		work=$$(mktemp -d -t ayni-$(LANG)-$(FIXTURE)-XXXXXX); \
-		cp -a /repo/$(FIXTURE_PATH)/. "$$work"; \
-		ayni install --repo-root "$$work" --language $(LANG) --apply; \
-		ayni analyze --config "$$work/.ayni.toml"; \
+		ayni check --host --config "$$work/.ayni.toml"; \
 		rm -rf "$$work"'
 
 docker-example: docker-build
-	@$(MAKE) docker-install LANG=$(LANG) FIXTURE=single APPLY=true
-	@$(MAKE) docker-analyze LANG=$(LANG) FIXTURE=mono
+	@$(MAKE) docker-check LANG=$(LANG) FIXTURE=mono
 
 docker-examples:
 	@set -euo pipefail; \
@@ -80,70 +64,45 @@ docker-build-python:
 docker-build-kotlin:
 	@$(MAKE) docker-build LANG=kotlin
 
-docker-install-rust-single:
+docker-check-rust-mono:
 	@$(MAKE) docker-build LANG=rust
-	@$(MAKE) docker-install LANG=rust FIXTURE=single APPLY=true
+	@$(MAKE) docker-check LANG=rust FIXTURE=mono
 
-docker-install-go-single:
+docker-check-go-mono:
 	@$(MAKE) docker-build LANG=go
-	@$(MAKE) docker-install LANG=go FIXTURE=single APPLY=true
+	@$(MAKE) docker-check LANG=go FIXTURE=mono
 
-docker-install-node-single:
+docker-check-node-mono:
 	@$(MAKE) docker-build LANG=node
-	@$(MAKE) docker-install LANG=node FIXTURE=single APPLY=true
+	@$(MAKE) docker-check LANG=node FIXTURE=mono
 
-docker-install-python-single:
+docker-check-python-mono:
 	@$(MAKE) docker-build LANG=python
-	@$(MAKE) docker-install LANG=python FIXTURE=single APPLY=true
+	@$(MAKE) docker-check LANG=python FIXTURE=mono
 
-docker-install-kotlin-single:
+docker-check-kotlin-mono:
 	@$(MAKE) docker-build LANG=kotlin
-	@$(MAKE) docker-install LANG=kotlin FIXTURE=single APPLY=true
-
-docker-analyze-rust-mono:
-	@$(MAKE) docker-build LANG=rust
-	@$(MAKE) docker-analyze LANG=rust FIXTURE=mono
-
-docker-analyze-go-mono:
-	@$(MAKE) docker-build LANG=go
-	@$(MAKE) docker-analyze LANG=go FIXTURE=mono
-
-docker-analyze-node-mono:
-	@$(MAKE) docker-build LANG=node
-	@$(MAKE) docker-analyze LANG=node FIXTURE=mono
-
-docker-analyze-python-mono:
-	@$(MAKE) docker-build LANG=python
-	@$(MAKE) docker-analyze LANG=python FIXTURE=mono
-
-docker-analyze-kotlin-mono:
-	@$(MAKE) docker-build LANG=kotlin
-	@$(MAKE) docker-analyze LANG=kotlin FIXTURE=mono
+	@$(MAKE) docker-check LANG=kotlin FIXTURE=mono
 
 docker-example-rust:
 	@$(MAKE) docker-build LANG=rust
-	@$(MAKE) docker-install LANG=rust FIXTURE=single APPLY=true
-	@$(MAKE) docker-analyze LANG=rust FIXTURE=mono
+	@$(MAKE) docker-check LANG=rust FIXTURE=mono
 
 docker-example-go:
 	@$(MAKE) docker-build LANG=go
-	@$(MAKE) docker-install LANG=go FIXTURE=single APPLY=true
-	@$(MAKE) docker-analyze LANG=go FIXTURE=mono
+	@$(MAKE) docker-check LANG=go FIXTURE=mono
 
 docker-example-node:
 	@$(MAKE) docker-build LANG=node
-	@$(MAKE) docker-install LANG=node FIXTURE=single APPLY=true
-	@$(MAKE) docker-analyze LANG=node FIXTURE=mono
+	@$(MAKE) docker-check LANG=node FIXTURE=mono
 
 docker-example-python:
 	@$(MAKE) docker-build LANG=python
-	@$(MAKE) docker-install LANG=python FIXTURE=single APPLY=true
-	@$(MAKE) docker-analyze LANG=python FIXTURE=mono
+	@$(MAKE) docker-check LANG=python FIXTURE=mono
 
 docker-example-kotlin:
 	@$(MAKE) docker-build LANG=kotlin
-	@$(MAKE) docker-install LANG=kotlin FIXTURE=single APPLY=true
-	@$(MAKE) docker-analyze LANG=kotlin FIXTURE=mono
+	@$(MAKE) docker-check LANG=kotlin FIXTURE=mono
 
 # Semver tag helpers
 # Usage:

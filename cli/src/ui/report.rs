@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::policy::load_from_path;
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::fs;
@@ -5,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 #[cfg(test)]
-use ayni_core::{AYNI_POLICY_FILE, AyniPolicy};
+use ayni_core::AYNI_POLICY_FILE;
 use ayni_core::{
     Budget, CommandFailure, CompletionScope, CompletionStage, CompletionState, ComplexityOffender,
     CoverageOffender, DepsOffender, Level, MutationOffender, RunArtifact, RunCompletion,
@@ -17,28 +19,13 @@ use serde_json::Value;
 use crate::ui::{FAIL_RGB, PASS_RGB, WARN_RGB, color_enabled};
 
 pub fn print_from_artifact(artifact: &RunArtifact, offenders_limit: usize) {
-    let mut text = build_report_text(
+    let text = build_report_text(
         &artifact.rows,
         Some(&artifact.completion),
         color_enabled(),
         offenders_limit,
     );
-    append_verification_commands(&mut text, artifact);
     println!("{text}");
-}
-
-fn append_verification_commands(out: &mut String, artifact: &RunArtifact) {
-    let commands: Vec<_> = artifact
-        .findings
-        .iter()
-        .flat_map(ayni_core::Findings::commands)
-        .collect();
-    if !commands.is_empty() {
-        out.push_str("verification commands\n");
-        for command in commands {
-            out.push_str(&format!("  {command}\n"));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -75,7 +62,7 @@ fn load_offenders_limit(signals_path: &Path) -> usize {
         return usize::MAX;
     };
 
-    match AyniPolicy::load(&root) {
+    match load_from_path(&root.join(AYNI_POLICY_FILE)) {
         Ok(policy) => policy.report.offenders_limit,
         Err(error) => {
             eprintln!("warning: {error}; using default report.offenders_limit (unlimited)");
@@ -111,12 +98,11 @@ fn build_report_text(
 ) -> String {
     let mut out = String::new();
     out.push('\n');
-    out.push_str(&stylize(
-        color,
-        "ayni analyze report",
-        Palette::Heading,
-        true,
-    ));
+    let heading = match completion.map(|value| value.scope) {
+        Some(CompletionScope::Requested) => "ayni verify report",
+        Some(CompletionScope::Repository) | None => "ayni check report",
+    };
+    out.push_str(&stylize(color, heading, Palette::Heading, true));
     out.push('\n');
 
     if let Some(completion) = completion {
@@ -753,6 +739,7 @@ mod tests {
         };
 
         let text = build_report_text(&[], Some(&completion), false, 3);
+        assert!(text.contains("ayni verify report"));
         assert!(text.contains("scope=requested state=incomplete"));
         assert!(text.contains("targets=0/1 detected=0 skipped=1"));
         assert!(

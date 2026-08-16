@@ -1,13 +1,15 @@
 use crate::catalog::GO_CATALOG;
 use crate::collectors::GoCollector;
 use crate::discovery;
-use ayni_adapters_common::catalog::GENERIC_CATALOG_RUNTIME;
+use crate::environment::GoEnvironmentCapability;
+use crate::environment_resolution::GoEnvironmentResolutionCapability;
+use crate::impact::GoImpactCapability;
+use crate::preparation::GoDependencyPreparationCapability;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
-    CatalogEntry, CatalogRuntime, ComplexityThresholdKind, DetectResult, ExecutionResolution,
-    Language, LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts,
-    ProjectDiscovery, Scope, SignalCollector, SignalKind, VerificationSelectorSupport,
-    VerificationTarget,
+    CatalogEntry, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
+    LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts, ProjectDiscovery,
+    Scope, SignalCollector, SignalKind, VerificationSelectorSupport, VerificationTarget,
 };
 use std::path::Path;
 
@@ -57,6 +59,7 @@ impl LanguageAdapter for GoAdapter {
                 ambiguous: false,
                 install_cwd: root.to_path_buf(),
                 exec_cwd: root.to_path_buf(),
+                environment: std::collections::BTreeMap::new(),
             });
         }
         Some(ExecutionResolution::direct(
@@ -86,12 +89,28 @@ impl LanguageAdapter for GoAdapter {
         GO_CATALOG
     }
 
-    fn catalog_runtime(&self) -> &dyn CatalogRuntime {
-        &GENERIC_CATALOG_RUNTIME
+    fn impact_capability(&self) -> Option<&dyn ayni_core::ImpactCapability> {
+        Some(&GoImpactCapability)
     }
 
     fn collector(&self) -> &dyn SignalCollector {
         &self.collector
+    }
+
+    fn environment_capability(&self) -> Option<&dyn ayni_core::EnvironmentCapability> {
+        Some(&GoEnvironmentCapability)
+    }
+
+    fn dependency_preparation_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::DependencyPreparationCapability> {
+        Some(&GoDependencyPreparationCapability)
+    }
+
+    fn environment_resolution_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::EnvironmentResolutionCapability> {
+        Some(&GoEnvironmentResolutionCapability)
     }
 
     fn policy_effectiveness_facts(&self) -> PolicyEffectivenessFacts {
@@ -170,6 +189,14 @@ mod tests {
         assert_eq!(resolution.kind, "workspace_ancestor");
         assert_eq!(resolution.resolved_from, dir.path());
         assert_eq!(resolution.exec_cwd, module);
+    }
+
+    #[test]
+    fn exposes_all_environment_capabilities() {
+        let adapter = GoAdapter::new();
+        assert!(adapter.environment_capability().is_some());
+        assert!(adapter.dependency_preparation_capability().is_some());
+        assert!(adapter.environment_resolution_capability().is_some());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use super::util::{find_reports, gradle_command};
+use super::util::{find_reports, gradle_command, prepare_gradle_execution, report_root};
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
@@ -37,6 +37,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         });
     }
 
+    prepare_gradle_execution(context, SignalKind::Mutation).map_err(CollectorError::Adapter)?;
     let (program, args) = gradle_command(context, SignalKind::Mutation, "pitest");
     let engine = format_command(&program, &args);
     let output = run_command_for_context_structured(context, &program, &args)?;
@@ -47,7 +48,11 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             command_failure_from_output(context, SignalKind::Mutation, &program, &args, &output),
         ));
     }
-    let report_paths = find_reports(&context.workdir, &["build", "reports", "pitest"], "xml");
+    let report_paths = find_reports(
+        &report_root(context, SignalKind::Mutation),
+        &["build", "reports", "pitest"],
+        "xml",
+    );
     if report_paths.is_empty() {
         return Ok(error_row(
             context,

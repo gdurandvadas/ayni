@@ -6,20 +6,30 @@ Go roots are directories containing `go.mod`; discovery excludes VCS and
 `vendor` directories. A repository `go.work` marks a workspace controller, and
 the repository root is analyzed only when it contains `go.mod`.
 
-The Go toolchain is a user-owned prerequisite. Ayni uses it for built-in Go
-operations and can install `gocyclo` with `go install` when complexity is
-enabled and installation is applied.
+For managed execution, Ayni discovers `.go-version`, `.tool-versions`, `go`
+and `toolchain` directives, validates `go.work` membership, and locks an exact
+Go runtime. Modules with declared dependencies require a committed `go.sum`.
+`env build` runs `go mod download all` only against staged, digest-checked
+manifests, stores module/build data below the managed cache, disables Go's own
+toolchain downloads, and runs quality commands with read-only module metadata
+and networking disabled. Complexity additionally provisions pinned `gocyclo`
+`0.6.0` through its Go module provider.
+
+The Go toolchain and `gocyclo` remain user-owned prerequisites for `--host`
+execution. Managed support does not cover module-less GOPATH projects, external
+local replacements, private registries requiring undeclared credentials, or
+cgo system libraries absent from the base image.
 
 ## Signal Coverage
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | `go test` | no version enforced |
-| `coverage` | `go test` and `go tool cover` | no version enforced |
-| `size` | built-in Go source scan | no version enforced |
-| `complexity` | `gocyclo` | no version enforced |
-| `deps` | `go list` dependency graph | no version enforced |
-| `mutation` | `go test` mutation proxy, or a configured Go mutation command | no version enforced |
+| `test` | `go test` | managed: exact locked Go runtime; host: no version enforced |
+| `coverage` | `go test` and `go tool cover` | managed: exact locked Go runtime; host: no version enforced |
+| `size` | built-in Go source scan | no external tool |
+| `complexity` | `gocyclo` | managed: `0.6.0`; host: no version enforced |
+| `deps` | `go list` dependency graph | managed: exact locked Go runtime; host: no version enforced |
+| `mutation` | `go test` mutation proxy, or a configured Go mutation command | managed default: exact locked Go runtime; host: no version enforced |
 
 ## Focused verification
 
@@ -42,9 +52,18 @@ combined with `--package`. Unsupported or ambiguous selectors are rejected
 before `go` runs.
 
 Verification commands carry their originating contract and target, for example:
-`ayni verify test --config './.ayni.toml' --language go --root 'services/api'
+`ayni verify test --host --config './.ayni.toml' --language go --root 'services/api'
 --package './internal/api' --name 'TestCreate'`. Use only the selectors marked
 above; copy the exact command in an artifact finding rather than synthesizing one.
+
+## Impact planning
+
+Go impact mapping currently treats every changed input below the configured root
+as relevant, along with governing ancestor module/workspace, `go.work.sum`, and
+runtime markers. Because package topology
+is not yet used for narrowing, every enabled signal broadens to the configured
+Go root and records a `missing_topology` uncertainty. This is intentionally
+conservative and does not replace the final unscoped `ayni check`.
 
 ## Contract
 

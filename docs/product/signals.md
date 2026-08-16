@@ -34,18 +34,26 @@ and payload shapes are version-specific; use the selected version reference.
 
 ## Version selection and compatibility
 
-`ayni analyze` writes `.ayni/last/signals.json`; `ayni analyze --json` and
-`ayni analyze --output json` print the same artifact. Current output uses
+`ayni check` and the explicit `ayni check --host` path both write
+`.ayni/last/signals.json`; adding `--output json` prints the same artifact.
+Current output uses
 schema `0.3.0`. Consumers must inspect `schema_version` and use the matching
 version page rather than assuming fields from another envelope.
 
 Schema v3 is a breaking replacement for v2 consumers. Explicit artifact
 comparison accepts only two valid, complete artifacts whose `schema_version`
-is the current schema string. Use `ayni artifact compare --baseline <artifact>
---candidate <artifact> [--output stdout|json]`; it reads exactly those files
+is the current schema string. Use `ayni results compare --baseline <artifact>
+--candidate <artifact> [--output human|json]`; it reads exactly those files
 and has no implicit prior-artifact, repository, Git, fetch, storage, or write
 behavior. There is no compatibility payload or automatic conversion from an
 earlier schema.
+
+Impact planning and execution use a separate versioned envelope because impact
+evidence records Git changes, inclusion reasons, uncertainty, and selected-job
+accounting rather than repository completion. It may contain the same typed
+signal rows, but it is not a schema-v3 `RunArtifact`, cannot replace
+`.ayni/last/signals.json`, and is not accepted by `results compare`. See the
+[impact execution contract](impact.md).
 
 V1 and v2 are retained only as historical documentation. Ayni makes no current
 parsing, conversion, migration, or compatibility promise for either schema.

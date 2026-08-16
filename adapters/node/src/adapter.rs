@@ -1,13 +1,16 @@
-use crate::catalog::{NODE_CATALOG, NODE_CATALOG_RUNTIME};
+use crate::catalog::NODE_CATALOG;
 use crate::collectors::NodeCollector;
 use crate::discovery;
+use crate::environment::NodeEnvironmentCapability;
+use crate::environment_resolution::NodeEnvironmentResolutionCapability;
+use crate::impact::NodeImpactCapability;
 use crate::package_manager;
+use crate::preparation::NodeDependencyPreparationCapability;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
-    CatalogEntry, CatalogRuntime, ComplexityThresholdKind, DetectResult, ExecutionResolution,
-    Language, LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts,
-    ProjectDiscovery, Scope, SignalCollector, SignalKind, VerificationSelectorSupport,
-    VerificationTarget,
+    CatalogEntry, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
+    LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts, ProjectDiscovery,
+    Scope, SignalCollector, SignalKind, VerificationSelectorSupport, VerificationTarget,
 };
 use std::path::Path;
 
@@ -92,12 +95,33 @@ impl LanguageAdapter for NodeAdapter {
         NODE_CATALOG
     }
 
-    fn catalog_runtime(&self) -> &dyn CatalogRuntime {
-        &NODE_CATALOG_RUNTIME
+    fn impact_capability(&self) -> Option<&dyn ayni_core::ImpactCapability> {
+        Some(&NodeImpactCapability)
     }
 
     fn collector(&self) -> &dyn SignalCollector {
         &self.collector
+    }
+
+    fn environment_capability(&self) -> Option<&dyn ayni_core::EnvironmentCapability> {
+        static CAPABILITY: NodeEnvironmentCapability = NodeEnvironmentCapability;
+        Some(&CAPABILITY)
+    }
+
+    fn dependency_preparation_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::DependencyPreparationCapability> {
+        static CAPABILITY: NodeDependencyPreparationCapability =
+            NodeDependencyPreparationCapability;
+        Some(&CAPABILITY)
+    }
+
+    fn environment_resolution_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::EnvironmentResolutionCapability> {
+        static CAPABILITY: NodeEnvironmentResolutionCapability =
+            NodeEnvironmentResolutionCapability;
+        Some(&CAPABILITY)
     }
 
     fn policy_effectiveness_facts(&self) -> PolicyEffectivenessFacts {

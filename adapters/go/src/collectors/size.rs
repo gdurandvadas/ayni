@@ -1,4 +1,4 @@
-use ayni_core::size::{collect_size, collect_size_file};
+use ayni_adapters_common::size::{collect_size, collect_size_file};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
 };

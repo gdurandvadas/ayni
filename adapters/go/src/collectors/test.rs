@@ -1,7 +1,7 @@
 use super::util::run_tool_for_context;
 use ayni_adapters_common::collector::CollectorResult;
 use ayni_adapters_common::exec::format_command;
-use ayni_adapters_common::failure::command_failure_from_output;
+use ayni_adapters_common::failure::{command_failure_from_output, test_execution_incomplete};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
     TestFailure, TestResult, VerificationSelection,
@@ -64,6 +64,9 @@ fn collect_with_command(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let mut summary = parse_test_events(&stdout);
 
+    let execution_incomplete =
+        test_execution_incomplete(success, summary.total_tests, summary.failed);
+
     if !success && summary.offenders.is_empty() {
         summary.offenders.push(TestFailure {
             file: None,
@@ -91,7 +94,7 @@ fn collect_with_command(
             failed: summary.failed,
             duration_ms: (summary.duration_ms > 0).then_some(summary.duration_ms),
             runner,
-            failure: (!success).then(|| {
+            failure: execution_incomplete.then(|| {
                 command_failure_from_output(context, SignalKind::Test, &program, &args, &output)
             }),
         }),

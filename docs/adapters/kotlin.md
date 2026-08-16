@@ -7,21 +7,34 @@ contains `build.gradle.kts`, `build.gradle`, `settings.gradle.kts`, or
 `settings.gradle`; configure analysis roots in `[kotlin].roots`. The Gradle
 runner precedence is `./gradlew`, `gradlew.bat`, then `gradle` on `PATH`.
 
-The Gradle runner and JDK are user-owned prerequisites. Applied installation
-can add missing plugins only to supported direct `plugins { }` blocks in
-`build.gradle.kts` or `build.gradle`; unsupported build shapes report setup
-errors. Existing JaCoCo coverage is retained; otherwise installation adds Kover.
+Managed Kotlin support requires a repository-owned POSIX Gradle wrapper
+(`gradlew`, wrapper JAR, properties, exact official distribution URL), a
+repository JDK requirement, build/settings files, and committed Gradle
+dependency locks. Ayni discovers `.java-version`, `.tool-versions`, and common
+Gradle JVM toolchain declarations separately from the wrapper version. Conflicts
+fail rather than selecting an arbitrary JDK.
+
+`env build` stages only digest-checked Gradle metadata and uses a generated init
+script to resolve locked configurations into `GRADLE_USER_HOME`; it does not
+copy source or edit build files. Managed Gradle commands use the locked JDK,
+set `JAVA_HOME`, and add `--offline --no-daemon`. Coverage, complexity, and
+mutation require exact repository plugin declarations for Kover/JaCoCo,
+Detekt, and PIT respectively. The Gradle runner, JDK, and plugins remain
+user-owned prerequisites for `--host` execution. Composite builds, dynamic
+plugin versions, Android SDK management, missing dependency locks, and private
+repositories requiring undeclared credentials are not supported by the first
+managed slice.
 
 ## Signal Coverage
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | Gradle `test` task and JUnit XML | no version enforced |
-| `coverage` | Gradle `koverXmlReport` or `jacocoTestReport` | Kover 0.9.8 when Ayni adds it; JaCoCo: no version enforced |
-| `size` | built-in Kotlin source scan | no version enforced |
-| `complexity` | Gradle `detekt` task | Detekt 1.23.8 when Ayni adds it |
-| `deps` | Gradle `dependencies` project edges | no version enforced |
-| `mutation` | Gradle `pitest` task (opt-in) | PIT plugin 1.19.0 when Ayni adds it |
+| `test` | Gradle `test` task and JUnit XML | managed: exact wrapper and JDK; host: no version enforced |
+| `coverage` | Gradle `koverXmlReport` or `jacocoTestReport` | managed: exact wrapper/JDK and exact Kover/JaCoCo declaration; host: no version enforced |
+| `size` | built-in Kotlin source scan | no external tool |
+| `complexity` | Gradle `detekt` task | managed: exact wrapper/JDK and exact Detekt plugin; host: no version enforced |
+| `deps` | Gradle `dependencies` project edges | managed: exact wrapper and JDK; host: no version enforced |
+| `mutation` | Gradle `pitest` task (opt-in) | managed: exact wrapper/JDK and exact PIT plugin; host: no version enforced |
 
 ## Focused verification
 
@@ -45,9 +58,18 @@ cannot be combined with `--package`; unsupported or ambiguous selectors are
 rejected before Gradle runs.
 
 Verification commands carry their originating contract and target, for example:
-`ayni verify test --config './.ayni.toml' --language kotlin --root '.' --package
+`ayni verify test --host --config './.ayni.toml' --language kotlin --root '.' --package
 'com.example.ApiTest' --name 'createsUser'`. Use only the selectors marked
 above; copy the exact command in an artifact finding rather than synthesizing one.
+
+## Impact planning
+
+Kotlin impact mapping currently treats every changed input below the configured
+root as relevant, along with governing ancestor Gradle build/settings, lock,
+wrapper executable/JAR, version-catalog, dependency-lock, and JDK runtime inputs. Because Gradle project topology is not yet
+used for narrowing, every enabled signal broadens to the configured Kotlin root
+and records a `missing_topology` uncertainty. This is intentionally conservative
+and does not replace the final unscoped `ayni check`.
 
 ## Contract
 

@@ -1,4 +1,4 @@
-use crate::catalog::{CatalogEntry, CatalogRuntime};
+use crate::catalog::CatalogEntry;
 use crate::language::Language;
 use crate::runtime::Scope;
 use crate::runtime::{AdapterError, ExecutionResolution, RunContext};
@@ -271,9 +271,143 @@ pub trait LanguageAdapter: Send + Sync {
     }
     fn profile(&self) -> LanguageProfile;
     fn catalog(&self) -> &'static [CatalogEntry];
-    /// Runtime behavior for the ordered declarative catalog.
-    fn catalog_runtime(&self) -> &dyn CatalogRuntime;
     fn collector(&self) -> &dyn SignalCollector;
+
+    /// Optional, read-only impact capability. Unsupported is explicit so callers can broaden safely.
+    fn impact_capability(&self) -> Option<&dyn crate::ImpactCapability> {
+        None
+    }
+
+    /// Validate capability, request, and contribution identities around impact analysis.
+    fn analyze_impact(
+        &self,
+        request: &crate::ImpactRequest,
+    ) -> Result<crate::ImpactContribution, AdapterError> {
+        let capability = self.impact_capability().ok_or_else(|| {
+            AdapterError::new(self.language(), "impact capability is unsupported")
+        })?;
+        if request.language != self.language() || capability.language() != self.language() {
+            return Err(AdapterError::new(
+                self.language(),
+                "impact request language does not match adapter capability",
+            ));
+        }
+        let mut contribution = capability.analyze(request)?;
+        contribution.normalize();
+        contribution.validate(request, |signal| self.verification_selector_support(signal))?;
+        Ok(contribution)
+    }
+
+    /// Optional environment-planning capability. Existing quality adapters
+    /// remain valid while environment discovery is implemented incrementally.
+    fn environment_capability(&self) -> Option<&dyn crate::EnvironmentCapability> {
+        None
+    }
+
+    /// Optional native dependency preparation capability. The returned commands
+    /// are semantic, structured argv and are intended for an isolated staged
+    /// workspace; adapters never execute them through this wrapper.
+    fn dependency_preparation_capability(
+        &self,
+    ) -> Option<&dyn crate::DependencyPreparationCapability> {
+        None
+    }
+
+    fn prepare_dependencies(
+        &self,
+        request: &crate::DependencyPreparationRequest,
+    ) -> Result<crate::DependencyPreparationPlan, AdapterError> {
+        let capability = self.dependency_preparation_capability().ok_or_else(|| {
+            AdapterError::new(
+                self.language(),
+                "dependency preparation capability is unsupported",
+            )
+        })?;
+        if request.target().target.language != self.language()
+            || capability.language() != self.language()
+        {
+            return Err(AdapterError::new(
+                self.language(),
+                "dependency preparation language does not match adapter language",
+            ));
+        }
+        let plan = capability.prepare(request)?;
+        if plan.target != request.target().target {
+            return Err(AdapterError::new(
+                self.language(),
+                "dependency preparation target does not match the requested target",
+            ));
+        }
+        Ok(plan)
+    }
+
+    /// Optional exact-resolution capability used only by explicit environment locking.
+    fn environment_resolution_capability(
+        &self,
+    ) -> Option<&dyn crate::EnvironmentResolutionCapability> {
+        None
+    }
+
+    fn resolve_environment(
+        &self,
+        request: &crate::EnvironmentResolutionRequest,
+    ) -> Result<crate::TargetEnvironment, AdapterError> {
+        let capability = self.environment_resolution_capability().ok_or_else(|| {
+            AdapterError::new(
+                self.language(),
+                "environment resolution capability is unsupported",
+            )
+        })?;
+        if request.target().target.language != self.language()
+            || capability.language() != self.language()
+        {
+            return Err(AdapterError::new(
+                self.language(),
+                "environment resolution language does not match adapter language",
+            ));
+        }
+        let resolved = capability.resolve(request)?;
+        if resolved.target != request.target().target {
+            return Err(AdapterError::new(
+                self.language(),
+                "resolved environment target does not match the requested target",
+            ));
+        }
+        Ok(resolved)
+    }
+
+    /// Validate capability language and target identity around one read-only
+    /// environment discovery call.
+    fn discover_environment(
+        &self,
+        request: &crate::EnvironmentDiscoveryRequest,
+    ) -> Result<crate::EnvironmentContribution, AdapterError> {
+        let capability = self.environment_capability().ok_or_else(|| {
+            AdapterError::new(
+                self.language(),
+                "environment discovery capability is unsupported",
+            )
+        })?;
+        if request.target().language != self.language() {
+            return Err(AdapterError::new(
+                self.language(),
+                "environment request language does not match adapter language",
+            ));
+        }
+        if capability.language() != self.language() {
+            return Err(AdapterError::new(
+                self.language(),
+                "environment capability reports a different language",
+            ));
+        }
+        let contribution = capability.discover(request)?;
+        crate::environment_adapter::validate_environment_contribution(
+            self.language(),
+            request,
+            &contribution,
+        )?;
+        Ok(contribution)
+    }
 
     /// Return static policy requirements for this adapter. Implementations
     /// must not inspect the filesystem, discover roots, or execute tools.
@@ -414,7 +548,123 @@ fn signal_name(kind: SignalKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{VerificationSelection, VerificationSelectorSupport, validate_selector_support};
-    use crate::{Language, SignalKind, VerificationTarget};
+    use crate::{
+        AdapterError, Architecture, CatalogEntry, DetectResult, EnvironmentCapability,
+        EnvironmentContribution, EnvironmentDiscoveryRequest, Language, LanguageAdapter,
+        LanguageProfile, Libc, OperatingSystem, RequirementConfidence, RequirementSource,
+        RunContext, RuntimeRequirement, SignalCollector, SignalKind, SignalRow, TargetEnvironment,
+        TargetIdentity, TargetPlatform, VerificationTarget, VersionRequirement,
+    };
+    use std::path::Path;
+
+    struct TestAdapter<'a> {
+        capability: Option<&'a dyn EnvironmentCapability>,
+    }
+
+    struct TestCapability {
+        language: Language,
+        target: TargetIdentity,
+    }
+
+    struct TestCollector;
+
+    static TEST_COLLECTOR: TestCollector = TestCollector;
+
+    impl EnvironmentCapability for TestCapability {
+        fn language(&self) -> Language {
+            self.language
+        }
+
+        fn discover(
+            &self,
+            _request: &EnvironmentDiscoveryRequest,
+        ) -> Result<EnvironmentContribution, AdapterError> {
+            EnvironmentContribution::new(
+                TargetEnvironment {
+                    target: self.target.clone(),
+                    workspace: None,
+                    package: None,
+                    runtimes: vec![RuntimeRequirement {
+                        runtime: String::from("rust"),
+                        version: VersionRequirement::exact("1.93.0").expect("version"),
+                        components: Vec::new(),
+                        targets: Vec::new(),
+                        source: RequirementSource::new(
+                            "manifest",
+                            "Cargo.toml",
+                            None::<String>,
+                            RequirementConfidence::Declared,
+                        )
+                        .expect("source"),
+                    }],
+                    package_manager: None,
+                    signal_tools: Vec::new(),
+                    system_requirements: Vec::new(),
+                    dependency_locks: Vec::new(),
+                },
+                Vec::new(),
+                Vec::new(),
+            )
+            .map_err(|error| AdapterError::new(self.language, error.to_string()))
+        }
+    }
+
+    impl SignalCollector for TestCollector {
+        fn collect(
+            &self,
+            _kind: SignalKind,
+            _context: &RunContext,
+        ) -> Result<SignalRow, AdapterError> {
+            panic!("quality collection is outside this test")
+        }
+    }
+
+    impl LanguageAdapter for TestAdapter<'_> {
+        fn language(&self) -> Language {
+            Language::Rust
+        }
+
+        fn detect(&self, _root: &Path) -> DetectResult {
+            DetectResult::default()
+        }
+
+        fn discover_roots(&self, _repo_root: &Path) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn profile(&self) -> LanguageProfile {
+            LanguageProfile {
+                language: Language::Rust,
+                default_file_globs: Vec::new(),
+            }
+        }
+
+        fn catalog(&self) -> &'static [CatalogEntry] {
+            &[]
+        }
+
+        fn collector(&self) -> &dyn SignalCollector {
+            &TEST_COLLECTOR
+        }
+
+        fn environment_capability(&self) -> Option<&dyn EnvironmentCapability> {
+            self.capability
+        }
+    }
+
+    fn environment_request(language: Language) -> EnvironmentDiscoveryRequest {
+        EnvironmentDiscoveryRequest::new(
+            std::env::current_dir().expect("current directory"),
+            TargetIdentity::new(language, ".").expect("target"),
+            [],
+            vec![TargetPlatform {
+                os: OperatingSystem::Linux,
+                architecture: Architecture::Amd64,
+                libc: Libc::Glibc,
+            }],
+        )
+        .expect("request")
+    }
 
     #[test]
     fn selector_support_rejects_unsupported_selectors_with_alternatives() {
@@ -478,6 +728,63 @@ mod tests {
                 &VerificationSelection::default(),
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn language_adapter_defaults_to_unsupported_environment_capability() {
+        let adapter = TestAdapter { capability: None };
+        let error = adapter
+            .discover_environment(&environment_request(Language::Rust))
+            .expect_err("unsupported capability must fail explicitly");
+        assert!(error.message.contains("unsupported"));
+    }
+
+    #[test]
+    fn language_adapter_rejects_capability_language_and_target_drift() {
+        let language_drift = TestCapability {
+            language: Language::Node,
+            target: TargetIdentity::new(Language::Rust, ".").expect("target"),
+        };
+        let adapter = TestAdapter {
+            capability: Some(&language_drift),
+        };
+        assert!(
+            adapter
+                .discover_environment(&environment_request(Language::Rust))
+                .expect_err("language drift")
+                .message
+                .contains("different language")
+        );
+
+        let request_drift = TestCapability {
+            language: Language::Rust,
+            target: TargetIdentity::new(Language::Rust, ".").expect("target"),
+        };
+        let adapter = TestAdapter {
+            capability: Some(&request_drift),
+        };
+        assert!(
+            adapter
+                .discover_environment(&environment_request(Language::Node))
+                .expect_err("request language drift")
+                .message
+                .contains("does not match adapter")
+        );
+
+        let target_drift = TestCapability {
+            language: Language::Rust,
+            target: TargetIdentity::new(Language::Rust, "other").expect("target"),
+        };
+        let adapter = TestAdapter {
+            capability: Some(&target_drift),
+        };
+        assert!(
+            adapter
+                .discover_environment(&environment_request(Language::Rust))
+                .expect_err("target drift")
+                .message
+                .contains("does not match")
         );
     }
 

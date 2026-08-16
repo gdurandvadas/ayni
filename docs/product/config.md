@@ -8,7 +8,7 @@ Policy lives at the repository root. It controls enabled signals, active
 languages and roots, per-language thresholds, dependency rules, report settings,
 and tool command overrides.
 
-Use `ayni contract display` to print a concise, deterministic projection of the
+Use `ayni contract show` to print a concise, deterministic projection of the
 validated configured policy. Pass `--config <path>` to select a policy other
 than `./.ayni.toml`, or `--output json` for a machine-readable, deterministic
 projection. JSON output has a `projection_version` field (currently `0.1.0`),
@@ -19,7 +19,8 @@ dependency restrictions, and explicit tool overrides. Both formats include
 advisory effectiveness warnings with stable codes; warnings do not make a valid
 policy fail. It does not discover
 projects, inspect or invoke tools, run adapters, analyze code, or write
-artifacts. Use `ayni analyze` for measured results and completion evidence.
+artifacts. Use `ayni check` for managed measured results and completion
+evidence, or `ayni check --host` for the explicit host path.
 
 For the signal vocabulary and schema selection, see [`signals.md`](signals.md);
 for current JSON artifact fields, see [schema v3](signals/v3.md).
@@ -37,7 +38,7 @@ telemetry, see [`runtime.md`](runtime.md).
 | `[concurrency]`                                | Scheduler settings for running independent analyze roots in parallel.                                            |
 | `[execution]`                                  | Tool execution settings such as the per-command timeout.                                                          |
 | `[report]`                                     | Console report rendering settings such as offender list limits.                                                  |
-| `[rust.*]`, `[go.*]`, `[node.*]`, `[python.*]`, `[kotlin.*]` | Per-language settings (roots, thresholds, optional foundation settings, and optional tooling command overrides). |
+| `[rust.*]`, `[go.*]`, `[node.*]`, `[python.*]`, `[kotlin.*]` | Per-language settings (roots, thresholds, dependency rules, and optional tooling command overrides). |
 
 Everything under a language key uses normal TOML **single-bracket** tables and inline tables. There are no `[[array.of.tables]]` blocks in the policy model.
 
@@ -93,7 +94,18 @@ Matching uses the map’s key order (sorted lexicographically). If two keys coul
 
 ## Other languages
 
-Use the same shape for Node, Python, and Kotlin when those adapters are enabled:
+Use the same shape for Go, Node, Python, and Kotlin when those adapters are enabled:
+
+```toml
+[go.size]
+"**/*.go" = { warn = 300, fail = 600, exclude = ["vendor/**", ".git/**", ".ayni/**"] }
+
+[go.complexity]
+fn_cyclomatic = { warn = 10, fail = 20 }
+
+[go.coverage]
+line_percent = { warn = 70, fail = 50 }
+```
 
 ```toml
 [node.size]
@@ -115,10 +127,6 @@ line_percent = { warn = 70, fail = 50 }
 ```toml
 [python.size]
 "**/*.py" = { warn = 400, fail = 800, exclude = [".venv/**", "venv/**", "__pycache__/**", ".git/**", ".ayni/**"] }
-
-[python.foundation]
-runner = "workspace"
-validate_install = true
 
 [python.complexity]
 fn_cognitive = { warn = 10, fail = 15 }
@@ -174,22 +182,9 @@ Notes:
 - `command` is required inside each override table.
 - `args` is optional; when omitted, Ayni uses signal-specific defaults for that language.
 - Overrides are command execution overrides only; result parsing still expects the signal collector’s native output shape.
-
-## Foundation settings
-
-Each language may define optional foundation settings for install/bootstrap
-flows:
-
-```toml
-[node.foundation]
-runner = "workspace"
-validate_install = true
-```
-
-Notes:
-
-- `runner = "workspace"` pins workspace-style runner behavior when install detects a shared workspace manager.
-- `validate_install = true` keeps `ayni install --apply` in bootstrap-and-validate mode. Set it to `false` only when a repository deliberately wants scaffold-plus-install without validation.
+- Overrides are host-execution features. Managed environment planning rejects an
+  enabled signal with an override because the lock cannot prove or provision an
+  arbitrary command. Use `--host` when an override is required.
 
 ## Language roots
 
@@ -238,12 +233,12 @@ Use `[report]` to tune console-only rendering behavior.
 offenders_limit = 4
 ```
 
-`offenders_limit` caps how many offender lines `ayni analyze` prints per
-signal row. If omitted, Ayni prints all offenders (no cap).
+`offenders_limit` caps how many offender lines `ayni check` prints per signal
+row in either managed or host mode. If omitted, Ayni prints all offenders (no cap).
 
 ## Concurrency
 
-Use `[concurrency]` to control how `ayni analyze` schedules independent roots.
+Use `[concurrency]` to control how `ayni check` schedules independent roots.
 This is scheduler-level parallelism across analyze targets such as `rust/single`,
 `rust/mono`, `node/frontend`, or `go/backend`. It does not change how an
 individual language tool parallelizes internally.
@@ -291,8 +286,7 @@ because Cargo serializes builds on the target-directory lock.
 
 Use `[execution]` to bound how long a single tool invocation may run. When a
 command exceeds the timeout, Ayni kills and reaps it, preserves any captured
-diagnostics, and reports a typed failed signal row (or structured catalog
-failure) rather than hanging the run. Command output is streamed as it arrives,
+diagnostics, and reports a typed failed signal row rather than hanging the run. Command output is streamed as it arrives,
 so interactive progress reflects live tool output rather than a post-process
 summary.
 
@@ -356,16 +350,17 @@ current artifact's `applied_thresholds` field; see [schema v3](signals/v3.md).
 
 ## Output and report safety
 
-`ayni analyze --output md` renders typed findings under **Offenders** and adds a
+`ayni check --output markdown` renders typed findings under **Offenders** and adds a
 **Failures** section only when a collector command failed. Failure entries can
 include the command, working directory, exit code, and tool message. Markdown
 and the schema-v3 JSON artifact can consequently expose repository paths and raw
 tool output; do not publish them without reviewing that diagnostic data.
 
-For machine consumers, `ayni analyze --json` and `ayni analyze --output json`
-select the same schema-v3 artifact. `--json` conflicts with an explicit
-non-JSON `--output` value (`stdout` or `md`); choose one output mode. See
-[schema v3](signals/v3.md) for the current schema and migration posture.
+For machine consumers, `ayni check --output json` and
+`ayni check --host --output json` select the same schema-v3 artifact shape.
+The supported output values are `human`, `json`, and `markdown`; choose exactly
+one `--output` value. See [schema v3](signals/v3.md) for the current schema and
+migration posture.
 
 ---
 
@@ -382,8 +377,8 @@ Forbidden edges use the same map style as size: keys and values are glob pattern
 
 ## Completion and focused verification
 
-`ayni analyze` always evaluates every configured language root. It is the
-repository completion operation and the sole writer of
+`ayni check` and `ayni check --host` always evaluate every configured language
+root. They are repository completion operations and the sole writer of
 `.ayni/last/signals.json`; it does not accept `--file`, `--package`, or
 `--language` selectors.
 

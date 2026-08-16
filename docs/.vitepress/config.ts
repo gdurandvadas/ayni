@@ -6,7 +6,6 @@ export default defineConfig({
   title: 'Ayni',
   description: 'Open-source code quality signals for repositories that use AI agents.',
   base,
-  srcExclude: ['initiatives/**'],
   cleanUrls: true,
   themeConfig: {
     socialLinks: [
@@ -22,6 +21,7 @@ export default defineConfig({
         text: 'Product Reference',
           items: [
             { text: 'Configuration', link: '/product/config' },
+            { text: 'Impact-aware execution', link: '/product/impact' },
             {
               text: 'Signals',
               link: '/product/signals',
@@ -59,6 +59,7 @@ export default defineConfig({
           text: 'Product Reference',
           items: [
             { text: 'Configuration', link: '/product/config' },
+            { text: 'Impact-aware execution', link: '/product/impact' },
             {
               text: 'Signals',
               link: '/product/signals',

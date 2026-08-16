@@ -4,7 +4,7 @@ use ayni_adapters_common::exec::{
     format_command, run_command_for_context_streaming_structured,
     run_command_for_context_structured,
 };
-use ayni_adapters_common::failure::setup_failure;
+use ayni_adapters_common::failure::{setup_failure, test_execution_incomplete};
 use ayni_core::{
     Budget, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, TestFailure,
     TestResult, VerificationSelection,
@@ -84,7 +84,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     }
 
     let pass = test_row_passes(status_ok, total_tests, failed, report_missing);
-    let failure = if !status_ok {
+    let execution_incomplete =
+        report_missing || test_execution_incomplete(status_ok, total_tests, failed);
+    let failure = if execution_incomplete && !status_ok {
         Some(command_failure_from_output(
             context,
             SignalKind::Test,
@@ -219,7 +221,9 @@ fn build_row_from_output(
     if status_ok && !report_missing && total_tests == 0 {
         offenders.push(zero_tests_failure());
     }
-    let failure = if !status_ok {
+    let execution_incomplete =
+        report_missing || test_execution_incomplete(status_ok, total_tests, failed);
+    let failure = if execution_incomplete && !status_ok {
         Some(command_failure_from_output(
             context,
             SignalKind::Test,

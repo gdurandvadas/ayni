@@ -1,7 +1,7 @@
-use super::util::gradle_command;
+use super::util::{find_reports, gradle_command, prepare_gradle_execution, report_root};
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
-use ayni_adapters_common::failure::command_failure_from_output;
+use ayni_adapters_common::failure::{command_failure_from_output, test_execution_incomplete};
 use ayni_adapters_common::xml::{attr_f64, attr_string, attr_u64};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
@@ -10,10 +10,10 @@ use ayni_core::{
 use regex::Regex;
 use serde_json::json;
 use std::fs;
-use std::path::Path;
-use walkdir::WalkDir;
+use std::path::PathBuf;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
+    prepare_gradle_execution(context, SignalKind::Test).map_err(CollectorError::Adapter)?;
     let (program, args) = gradle_command(context, SignalKind::Test, "test");
     collect_with_command(context, program, args)
 }
@@ -28,6 +28,7 @@ pub fn collect_selected(
             "Kotlin source-file selection is unsupported; use --package and optional --name",
         )));
     }
+    prepare_gradle_execution(context, SignalKind::Test).map_err(CollectorError::Adapter)?;
     let (program, mut args) = gradle_command(context, SignalKind::Test, "test");
     let selector = match (&context.scope.package, &selection.name) {
         (Some(package), Some(name)) => format!("{package}.{name}"),
@@ -50,9 +51,15 @@ fn collect_with_command(
 ) -> CollectorResult {
     let runner = format_command(&program, &args);
     let output = run_command_for_context_structured(context, &program, &args)?;
-    let report = parse_reports(&context.workdir.join("build/test-results/test"))
-        .map_err(CollectorError::Adapter)?;
+    let report_paths = find_reports(
+        &report_root(context, SignalKind::Test),
+        &["build", "test-results", "test"],
+        "xml",
+    );
+    let report = parse_reports(&report_paths).map_err(CollectorError::Adapter)?;
     let failed = report.failures + report.errors;
+    let execution_incomplete =
+        test_execution_incomplete(output.status.success(), report.tests, failed);
     let mut offenders = report.offenders;
     if output.status.success() && report.tests == 0 {
         offenders.push(zero_tests_failure());
@@ -77,7 +84,7 @@ fn collect_with_command(
             failed,
             duration_ms: report.duration_ms,
             runner,
-            failure: (!output.status.success()).then(|| {
+            failure: execution_incomplete.then(|| {
                 command_failure_from_output(context, SignalKind::Test, &program, &args, &output)
             }),
         }),
@@ -111,19 +118,11 @@ struct JunitSummary {
     offenders: Vec<TestFailure>,
 }
 
-fn parse_reports(dir: &Path) -> Result<JunitSummary, String> {
-    if !dir.exists() {
-        return Ok(JunitSummary::default());
-    }
+fn parse_reports(paths: &[PathBuf]) -> Result<JunitSummary, String> {
     let mut summary = JunitSummary::default();
-    for entry in WalkDir::new(dir).into_iter().filter_map(Result::ok) {
-        if !entry.file_type().is_file()
-            || entry.path().extension().and_then(|value| value.to_str()) != Some("xml")
-        {
-            continue;
-        }
-        let content = fs::read_to_string(entry.path())
-            .map_err(|error| format!("failed to read {}: {error}", entry.path().display()))?;
+    for path in paths {
+        let content = fs::read_to_string(path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
         let parsed = parse_junit_xml(&content)?;
         summary.tests += parsed.tests;
         summary.failures += parsed.failures;

@@ -1,13 +1,15 @@
 use crate::catalog::RUST_CATALOG;
 use crate::collectors::RustCollector;
 use crate::discovery;
-use ayni_adapters_common::catalog::GENERIC_CATALOG_RUNTIME;
+use crate::environment::RustEnvironmentCapability;
+use crate::environment_resolution::RustEnvironmentResolutionCapability;
+use crate::impact::RustImpactCapability;
+use crate::preparation::RustDependencyPreparationCapability;
 use ayni_adapters_common::finding::{DependencySource, target_for_finding};
 use ayni_core::{
-    CatalogEntry, CatalogRuntime, ComplexityThresholdKind, DetectResult, ExecutionResolution,
-    Language, LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts,
-    ProjectDiscovery, Scope, SignalCollector, SignalKind, VerificationSelectorSupport,
-    VerificationTarget,
+    CatalogEntry, ComplexityThresholdKind, DetectResult, ExecutionResolution, Language,
+    LanguageAdapter, LanguageProfile, OffenderIdentity, PolicyEffectivenessFacts, ProjectDiscovery,
+    Scope, SignalCollector, SignalKind, VerificationSelectorSupport, VerificationTarget,
 };
 use std::path::Path;
 
@@ -57,6 +59,7 @@ impl LanguageAdapter for RustAdapter {
                 ambiguous: false,
                 install_cwd: workspace.clone(),
                 exec_cwd: workspace,
+                environment: std::collections::BTreeMap::new(),
             });
         }
         Some(ExecutionResolution::direct(
@@ -86,8 +89,24 @@ impl LanguageAdapter for RustAdapter {
         RUST_CATALOG
     }
 
-    fn catalog_runtime(&self) -> &dyn CatalogRuntime {
-        &GENERIC_CATALOG_RUNTIME
+    fn impact_capability(&self) -> Option<&dyn ayni_core::ImpactCapability> {
+        Some(&RustImpactCapability)
+    }
+
+    fn environment_capability(&self) -> Option<&dyn ayni_core::EnvironmentCapability> {
+        Some(&RustEnvironmentCapability)
+    }
+
+    fn dependency_preparation_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::DependencyPreparationCapability> {
+        Some(&RustDependencyPreparationCapability)
+    }
+
+    fn environment_resolution_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::EnvironmentResolutionCapability> {
+        Some(&RustEnvironmentResolutionCapability)
     }
 
     fn collector(&self) -> &dyn SignalCollector {

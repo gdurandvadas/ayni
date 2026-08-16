@@ -1,5 +1,5 @@
 use super::util::{
-    command_failure_from_output, format_command, prepare_report_path,
+    command_failure_from_output, format_command, package_manager_for_context, prepare_report_path,
     run_command_for_context_structured, to_repo_relative_path,
 };
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
@@ -33,14 +33,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         threshold,
         String::from("--ignore-complexity"),
     ];
-    let mut command_args = vec![
-        String::from("tool"),
-        String::from("run"),
-        String::from("complexipy"),
-    ];
-    command_args.extend(args);
-    let engine = format_command("uv", &command_args);
-    let output = run_command_for_context_structured(context, "uv", &command_args)?;
+    let (program, command_args) = complexity_command(context, &args);
+    let engine = format_command(&program, &command_args);
+    let output = run_command_for_context_structured(context, &program, &command_args)?;
     if !output.status.success() {
         return Ok(error_row(
             context,
@@ -48,7 +43,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             command_failure_from_output(
                 context,
                 SignalKind::Complexity,
-                "uv",
+                &program,
                 &command_args,
                 &output,
             ),
@@ -129,6 +124,18 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         })),
         offenders: Offenders::Complexity(offenders),
     })
+}
+
+fn complexity_command(context: &RunContext, args: &[String]) -> (String, Vec<String>) {
+    let manager = package_manager_for_context(context);
+    if manager.executable() == "python" {
+        // Complexipy exposes a console script but no `python -m complexipy`
+        // entrypoint. Environment managers still need their normal `run`
+        // prefix so the project-locked executable is selected.
+        return (String::from("complexipy"), args.to_vec());
+    }
+    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    manager.run_command("complexipy", &refs)
 }
 
 fn classify_complexity(
@@ -268,7 +275,10 @@ fn complexity_target(context: &RunContext) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FunctionEntry, classify_complexity, collect_function_entries, complexity_target};
+    use super::{
+        FunctionEntry, classify_complexity, collect_function_entries, complexity_command,
+        complexity_target,
+    };
     use ayni_core::{AyniPolicy, ExecutionResolution, Level, RunContext, Scope};
     use serde_json::json;
     use std::path::PathBuf;
@@ -308,6 +318,43 @@ mod tests {
         };
 
         assert_eq!(complexity_target(&context), "/repo/src/handler.py");
+    }
+
+    #[test]
+    fn complexity_uses_the_resolved_host_package_manager() {
+        let context = RunContext {
+            repo_root: PathBuf::from("/repo"),
+            target_root: PathBuf::from("/repo"),
+            workdir: PathBuf::from("/repo"),
+            policy: AyniPolicy::default(),
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("poetry", PathBuf::from("/repo"), "lock", 100),
+            debug: false,
+        };
+        let (program, args) = complexity_command(&context, &[String::from(".")]);
+        assert_eq!(program, "poetry");
+        assert_eq!(args, ["run", "complexipy", "."]);
+    }
+
+    #[test]
+    fn complexity_invokes_the_direct_console_script_for_pip_projects() {
+        let context = RunContext {
+            repo_root: PathBuf::from("/repo"),
+            target_root: PathBuf::from("/repo"),
+            workdir: PathBuf::from("/repo"),
+            policy: AyniPolicy::default(),
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct(
+                "python",
+                PathBuf::from("/repo"),
+                "manifest",
+                100,
+            ),
+            debug: false,
+        };
+        let (program, args) = complexity_command(&context, &[String::from(".")]);
+        assert_eq!(program, "complexipy");
+        assert_eq!(args, ["."]);
     }
 
     #[test]

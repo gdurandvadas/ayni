@@ -1,3 +1,5 @@
+use crate::workspace::WorkspacePatterns;
+use ayni_adapters_common::paths::canonicalize_relative_posix;
 use ayni_core::ExecutionResolution;
 use serde_json::Value as JsonValue;
 use std::fs;
@@ -52,21 +54,6 @@ impl PackageManager {
         argv.extend(args.iter().map(|arg| (*arg).to_string()));
         (self.executable().to_string(), argv)
     }
-
-    pub(crate) fn add_dependency_args(self, package: &str, dev: bool) -> Vec<String> {
-        let (command, dev_flag) = match self {
-            Self::Npm => ("install", "--save-dev"),
-            Self::Pnpm => ("add", "-D"),
-            Self::Yarn => ("add", "--dev"),
-            Self::Bun => ("add", "-d"),
-        };
-        let mut args = vec![command.to_string()];
-        if dev {
-            args.push(dev_flag.to_string());
-        }
-        args.push(package.to_string());
-        args
-    }
 }
 
 pub(crate) fn detect(root: &Path) -> Option<PackageManager> {
@@ -120,6 +107,7 @@ fn resolution(
         ambiguous: false,
         install_cwd: resolved_from,
         exec_cwd: exec_root.to_path_buf(),
+        environment: std::collections::BTreeMap::new(),
     }
 }
 
@@ -130,7 +118,11 @@ fn workspace_ancestor(repo_root: &Path, root: &Path) -> Option<ExecutionResoluti
             break;
         }
         let manifest = path.join("package.json");
-        if manifest.is_file() && manifest_has_workspaces(&manifest) {
+        if let Some(value) = read_manifest(&manifest)
+            && let Ok(patterns) = WorkspacePatterns::parse(&value, &manifest)
+            && let Ok(relative) = root.strip_prefix(path)
+            && patterns.matches(&canonicalize_relative_posix(&relative.to_string_lossy()))
+        {
             let manager = detect(path).unwrap_or(PackageManager::Npm);
             return Some(resolution(
                 manager,
@@ -159,43 +151,27 @@ fn parse_manifest(path: &Path) -> Option<PackageManager> {
     .find_map(|(prefix, manager)| raw.starts_with(prefix).then_some(manager))
 }
 
-fn manifest_has_workspaces(path: &Path) -> bool {
+fn read_manifest(path: &Path) -> Option<JsonValue> {
     fs::read_to_string(path)
         .ok()
         .and_then(|content| serde_json::from_str::<JsonValue>(&content).ok())
-        .is_some_and(|value| value.get("workspaces").is_some())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PackageManager, detect};
+    use super::{PackageManager, detect, resolve};
     use std::fs;
     use tempfile::TempDir;
 
     #[test]
-    fn manager_commands_are_characterized() {
+    fn manager_execution_commands_are_characterized() {
         let cases = [
-            (
-                PackageManager::Npm,
-                "npm",
-                &["exec", "--"][..],
-                &["install", "--save-dev"][..],
-            ),
-            (
-                PackageManager::Pnpm,
-                "pnpm",
-                &["exec"][..],
-                &["add", "-D"][..],
-            ),
-            (
-                PackageManager::Yarn,
-                "yarn",
-                &["exec"][..],
-                &["add", "--dev"][..],
-            ),
-            (PackageManager::Bun, "bun", &["x"][..], &["add", "-d"][..]),
+            (PackageManager::Npm, "npm", &["exec", "--"][..]),
+            (PackageManager::Pnpm, "pnpm", &["exec"][..]),
+            (PackageManager::Yarn, "yarn", &["exec"][..]),
+            (PackageManager::Bun, "bun", &["x"][..]),
         ];
-        for (manager, executable, exec_prefix, add_prefix) in cases {
+        for (manager, executable, exec_prefix) in cases {
             assert_eq!(PackageManager::from_executable(executable), Some(manager));
             let (program, argv) = manager.exec_command("vitest", &["run"]);
             assert_eq!(program, executable);
@@ -205,18 +181,41 @@ mod tests {
                 .collect::<Vec<_>>();
             expected.extend([String::from("vitest"), String::from("run")]);
             assert_eq!(argv, expected);
-            let args = manager.add_dependency_args("vitest@3.2.4", true);
-            let mut expected = add_prefix
-                .iter()
-                .map(|arg| (*arg).to_string())
-                .collect::<Vec<_>>();
-            expected.push(String::from("vitest@3.2.4"));
-            assert_eq!(args, expected);
         }
-        assert_eq!(
-            PackageManager::Npm.add_dependency_args("left-pad", false),
-            ["install", "left-pad"]
-        );
+    }
+
+    #[test]
+    fn workspace_ancestor_requires_shared_pattern_membership() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"workspaces":["packages/**","!packages/excluded/**"],"packageManager":"pnpm@9"}"#,
+        )
+        .expect("root manifest");
+        fs::write(
+            dir.path().join("pnpm-lock.yaml"),
+            "lockfileVersion: '9.0'\n",
+        )
+        .expect("root lock");
+        for root in [
+            "packages/member",
+            "packages/excluded/app",
+            "tools/standalone",
+        ] {
+            fs::create_dir_all(dir.path().join(root)).expect("package dir");
+            fs::write(dir.path().join(root).join("package.json"), "{}").expect("package manifest");
+        }
+
+        let member = resolve(dir.path(), &dir.path().join("packages/member")).expect("member");
+        assert_eq!(member.runner, "pnpm");
+        assert_eq!(member.kind, "workspace_ancestor");
+
+        for root in ["packages/excluded/app", "tools/standalone"] {
+            let standalone = resolve(dir.path(), &dir.path().join(root)).expect("standalone");
+            assert_eq!(standalone.runner, "npm");
+            assert_eq!(standalone.kind, "fallback");
+            assert_eq!(standalone.install_cwd, dir.path().join(root));
+        }
     }
 
     #[test]

@@ -1,16 +1,17 @@
-use super::{
-    AnalyzePlanning, OutputArg, VERIFY_ARTIFACTS_DIR, VERIFY_SIGNALS_ARTIFACT,
-    build_analyze_targets, build_artifact_metadata_for_command, build_registry,
-    emit_analyze_outputs, failed_signal_row, persist_artifact_at, serialize_artifact,
-    signal_kind_slug, verification_command, workspace_root_from_config_path,
+use crate::analysis::{
+    AnalyzePlanning, OutputArg, VERIFY_SIGNALS_ARTIFACT, build_analyze_targets,
+    build_artifact_metadata_for_command, emit_analyze_outputs, failed_signal_row,
+    managed_execution_active, persist_artifact_at, serialize_artifact, signal_kind_slug,
+    workspace_root_from_config_path,
 };
+use crate::policy::load_from_path;
+use crate::{build_registry, verification_command};
 use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
-    AdapterRegistry, AyniPolicy, CompletionScope, CompletionState, Language, RunArtifact,
-    SignalKind, SignalRow, VerificationSelection,
+    AdapterRegistry, AyniPolicy, CompletionScope, Language, RunArtifact, RunOutcome, SignalKind,
+    SignalRow, VerificationSelection,
 };
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 pub(crate) struct Request {
@@ -31,16 +32,21 @@ struct ConfiguredTarget {
     root: String,
 }
 
-pub(crate) fn run(mut request: Request) -> Result<bool, String> {
-    let (workspace_root, policy) = prepare_request(&mut request)?;
-    let (registry, planning) = plan_verification(&workspace_root, &policy, &request)?;
-    let artifact = build_verification_artifact(&workspace_root, &registry, &planning, &request)?;
+pub(crate) type Error = crate::application_error::ApplicationError;
+
+pub(crate) fn run(mut request: Request) -> Result<RunOutcome, Error> {
+    let (workspace_root, policy) = prepare_request(&mut request).map_err(Error::input)?;
+    let (registry, planning) =
+        plan_verification(&workspace_root, &policy, &request).map_err(Error::input)?;
+    let artifact = build_verification_artifact(&workspace_root, &registry, &planning, &request)
+        .map_err(Error::execution)?;
     persist_and_emit_verification(artifact, &workspace_root, &policy, &registry, &request)
+        .map_err(Error::execution)
 }
 
 fn prepare_request(request: &mut Request) -> Result<(PathBuf, AyniPolicy), String> {
     let workspace_root = workspace_root_from_config_path(&request.config_path);
-    let policy = AyniPolicy::load_from_path(&request.config_path)?;
+    let policy = load_from_path(&request.config_path)?;
     validate_configured_root_containment(&workspace_root, &policy)?;
     validate_signal_enabled(&policy, request.kind)?;
     validate_selector_shape(request)?;
@@ -61,8 +67,6 @@ fn plan_verification(
     let selected = select_configured_targets(workspace_root, policy, &registry, request)?;
     validate_adapter_support(&registry, &selected, request)?;
 
-    fs::create_dir_all(workspace_root.join(VERIFY_ARTIFACTS_DIR))
-        .map_err(|error| format!("failed to create verification artifact directory: {error}"))?;
     let selected_language = selected
         .first()
         .expect("target selection is non-empty")
@@ -86,7 +90,7 @@ fn build_verification_artifact(
     request: &Request,
 ) -> Result<RunArtifact, String> {
     let rows = collect_rows(planning, registry, request);
-    let (completion, rows) = super::completion::reconcile(
+    let (completion, rows) = crate::analysis::reconcile(
         planning,
         CompletionScope::Requested,
         Some(request.kind),
@@ -111,14 +115,17 @@ fn persist_and_emit_verification(
     policy: &AyniPolicy,
     registry: &AdapterRegistry,
     request: &Request,
-) -> Result<bool, String> {
-    verification_command::materialize_finding_commands(&mut artifact, registry)?;
+) -> Result<RunOutcome, String> {
+    verification_command::materialize_finding_commands(
+        &mut artifact,
+        registry,
+        !managed_execution_active(),
+    )?;
     let serialized = serialize_artifact(&artifact)?;
     persist_artifact_at(workspace_root, VERIFY_SIGNALS_ARTIFACT, &serialized)?;
     emit_analyze_outputs(request.output_mode, policy, &artifact, &serialized)?;
 
-    Ok(artifact.completion.state == CompletionState::Incomplete
-        || artifact.rows.iter().any(|row| !row.pass))
+    Ok(artifact.outcome())
 }
 
 fn validate_signal_enabled(policy: &AyniPolicy, kind: SignalKind) -> Result<(), String> {

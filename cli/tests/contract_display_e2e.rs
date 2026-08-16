@@ -9,7 +9,7 @@ fn ayni() -> Command {
 
 fn display(config: &Path) -> Output {
     ayni()
-        .args(["contract", "display", "--config"])
+        .args(["contract", "show", "--config"])
         .arg(config)
         .output()
         .expect("launch ayni binary")
@@ -17,7 +17,7 @@ fn display(config: &Path) -> Output {
 
 fn display_json(config: &Path) -> Output {
     ayni()
-        .args(["contract", "display", "--output", "json", "--config"])
+        .args(["contract", "show", "--output", "json", "--config"])
         .arg(config)
         .output()
         .expect("launch ayni binary")
@@ -229,16 +229,16 @@ fn policy_loader_errors_are_reported_as_failures() {
 }
 
 #[test]
-fn nested_help_exposes_display_and_config_default() {
+fn nested_help_exposes_show_and_config_default() {
     let contract_help = ayni()
         .args(["contract", "--help"])
         .output()
         .expect("contract help");
     assert!(contract_help.status.success());
-    assert!(String::from_utf8_lossy(&contract_help.stdout).contains("display"));
+    assert!(String::from_utf8_lossy(&contract_help.stdout).contains("show"));
 
     let display_help = ayni()
-        .args(["contract", "display", "--help"])
+        .args(["contract", "show", "--help"])
         .output()
         .expect("display help");
     assert!(display_help.status.success());
