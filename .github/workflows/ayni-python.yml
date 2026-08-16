@@ -1,0 +1,46 @@
+name: ayni-python
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate Python mono example
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build Ayni CLI
+        uses: ./.github/actions/build-ayni
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: examples/python/mono/requirements-ci.txt
+
+      - name: Install pinned Python signal tools
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --requirement examples/python/mono/requirements-ci.txt
+
+      - name: Validate Python example
+        uses: ./.github/actions/validate-example
+        with:
+          language: python
+          fixture: examples/python/mono
+          expected-roots: |
+            libs/greeting
+            libs/math
+            services/greeting_service

@@ -1,0 +1,42 @@
+name: ayni-kotlin
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate Kotlin mono example
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build Ayni CLI
+        uses: ./.github/actions/build-ayni
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Validate Kotlin example
+        uses: ./.github/actions/validate-example
+        with:
+          language: kotlin
+          fixture: examples/kotlin/mono
+          expected-roots: .

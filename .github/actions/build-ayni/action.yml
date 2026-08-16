@@ -1,0 +1,17 @@
+name: Build Ayni CLI
+description: Install the pinned Rust toolchain, restore the shared cache, and build the checkout CLI.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@1.97.1
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ayni-cli-validation
+
+    - name: Build Ayni CLI
+      shell: bash
+      run: cargo build --locked -p ayni-cli
