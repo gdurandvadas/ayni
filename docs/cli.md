@@ -16,6 +16,7 @@ This document contains the help content for the `ayni` command-line program.
 * [`ayni contract show`↴](#ayni-contract-show)
 * [`ayni contract validate`↴](#ayni-contract-validate)
 * [`ayni verify`↴](#ayni-verify)
+* [`ayni verify list`↴](#ayni-verify-list)
 * [`ayni verify test`↴](#ayni-verify-test)
 * [`ayni verify coverage`↴](#ayni-verify-coverage)
 * [`ayni verify size`↴](#ayni-verify-size)
@@ -41,7 +42,7 @@ Correct environments, focused feedback, one definitive quality gate
 
 * `env` — Inspect and manage the repository code environment
 * `contract` — Inspect and validate the repository quality contract
-* `verify` — Run one quality signal with optional adapter-owned selectors
+* `verify` — Run focused signals or list exact commands from saved evidence
 * `impact` — Explain or run the checks affected by an explicit change
 * `check` — Run the complete repository quality contract
 * `agents` — Manage Ayni's agent instructions
@@ -244,18 +245,33 @@ Validate the contract without discovery or tool execution
 
 ## `ayni verify`
 
-Run one quality signal with optional adapter-owned selectors
+Run focused signals or list exact commands from saved evidence
 
 **Usage:** `ayni verify <COMMAND>`
 
 ###### **Subcommands:**
 
+* `list` — List exact verification commands from a saved result artifact
 * `test` — Run only the test signal
 * `coverage` — Run only the coverage signal
 * `size` — Run only the size signal
 * `complexity` — Run only the complexity signal
 * `deps` — Run only the dependency signal
 * `mutation` — Run only the mutation signal
+
+
+
+## `ayni verify list`
+
+List exact verification commands from a saved result artifact
+
+**Usage:** `ayni verify list [OPTIONS]`
+
+###### **Options:**
+
+* `--artifact <ARTIFACT>` — Saved schema-v3 result artifact to inspect
+
+  Default value: `./.ayni/last/signals.json`
 
 
 

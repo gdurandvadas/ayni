@@ -19,28 +19,13 @@ use serde_json::Value;
 use crate::ui::{FAIL_RGB, PASS_RGB, WARN_RGB, color_enabled};
 
 pub fn print_from_artifact(artifact: &RunArtifact, offenders_limit: usize) {
-    let mut text = build_report_text(
+    let text = build_report_text(
         &artifact.rows,
         Some(&artifact.completion),
         color_enabled(),
         offenders_limit,
     );
-    append_verification_commands(&mut text, artifact);
     println!("{text}");
-}
-
-fn append_verification_commands(out: &mut String, artifact: &RunArtifact) {
-    let commands: Vec<_> = artifact
-        .findings
-        .iter()
-        .flat_map(ayni_core::Findings::commands)
-        .collect();
-    if !commands.is_empty() {
-        out.push_str("verification commands\n");
-        for command in commands {
-            out.push_str(&format!("  {command}\n"));
-        }
-    }
 }
 
 #[cfg(test)]

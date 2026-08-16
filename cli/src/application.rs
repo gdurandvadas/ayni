@@ -25,6 +25,7 @@ pub(crate) enum Operation {
     ContractShow(ContractOperation),
     ContractValidate(ContractOperation),
     Verify(VerifyOperation),
+    VerifyList(VerifyListOperation),
     ImpactShow(ImpactOperation),
     ImpactRun(ImpactOperation),
     Check(CheckOperation),
@@ -79,6 +80,11 @@ pub(crate) struct CheckOperation {
     pub output: OutputFormat,
     pub execution_mode: ExecutionMode,
     pub debug: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct VerifyListOperation {
+    pub artifact: PathBuf,
 }
 
 #[derive(Debug, PartialEq, Eq)]

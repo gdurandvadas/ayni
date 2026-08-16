@@ -211,7 +211,19 @@ fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
 
     let terminal = fixture.analyze(&[]);
     assert!(!terminal.status.success());
-    assert!(String::from_utf8_lossy(&terminal.stdout).contains(&command));
+    let terminal_stdout = String::from_utf8_lossy(&terminal.stdout);
+    assert!(!terminal_stdout.contains("verification commands"));
+    assert!(!terminal_stdout.contains(&command));
+
+    let listed = ayni()
+        .args(["verify", "list", "--artifact"])
+        .arg(fixture.root.join(".ayni/last/signals.json"))
+        .output()
+        .expect("list verification commands");
+    assert!(listed.status.success());
+    let listed_stdout = String::from_utf8(listed.stdout).expect("command list");
+    assert!(listed_stdout.starts_with("verification commands\n"));
+    assert_eq!(listed_stdout.matches(&command).count(), 1);
 
     let markdown = fixture.analyze(&["--output", "markdown"]);
     assert!(!markdown.status.success());

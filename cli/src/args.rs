@@ -1,13 +1,14 @@
 use crate::application::{
     CheckOperation, ContractOperation, EnvLockOperation, EnvRunOperation, EnvShellOperation,
     EnvShowOperation, ExecutionMode, ImpactOperation, Operation, OutputFormat, RepositoryOperation,
-    ResultsCompareOperation, VerifyOperation,
+    ResultsCompareOperation, VerifyListOperation, VerifyOperation,
 };
 use ayni_core::{Language, SignalKind};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 const DEFAULT_CONFIG: &str = "./.ayni.toml";
+const DEFAULT_RESULTS_ARTIFACT: &str = "./.ayni/last/signals.json";
 
 #[derive(Parser, Debug)]
 #[command(name = "ayni")]
@@ -38,7 +39,7 @@ enum Commands {
         #[command(subcommand)]
         command: ContractCommands,
     },
-    /// Run one quality signal with optional adapter-owned selectors.
+    /// Run focused signals or list exact commands from saved evidence.
     Verify {
         #[command(subcommand)]
         command: VerifyCommands,
@@ -69,7 +70,7 @@ impl Commands {
         match self {
             Self::Env { command } => command.into_operation(),
             Self::Contract { command } => command.into_operation(),
-            Self::Verify { command } => Operation::Verify(command.into_operation()),
+            Self::Verify { command } => command.into_operation(),
             Self::Impact { command } => command.into_operation(),
             Self::Check(options) => Operation::Check(options.into_operation()),
             Self::Agents {
@@ -138,6 +139,8 @@ impl ContractCommands {
 
 #[derive(Subcommand, Debug)]
 enum VerifyCommands {
+    /// List exact verification commands from a saved result artifact.
+    List(VerifyListOptions),
     /// Run only the test signal.
     Test {
         #[command(flatten)]
@@ -158,8 +161,17 @@ enum VerifyCommands {
 }
 
 impl VerifyCommands {
-    fn into_operation(self) -> VerifyOperation {
-        let (signal, options, file, package, name) = match self {
+    fn into_operation(self) -> Operation {
+        let command = match self {
+            Self::List(options) => {
+                return Operation::VerifyList(VerifyListOperation {
+                    artifact: options.artifact,
+                });
+            }
+            command => command,
+        };
+        let (signal, options, file, package, name) = match command {
+            Self::List(_) => unreachable!("verify list handled before signal dispatch"),
             Self::Test { options, name } => (
                 SignalKind::Test,
                 options.common,
@@ -185,7 +197,7 @@ impl VerifyCommands {
             ),
             Self::Mutation(options) => (SignalKind::Mutation, options, None, None, None),
         };
-        VerifyOperation {
+        Operation::Verify(VerifyOperation {
             signal,
             config: options.config,
             language: options.language.map(LanguageArg::into_language),
@@ -196,7 +208,7 @@ impl VerifyCommands {
             output: options.output.into(),
             execution_mode: execution_mode(options.host),
             debug: options.debug,
-        }
+        })
     }
 }
 
@@ -369,6 +381,13 @@ impl CheckOptions {
             debug: self.debug,
         }
     }
+}
+
+#[derive(Args, Debug)]
+struct VerifyListOptions {
+    /// Saved schema-v3 result artifact to inspect.
+    #[arg(long, default_value = DEFAULT_RESULTS_ARTIFACT)]
+    artifact: PathBuf,
 }
 
 #[derive(Args, Debug)]
@@ -567,6 +586,7 @@ mod tests {
             (vec!["ayni", "env", "run", "--", "cargo", "test"], "EnvRun"),
             (vec!["ayni", "contract", "show"], "ContractShow"),
             (vec!["ayni", "contract", "validate"], "ContractValidate"),
+            (vec!["ayni", "verify", "list"], "VerifyList"),
             (vec!["ayni", "verify", "test"], "Verify"),
             (
                 vec!["ayni", "impact", "show", "--base", "main"],
@@ -598,6 +618,20 @@ mod tests {
                 "{operation:?}"
             );
         }
+    }
+
+    #[test]
+    fn verify_list_defaults_to_the_last_repository_artifact() {
+        let operation = Cli::try_parse_from(["ayni", "verify", "list"])
+            .expect("arguments parse")
+            .into_operation();
+        let Operation::VerifyList(operation) = operation else {
+            panic!("verify list operation");
+        };
+        assert_eq!(
+            operation.artifact,
+            PathBuf::from("./.ayni/last/signals.json")
+        );
     }
 
     #[test]

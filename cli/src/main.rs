@@ -17,6 +17,7 @@ mod policy;
 mod registry;
 mod ui;
 mod verification_command;
+mod verification_list;
 mod verify;
 
 use agents::sync_impl;
@@ -46,6 +47,7 @@ fn dispatch(operation: application::Operation) -> ExitCode {
             dispatch_contract(operation)
         }
         Operation::AgentsSync(operation) => agents_sync(&operation.repo_root),
+        Operation::VerifyList(operation) => verification_list::run(&operation.artifact),
         Operation::ResultsCompare(operation) => artifact_compare::run(
             &operation.baseline,
             &operation.candidate,
