@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.9.0...ayni-v0.9.1) (2026-08-16)
+
+
+### Bug Fixes
+
+* **release:** exclude Docker build records from publishing ([#44](https://github.com/gdurandvadas/ayni/issues/44)) ([448a8e4](https://github.com/gdurandvadas/ayni/commit/448a8e48e18f43ec87f6c8e432bc7ded3322748f))
+* **release:** synchronize workspace lock versions ([#47](https://github.com/gdurandvadas/ayni/issues/47)) ([664a257](https://github.com/gdurandvadas/ayni/commit/664a2574d2f5db97cb25bf3dc2500b430281b2a7))
+
 ## [0.9.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.8.1...ayni-v0.9.0) (2026-08-16)
 
 
