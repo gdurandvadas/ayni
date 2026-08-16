@@ -1,0 +1,74 @@
+name: ayni-status
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  checks: read
+  contents: read
+
+jobs:
+  status:
+    name: status
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wait for all Ayni workflows
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const expected = [
+              "check Ayni repository (self)",
+              "repository quality",
+              "validate Go mono example",
+              "validate Kotlin mono example",
+              "validate Node mono example",
+              "validate Python mono example"
+            ];
+            const deadline = Date.now() + 14 * 60 * 1000;
+
+            while (true) {
+              const { data } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.payload.pull_request.head.sha,
+                filter: "latest",
+                per_page: 100
+              });
+              const checks = new Map(
+                data.check_runs.map((check) => [check.name, check])
+              );
+              const missing = expected.filter((name) => !checks.has(name));
+              const pending = expected.filter((name) => {
+                const check = checks.get(name);
+                return check && check.status !== "completed";
+              });
+
+              core.info(`missing checks: ${missing.join(", ") || "none"}`);
+              core.info(`pending checks: ${pending.join(", ") || "none"}`);
+
+              if (missing.length === 0 && pending.length === 0) {
+                const failed = expected.filter(
+                  (name) => checks.get(name).conclusion !== "success"
+                );
+                if (failed.length > 0) {
+                  core.setFailed(`Ayni workflows failed: ${failed.join(", ")}`);
+                } else {
+                  core.info("All Ayni workflows passed");
+                }
+                return;
+              }
+
+              if (Date.now() >= deadline) {
+                core.setFailed(
+                  `Timed out waiting for Ayni workflows; missing: ${missing.join(", ") || "none"}; pending: ${pending.join(", ") || "none"}`
+                );
+                return;
+              }
+
+              await new Promise((resolve) => setTimeout(resolve, 10_000));
+            }
