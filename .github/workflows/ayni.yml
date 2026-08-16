@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: install rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
 
       - name: cache rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -43,7 +43,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: clippy, rustfmt
 
@@ -103,6 +103,10 @@ jobs:
         with:
           go-version: '1.22.x'
 
+      - name: Install Go signal tools
+        if: matrix.language == 'go'
+        run: go install github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0
+
       - name: Set up Node
         if: matrix.language == 'node'
         uses: actions/setup-node@v4
@@ -113,15 +117,22 @@ jobs:
         if: matrix.language == 'node'
         run: corepack enable
 
+      - name: Install locked Node fixture dependencies
+        if: matrix.language == 'node'
+        run: npm ci --prefix "${{ matrix.fixture }}" --ignore-scripts --no-audit --no-fund
+
       - name: Set up Python
         if: matrix.language == 'python'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install Python catalog installer
+      - name: Install pinned Python signal tools
         if: matrix.language == 'python'
-        run: python -m pip install --disable-pip-version-check uv
+        run: >-
+          python -m pip install --disable-pip-version-check
+          pytest==8.3.5 pytest-json-report==1.5.0 pytest-cov==6.0.0
+          coverage==7.6.12 complexipy==7.0.1
 
       - name: Set up Java
         if: matrix.language == 'kotlin'

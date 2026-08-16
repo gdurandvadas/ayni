@@ -28,7 +28,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -43,7 +43,7 @@ jobs:
         run: npm ci
 
       - name: Regenerate CLI docs
-        run: cargo doc-cli --locked > docs/cli.md
+        run: cargo doc-cli > docs/cli.md
 
       - name: Build VitePress
         env:

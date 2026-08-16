@@ -46,7 +46,7 @@ optionally help add the install directory to `PATH` in interactive shells.
 Pin a specific release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | VERSION=v0.1.2 sh
+curl -fsSL https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | VERSION=ayni-v0.8.1 sh
 ```
 
 Choose a custom install directory:
@@ -65,9 +65,9 @@ cargo install --path cli
 
 ## Quick Start
 
-Rust and npm-based Node repositories can lock and build a managed OCI
-environment, warm locked native dependencies, and run the repository gate
-offline by default:
+Rust, npm-based Node, Go module, uv Python, and locked Gradle Kotlin
+repositories can lock and build a managed OCI environment, warm locked native
+dependencies, and run the repository gate offline by default:
 
 ```sh
 ayni contract show
@@ -86,9 +86,9 @@ repository and is the only completion gate and writer of `.ayni/last/signals.jso
 ```sh
 ayni verify test --language rust --package my-crate --name test_filter
 ayni verify test --language node --file apps/web/src/example.test.ts
-ayni verify test --host --language go --package ./internal/api --name TestCreate
-ayni verify test --host --language python --file tests/test_api.py --name test_create
-ayni verify test --host --language kotlin --package com.example.ApiTest --name createsUser
+ayni verify test --language go --package ./internal/api --name TestCreate
+ayni verify test --language python --file tests/test_api.py --name test_create
+ayni verify test --language kotlin --package com.example.ApiTest --name createsUser
 ```
 
 Focused evidence is written to `.ayni/verify/last/signals.json` and never
@@ -106,9 +106,12 @@ ayni impact show --base main
 ayni impact run --base main
 ```
 
-The candidate is the current HEAD plus staged, unstaged, and untracked files.
-Rust and npm Node workspaces follow reverse dependencies; every other built-in
-adapter broadens uncertain work rather than omitting it. Impact results live at
+The candidate is the final local working-tree state relative to the explicit
+base: commits through `HEAD`, tracked index/worktree changes, and non-ignored
+untracked files. Ayni invokes local Git only; it has no GitHub, GitLab,
+Bitbucket, pull-request, remote-fetch, or forge-specific integration. Rust and
+npm Node workspaces follow reverse dependencies; every other built-in adapter
+broadens uncertain work rather than omitting it. Impact results live at
 `.ayni/impact/last/impact.json`, explicitly require a final `ayni check`, and
 never replace full-check or focused evidence. See
 [`docs/product/impact.md`](docs/product/impact.md).
@@ -147,13 +150,15 @@ the validated lock without creating or refreshing it. Multi-target shell/run
 requests use `--language` and `--root`.
 
 Environment builds stage only digest-verified Cargo/npm/Go/uv/Gradle inputs,
-warm provider caches, and retain only declared dependency outputs. Launch
-materializes seeded npm dependencies and fresh uv environments below
-`.ayni/environment/`, mounts them without writing dependencies to the checkout,
-and runs with networking disabled and the checkout read-only. Managed check and
-focused verification support locked Rust, npm Node, Go module, uv Python, and
-Gradle Kotlin targets. pnpm, Yarn, Bun, non-uv Python managers, and unsupported
-Gradle build shapes remain explicit failures.
+warm provider caches, and retain only declared dependency outputs. Managed
+quality commands materialize seeded npm dependencies and fresh uv environments
+below `.ayni/environment/`, run without network access, and mount repository
+source read-only with only generated `.ayni/` state writable. Interactive
+`env shell` and arbitrary `env run` intentionally mount the checkout read-write
+so humans and agents can edit it. Managed check and focused verification support
+locked Rust, npm Node, Go module, uv Python, and Gradle Kotlin targets. pnpm,
+Yarn, Bun, non-uv Python managers, and unsupported Gradle build shapes remain
+explicit failures.
 
 Run `ayni agents sync` explicitly when you want the managed guidance block
 created or refreshed.
@@ -184,50 +189,6 @@ ayni results compare --baseline before.json --candidate after.json --output json
 The JSON form writes exactly one deterministic comparison document to stdout.
 
 For the full CLI reference, see [`docs/cli.md`](docs/cli.md).
-
-## Example Report
-
-This is an illustrative point-in-time snapshot from a validated repository run,
-not a promised baseline for every repository or release.
-
-# ayni check
-
-**5** / **5** checks passing · aggregate **pass** · schema `0.3.0`
-
-**Completion:** scope `repository` · state **complete** · targets **1** / **1** completed · **1** detected · **0** skipped
-
-The five rows shown here reflect a policy with mutation disabled. This snapshot
-recorded 310 passing tests, about 70.99% line coverage, and zero failing
-offenders. In schema v3, completion separately reconciles expected, detected,
-completed, and skipped targets; an incomplete artifact includes one ordered
-issue per skipped target and always aggregates to failure, even if its emitted
-rows pass.
-
-## rust (workspace) — 5/5 passing
-
-| # | Signal | Summary | Status |
-|---|--------|---------|--------|
-| **1** | **test** | `total=310 passed=310 failed=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
-| **2** | **coverage** | `percent=70.99% status=ok` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
-| **3** | **size** | `max_lines=1456 files=115 fail_count=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
-| **4** | **complexity** | `functions=1983 max_cyclo=14.0 fail_count=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/warn.svg" alt="warn" width="20" height="20"> warn |
-| **5** | **deps** | `crates=8 edges=18 violations=0` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg" alt="pass" width="20" height="20"> pass |
-
-<details>
-<summary>Offenders</summary>
-
-complexity
-- **WARN** `cli/src/completion.rs:33` reconcile cyclo=14.0
-- **WARN** `cli/src/install.rs:45` print_install_requirements cyclo=14.0
-- **WARN** `core/src/policy.rs:252` normalize_and_validate cyclo=14.0
-
-</details>
-
-Markdown always groups typed findings in **Offenders**. It adds **Failures** only
-when a collector command failed; each failure includes its category,
-classification, command, working directory, exit code when available, and message. Reports and
-JSON artifacts can therefore expose repository paths and raw tool output; treat
-them as repository diagnostics when sharing them.
 
 ## Signals
 
@@ -287,11 +248,14 @@ The platform keeps product semantics, language integrations, and CLI behavior
 separate:
 
 ```text
-core  <-  adapters  <-  cli
+core  <-  adapters/common  <-  adapters/<language>  <-  cli
+core  <-  adapters/common  <-  environment          <-  cli
 ```
 
-Adapters own language-specific tool invocation and normalization. Core owns the
-typed product contract. The CLI owns local orchestration and output.
+Language adapters own ecosystem-specific discovery, tool invocation, impact
+mapping, and normalization. Core owns typed product contracts. The environment
+backend consumes validated locks and preparation plans without interpreting
+language manifests. The CLI owns orchestration and output.
 
 For layer boundaries and change rules, see [ARCHITECTURE.md](ARCHITECTURE.md).
 

@@ -3,7 +3,8 @@ use crate::application::{
     OutputFormat, RepositoryOperation, VerifyOperation,
 };
 use ayni_core::{
-    AdapterRegistry, DependencyPreparationPlan, DependencyPreparationRequest, EnvironmentPlan,
+    AdapterRegistry, DependencyPreparationPlan, DependencyPreparationRequest, EnvironmentLock,
+    EnvironmentPlan,
 };
 use ayni_environment::TargetSelection;
 use std::path::Path;
@@ -21,7 +22,7 @@ fn result(result: Result<String, ayni_environment::BackendError>) -> ExitCode {
 
 pub(crate) fn doctor(operation: RepositoryOperation, registry: &AdapterRegistry) -> ExitCode {
     result((|| {
-        let (root, plan) = current_plan(&operation.repo_root, registry)?;
+        let (root, plan) = current_plan(&operation.repo_root, None, registry)?;
         let preparations = dependency_preparations(&root, registry, &plan)?;
         ayni_environment::doctor_prepared(&root, &preparations)
     })())
@@ -29,7 +30,7 @@ pub(crate) fn doctor(operation: RepositoryOperation, registry: &AdapterRegistry)
 
 pub(crate) fn build(operation: RepositoryOperation, registry: &AdapterRegistry) -> ExitCode {
     result((|| {
-        let (root, plan) = current_plan(&operation.repo_root, registry)?;
+        let (root, plan) = current_plan(&operation.repo_root, None, registry)?;
         let preparations = dependency_preparations(&root, registry, &plan)?;
         ayni_environment::build_prepared(&root, &preparations)
     })())
@@ -149,7 +150,7 @@ fn prepared_quality_environment(
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let (root, plan) = current_plan(repo_root, registry)?;
+    let (root, plan) = current_plan(repo_root, Some(config), registry)?;
     let preparations = dependency_preparations(&root, registry, &plan)?;
     let config = config.canonicalize().map_err(|error| {
         ayni_environment::BackendError::input(format!(
@@ -181,7 +182,7 @@ fn managed_quality_result(
 }
 
 pub(crate) fn shell(operation: EnvShellOperation, registry: &AdapterRegistry) -> ExitCode {
-    match current_plan(&operation.repo_root, registry).and_then(|(root, plan)| {
+    match current_plan(&operation.repo_root, None, registry).and_then(|(root, plan)| {
         let preparations = dependency_preparations(&root, registry, &plan)?;
         Ok((root, preparations))
     }) {
@@ -200,7 +201,7 @@ pub(crate) fn shell(operation: EnvShellOperation, registry: &AdapterRegistry) ->
 }
 
 pub(crate) fn run(operation: EnvRunOperation, registry: &AdapterRegistry) -> ExitCode {
-    match current_plan(&operation.repo_root, registry).and_then(|(root, plan)| {
+    match current_plan(&operation.repo_root, None, registry).and_then(|(root, plan)| {
         let preparations = dependency_preparations(&root, registry, &plan)?;
         Ok((root, preparations))
     }) {
@@ -220,6 +221,7 @@ pub(crate) fn run(operation: EnvRunOperation, registry: &AdapterRegistry) -> Exi
 
 fn current_plan(
     repo_root: &Path,
+    requested_contract: Option<&Path>,
     registry: &AdapterRegistry,
 ) -> Result<(std::path::PathBuf, EnvironmentPlan), ayni_environment::BackendError> {
     let canonical = repo_root.canonicalize().map_err(|error| {
@@ -229,6 +231,9 @@ fn current_plan(
         ))
     })?;
     let lock = ayni_environment::read_lock(&canonical)?;
+    if let Some(requested_contract) = requested_contract {
+        ensure_requested_contract_matches_lock(&canonical, requested_contract, &lock)?;
+    }
     let operation = EnvShowOperation {
         config: lock.repository().contract_path.clone().into(),
         repo_root: canonical.clone(),
@@ -260,6 +265,34 @@ fn current_plan(
             "environment lock is stale because discovered requirements changed; run `ayni env lock`",
         )))
     }
+}
+
+fn ensure_requested_contract_matches_lock(
+    repo_root: &Path,
+    requested_contract: &Path,
+    lock: &EnvironmentLock,
+) -> Result<(), ayni_environment::BackendError> {
+    let requested = requested_contract.canonicalize().map_err(|error| {
+        ayni_environment::BackendError::input(format!(
+            "failed to resolve requested contract {}: {error}",
+            requested_contract.display()
+        ))
+    })?;
+    let locked = repo_root.join(&lock.repository().contract_path);
+    let locked = locked.canonicalize().map_err(|error| {
+        ayni_environment::BackendError::environment(format!(
+            "locked contract {} is unavailable: {error}; run `ayni env lock`",
+            lock.repository().contract_path
+        ))
+    })?;
+    if requested != locked {
+        return Err(ayni_environment::BackendError::environment(format!(
+            "managed execution requires --config to match the lock-bound contract {} (digest {}); run `ayni env lock` after changing the contract",
+            lock.repository().contract_path,
+            lock.repository().contract_digest,
+        )));
+    }
+    Ok(())
 }
 
 fn dependency_preparations(

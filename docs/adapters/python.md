@@ -23,9 +23,9 @@ fail closed for managed execution. They remain available through the explicit
 | --- | --- | --- |
 | `test` | `pytest`; `pytest-json-report` | managed: exact `uv.lock`; host: no version enforced |
 | `coverage` | `pytest`; `pytest-cov`; `coverage` | managed: exact `uv.lock`; host: no version enforced |
-| `size` | built-in Python source scan | no external version |
-| `complexity` | `complexipy` | managed: exact `uv.lock`; host: no version enforced |
-| `deps` | Python import scan | no external version |
+| `size` | built-in Python source scan | no external tool |
+| `complexity` | `complexipy` through the resolved package manager | managed: exact `uv.lock`; host: no version enforced |
+| `deps` | built-in Python import scan | no external tool |
 | `mutation` | `mutmut` (opt-in) | managed: exact `uv.lock`; host: no version enforced |
 
 ## Focused verification
@@ -65,8 +65,7 @@ unscoped `ayni check`.
 ## Contract
 
 Enabled checks come from `[checks]`. Configure roots in `[python].roots`
-(default `["."]`), optional runner settings in `[python.foundation]`, size
-budgets in `[python.size]`, cognitive complexity in `[python.complexity]`,
+(default `["."]`), size budgets in `[python.size]`, cognitive complexity in `[python.complexity]`,
 coverage in `[python.coverage]`, and forbidden edges in
 `[python.deps.forbidden]`. Command overrides are optional in
 `[python.tooling.test]`, `[python.tooling.coverage]`, and
@@ -92,10 +91,6 @@ enabled = ["python"]
 
 [python]
 roots = ["."]
-
-[python.foundation]
-runner = "workspace"
-validate_install = true
 
 [python.tooling.test]
 command = "uv"

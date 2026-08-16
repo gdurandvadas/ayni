@@ -22,12 +22,12 @@ ancestry-based.
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | `cargo test` | no version enforced |
-| `coverage` | `llvm-tools-preview`; `cargo-llvm-cov` | `cargo-llvm-cov` pinned to 0.8.5; `llvm-tools-preview`: no version enforced |
-| `size` | built-in Rust source scan | no version enforced |
-| `complexity` | `rust-code-analysis-cli` | no version enforced |
-| `deps` | Cargo workspace/dependency graph scan | no version enforced |
-| `mutation` | `cargo-mutants` (opt-in) | no version enforced |
+| `test` | `cargo test` | managed: Cargo from the exact locked Rust toolchain; host: no version enforced |
+| `coverage` | `llvm-tools-preview`; `cargo-llvm-cov` | managed: component from the exact Rust toolchain and `cargo-llvm-cov` pinned to `0.8.5`; host: no version enforced |
+| `size` | built-in Rust source scan | no external tool |
+| `complexity` | `rust-code-analysis-cli`; Cargo metadata | managed: an exact tool version selected during locking plus exact-toolchain Cargo; host: no version enforced |
+| `deps` | Cargo workspace/dependency graph scan | managed: Cargo from the exact locked Rust toolchain; host: no version enforced |
+| `mutation` | `cargo-mutants` (opt-in) | managed: an exact version selected during locking; host: no version enforced |
 
 ## Focused verification
 

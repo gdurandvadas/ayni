@@ -86,6 +86,21 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     );
     let lock: serde_json::Value =
         serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
+    let alternate = root.path().join("alternate.toml");
+    fs::copy(root.path().join(".ayni.toml"), &alternate).unwrap();
+    for arguments in [
+        vec!["check"],
+        vec!["verify", "test"],
+        vec!["impact", "run", "--base", "HEAD"],
+    ] {
+        let output = command(&root, &arguments)
+            .args(["--config"])
+            .arg(&alternate)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("lock-bound contract"));
+    }
     let fingerprint = lock["fingerprint"].as_str().unwrap();
     let base_digest = lock["provisioning_base"]["digest"].as_str().unwrap();
     let labels = serde_json::json!({
@@ -429,15 +444,47 @@ fn npm_dependencies_are_staged_materialized_offline_and_mounted_for_managed_qual
 }
 
 #[test]
-fn polyglot_build_stages_go_uv_and_gradle_preparation_without_source() {
+fn five_language_build_composes_preparation_without_staging_source() {
     let root = TempDir::new().expect("tempdir");
     let bin = root.path().join("bin");
     fs::create_dir(&bin).unwrap();
     fs::write(
         root.path().join(".ayni.toml"),
-        "[checks]\ntest=true\ncoverage=false\nsize=false\ncomplexity=false\ndeps=false\nmutation=false\n[languages]\nenabled=[\"go\",\"python\",\"kotlin\"]\n[go]\nroots=[\"go\"]\n[python]\nroots=[\"python\"]\n[kotlin]\nroots=[\"kotlin\"]\n",
+        "[checks]\ntest=true\ncoverage=false\nsize=false\ncomplexity=false\ndeps=false\nmutation=false\n[languages]\nenabled=[\"rust\",\"node\",\"go\",\"python\",\"kotlin\"]\n[rust]\nroots=[\"rust\"]\n[node]\nroots=[\"node\"]\n[go]\nroots=[\"go\"]\n[python]\nroots=[\"python\"]\n[kotlin]\nroots=[\"kotlin\"]\n",
     )
     .unwrap();
+    fs::create_dir(root.path().join("rust")).unwrap();
+    fs::write(
+        root.path().join("rust/Cargo.toml"),
+        "[package]\nname='rust-fixture'\nversion='0.1.0'\nrust-version='1.97.1'\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("rust/rust-toolchain.toml"),
+        "[toolchain]\nchannel='1.97.1'\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("rust/Cargo.lock"), "version = 4\n").unwrap();
+    fs::write(root.path().join("rust/lib.rs"), "pub fn source() {}\n").unwrap();
+
+    fs::create_dir(root.path().join("node")).unwrap();
+    fs::write(
+        root.path().join("node/package.json"),
+        r#"{"name":"node-fixture","private":true,"packageManager":"npm@10.9.3","engines":{"node":"22.14.0"},"devDependencies":{"vitest":"3.2.4"}}"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("node/.node-version"), "22.14.0\n").unwrap();
+    fs::write(
+        root.path().join("node/package-lock.json"),
+        r#"{"name":"node-fixture","lockfileVersion":3,"requires":true,"packages":{"":{"name":"node-fixture","devDependencies":{"vitest":"3.2.4"},"engines":{"node":"22.14.0"}},"node_modules/vitest":{"version":"3.2.4"}}}"#,
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("node/app.js"),
+        "export const source = true;\n",
+    )
+    .unwrap();
+
     fs::create_dir(root.path().join("go")).unwrap();
     fs::write(
         root.path().join("go/go.mod"),
@@ -558,24 +605,33 @@ fn polyglot_build_stages_go_uv_and_gradle_preparation_without_source() {
         String::from_utf8_lossy(&built.stderr)
     );
     let dockerfile = fs::read_to_string(format!("{}.dockerfile", record.display())).unwrap();
+    assert!(dockerfile.contains("\"cargo\",\"fetch\",\"--locked\""));
+    assert!(dockerfile.contains("\"npm\",\"ci\",\"--ignore-scripts\""));
     assert!(dockerfile.contains("\"go\",\"mod\",\"download\",\"all\""));
     assert!(dockerfile.contains("\"uv\",\"sync\",\"--frozen\",\"--no-install-project\""));
     assert!(dockerfile.contains("\"sh\",\"gradlew\",\"--no-daemon\""));
     assert!(dockerfile.contains(".ayni-gradle-resolve.init.gradle"));
-    assert!(!dockerfile.contains("/opt/ayni/dependencies"));
     let mise = fs::read_to_string(format!("{}.mise", record.display())).unwrap();
-    for tool in ["go", "python", "uv", "java", "gradle"] {
+    for tool in [
+        "rust", "node", "npm", "go", "python", "uv", "java", "gradle",
+    ] {
         assert!(
             mise.contains(&format!("\"{tool}\"")),
             "missing {tool}: {mise}"
         );
     }
     let inputs = fs::read_to_string(format!("{}.inputs", record.display())).unwrap();
+    assert!(inputs.contains("rust/Cargo.toml"));
+    assert!(inputs.contains("rust/Cargo.lock"));
+    assert!(inputs.contains("node/package.json"));
+    assert!(inputs.contains("node/package-lock.json"));
     assert!(inputs.contains("go/go.mod"));
     assert!(inputs.contains("python/pyproject.toml"));
     assert!(inputs.contains("python/uv.lock"));
     assert!(inputs.contains("kotlin/gradle.lockfile"));
     assert!(inputs.contains("kotlin/.ayni-gradle-resolve.init.gradle"));
+    assert!(!inputs.contains("rust/lib.rs"));
+    assert!(!inputs.contains("node/app.js"));
     assert!(!inputs.contains("go/main.go"));
     assert!(!inputs.contains("python/app.py"));
     assert!(!inputs.contains("kotlin/src/main/kotlin/App.kt"));

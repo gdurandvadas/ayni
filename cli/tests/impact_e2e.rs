@@ -96,10 +96,11 @@ command = {}
 
     fn command(&self, subcommand: &str) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_ayni"));
-        command.current_dir(&self.root).args([
-            "impact",
-            subcommand,
-            "--host",
+        command.current_dir(&self.root).args(["impact", subcommand]);
+        if subcommand == "run" {
+            command.arg("--host");
+        }
+        command.args([
             "--base",
             &self.base,
             "--config",

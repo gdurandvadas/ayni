@@ -62,9 +62,9 @@ pub use impact_result::{
 pub use language::Language;
 pub use policy::{
     AYNI_POLICY_FILE, AyniPolicy, ComplexityPolicy, ConcurrencyPolicy, CoveragePolicy, DepsPolicy,
-    ExecutionPolicy, FoundationPolicy, LanguageSelection, LanguageTooling,
-    LanguageToolingOverrides, PolicyChecks, PolicyEffectivenessWarning, ReportPolicy,
-    SizeThreshold, ThresholdFloat, ThresholdInt, ToolCommandOverride,
+    ExecutionPolicy, LanguageSelection, LanguageTooling, LanguageToolingOverrides, PolicyChecks,
+    PolicyEffectivenessWarning, ReportPolicy, SizeThreshold, ThresholdFloat, ThresholdInt,
+    ToolCommandOverride,
 };
 pub use registry::AdapterRegistry;
 pub use run_outcome::RunOutcome;

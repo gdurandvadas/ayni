@@ -23,7 +23,7 @@ locks for OCI execution, and the CLI orchestrates user intent and output.
 | `adapters/common/` | Command execution with timeouts, catalog status/install execution, shared path/XML/failure/discovery helpers | Language-specific tool selection or parsing |
 | `adapters/<lang>/` | Local tool execution, output parsing, environment discovery/resolution, normalization to core types | New signal kinds, untyped payloads, CLI coupling |
 | `environment/` | Validated lock loading, OCI image planning, Docker/Podman execution, workspace launching | Language-specific manifests, package-manager precedence, quality semantics |
-| `cli/` | User interface, orchestration, argument parsing, local output | Product semantics, adapter internals |
+| `cli/` | User interface, orchestration, argument parsing, local output, forge-neutral local Git worktree snapshots for impact | Product semantics, adapter internals, hosted Git-provider APIs |
 
 ## Dependency Rules
 
@@ -60,6 +60,7 @@ locks for OCI execution, and the CLI orchestrates user intent and output.
 | Adapter couples to CLI argument types | Adapters depend only on core |
 | Environment backend interprets language manifests or lockfile families | Ecosystem semantics belong to adapters and must already be represented in the lock |
 | Default analysis bypasses repository files or adapter tooling | Breaks the local workflow contract |
+| Impact depends on GitHub, GitLab, Bitbucket, PR APIs, or implicit remote fetches | Impact is a local Git capability and must remain forge-neutral |
 
 ## Change Checklist
 

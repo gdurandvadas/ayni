@@ -4,7 +4,10 @@ use ayni_core::{CommandFailure, RunContext, SignalKind};
 use std::path::PathBuf;
 
 // Re-export common helpers so existing collector imports (`super::util::*`) are unchanged.
-pub use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
+pub use ayni_adapters_common::exec::{
+    format_command, run_command_for_context_streaming_structured,
+    run_command_for_context_structured,
+};
 pub use ayni_adapters_common::failure::combined_output;
 pub use ayni_adapters_common::paths::to_repo_relative_path;
 

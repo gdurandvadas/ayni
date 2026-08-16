@@ -20,19 +20,21 @@ pub(super) fn git_snapshot(
 ) -> Result<GitSnapshot, Error> {
     let context = resolve_git_context(workspace_root, requested_base)?;
     reject_conflicts(&context.root)?;
-    let tracked = git_bytes(
-        &context.root,
+    // Git's combined diff represents the final local working-tree state: HEAD,
+    // index, and worktree are deliberately not separate impact candidates.
+    let tracked = workspace_git_bytes(
+        &context,
         &[
             "diff",
             "--name-status",
             "-z",
             "--find-renames",
+            "--find-copies",
             &context.base_commit,
-            "--",
         ],
     )?;
-    let untracked = nul_strings(&git_bytes(
-        &context.root,
+    let untracked = nul_strings(&workspace_git_bytes(
+        &context,
         &["ls-files", "--others", "--exclude-standard", "-z"],
     )?)?;
     let changes = collect_workspace_changes(&tracked, &untracked, &context.prefix)?;
@@ -121,11 +123,20 @@ fn collect_workspace_changes(
     Ok(changes)
 }
 
-fn candidate_fingerprint(context: &GitContext, untracked: &[String]) -> Result<String, Error> {
-    let binary_diff = git_bytes(
+fn workspace_git_bytes(context: &GitContext, args: &[&str]) -> Result<Vec<u8>, Error> {
+    let mut args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+    args.push(String::from("--"));
+    if !context.prefix.is_empty() {
+        args.push(context.prefix.clone());
+    }
+    git_bytes(
         &context.root,
-        &["diff", "--binary", &context.base_commit, "--"],
-    )?;
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )
+}
+
+fn candidate_fingerprint(context: &GitContext, untracked: &[String]) -> Result<String, Error> {
+    let binary_diff = workspace_git_bytes(context, &["diff", "--binary", &context.base_commit])?;
     let mut hasher = Sha256::new();
     hash_segment(&mut hasher, b"base", context.base_commit.as_bytes());
     hash_segment(&mut hasher, b"head", context.head_commit.as_bytes());

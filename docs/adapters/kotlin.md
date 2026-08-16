@@ -29,12 +29,12 @@ managed slice.
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | Gradle `test` task and JUnit XML | no version enforced |
-| `coverage` | Gradle `koverXmlReport` or `jacocoTestReport` | managed: exact Kover/JaCoCo declaration; host: no version enforced |
-| `size` | built-in Kotlin source scan | no version enforced |
-| `complexity` | Gradle `detekt` task | managed: exact Detekt plugin; host: no version enforced |
-| `deps` | Gradle `dependencies` project edges | no version enforced |
-| `mutation` | Gradle `pitest` task (opt-in) | managed: exact PIT plugin; host: no version enforced |
+| `test` | Gradle `test` task and JUnit XML | managed: exact wrapper and JDK; host: no version enforced |
+| `coverage` | Gradle `koverXmlReport` or `jacocoTestReport` | managed: exact wrapper/JDK and exact Kover/JaCoCo declaration; host: no version enforced |
+| `size` | built-in Kotlin source scan | no external tool |
+| `complexity` | Gradle `detekt` task | managed: exact wrapper/JDK and exact Detekt plugin; host: no version enforced |
+| `deps` | Gradle `dependencies` project edges | managed: exact wrapper and JDK; host: no version enforced |
+| `mutation` | Gradle `pitest` task (opt-in) | managed: exact wrapper/JDK and exact PIT plugin; host: no version enforced |
 
 ## Focused verification
 

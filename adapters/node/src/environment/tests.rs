@@ -1,8 +1,16 @@
 use super::*;
 use ayni_adapters_common::environment::assert_environment_capability_conformance;
-use ayni_core::{Architecture, Libc, OperatingSystem, TargetIdentity, TargetPlatform};
+use ayni_core::{Architecture, Libc, OperatingSystem, SignalKind, TargetIdentity, TargetPlatform};
 use std::fs;
 use tempfile::TempDir;
+
+#[test]
+fn corepack_integrity_suffix_is_not_part_of_the_locked_manager_version() {
+    let (_, version) = parse_package_manager("pnpm@9.15.4+sha512.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .expect("Corepack package manager");
+    assert_eq!(version, VersionRequirement::exact("9.15.4").expect("exact"));
+    assert!(parse_package_manager("pnpm@9.15.4+metadata").is_ok());
+}
 
 fn request(root: &Path, target: &str, signals: Vec<SignalKind>) -> EnvironmentDiscoveryRequest {
     ayni_adapters_common::environment::environment_discovery_request(

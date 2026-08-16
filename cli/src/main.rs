@@ -112,7 +112,9 @@ fn dispatch_contract(operation: application::Operation) -> ExitCode {
             operation.config.to_string_lossy().as_ref(),
             operation.output == OutputFormat::Json,
         ),
-        Operation::ContractValidate(operation) => contract_validate(&operation.config),
+        Operation::ContractValidate(operation) => {
+            contract_validate(&operation.config, operation.output == OutputFormat::Json)
+        }
         _ => unreachable!("dispatch_contract received a non-contract operation"),
     }
 }
@@ -143,14 +145,21 @@ fn run_verify_operation(operation: application::VerifyOperation) -> ExitCode {
     }
 }
 
-fn contract_validate(config_path: &Path) -> ExitCode {
+fn contract_validate(config_path: &Path, json: bool) -> ExitCode {
     let adapter_facts = build_registry()
         .adapters()
         .iter()
         .map(|adapter| adapter.policy_effectiveness_facts())
         .collect::<Vec<_>>();
-    match contract::display(config_path, &adapter_facts, false) {
-        Ok(_) => ExitCode::SUCCESS,
+    match contract::display(config_path, &adapter_facts, json) {
+        Ok(output) => {
+            if json {
+                print!("{output}");
+            } else {
+                println!("contract valid");
+            }
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             eprintln!("{error}");
             ExitCode::from(2)

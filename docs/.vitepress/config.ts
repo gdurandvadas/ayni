@@ -6,7 +6,6 @@ export default defineConfig({
   title: 'Ayni',
   description: 'Open-source code quality signals for repositories that use AI agents.',
   base,
-  srcExclude: ['initiatives/**'],
   cleanUrls: true,
   themeConfig: {
     socialLinks: [

@@ -33,7 +33,7 @@ pub static NODE_CATALOG: &[CatalogEntry] = &[
         opt_in: false,
     },
     CatalogEntry {
-        name: "@stylistic/eslint-plugin",
+        name: "@typescript-eslint/parser",
         for_signals: &[SignalKind::Complexity],
         opt_in: false,
     },
@@ -43,3 +43,19 @@ pub static NODE_CATALOG: &[CatalogEntry] = &[
         opt_in: true,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::NODE_CATALOG;
+    use ayni_core::SignalKind;
+
+    #[test]
+    fn complexity_requires_eslint_and_its_typescript_parser() {
+        let tools = NODE_CATALOG
+            .iter()
+            .filter(|entry| entry.for_signals.contains(&SignalKind::Complexity))
+            .map(|entry| entry.name)
+            .collect::<Vec<_>>();
+        assert_eq!(tools, ["node", "eslint", "@typescript-eslint/parser"]);
+    }
+}

@@ -5,7 +5,7 @@ use ayni_adapters_common::repository::{
 use ayni_core::{
     AdapterError, DependencyLockRequirement, EnvironmentCapability, EnvironmentConflict,
     EnvironmentContribution, EnvironmentDiscoveryRequest, Language, PackageManagerRequirement,
-    ProvisioningSupport, RequirementConfidence, RequirementSource, RuntimeRequirement, SignalKind,
+    ProvisioningSupport, RequirementConfidence, RequirementSource, RuntimeRequirement,
     SignalToolRequirement, TargetEnvironment, ToolInstallationScope, VersionRequirement,
 };
 use sha2::{Digest, Sha256};
@@ -622,17 +622,13 @@ fn tools(
         .iter()
         .find(|x| x.path.ends_with("uv.lock"))
         .ok_or_else(|| error("uv.lock missing from dependency inputs"))?;
-    let w = [
-        ("pytest", &[SignalKind::Test, SignalKind::Coverage][..]),
-        ("pytest-json-report", &[SignalKind::Test][..]),
-        ("pytest-cov", &[SignalKind::Coverage][..]),
-        ("coverage", &[SignalKind::Coverage][..]),
-        ("complexipy", &[SignalKind::Complexity][..]),
-        ("mutmut", &[SignalKind::Mutation][..]),
-    ]
-    .into_iter()
-    .filter(|(_, signals)| r.requires_any(signals))
-    .collect::<Vec<_>>();
+    // The Python runtime is modeled separately. Derive project tools from the
+    // catalog so managed tool requirements cannot diverge from collectors.
+    let w = crate::catalog::PYTHON_CATALOG
+        .iter()
+        .filter(|entry| entry.name != "python" && r.requires_any(entry.for_signals))
+        .map(|entry| (entry.name, entry.for_signals))
+        .collect::<Vec<_>>();
     w.into_iter()
         .map(|(n, signals)| {
             if !declared.contains(n) {

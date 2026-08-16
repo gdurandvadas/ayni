@@ -89,53 +89,59 @@ fn inspect_remote_digest(reference: &str) -> Result<String, BackendError> {
 pub fn plan_matches_lock(plan: &EnvironmentPlan, lock: &EnvironmentLock) -> bool {
     plan.repository().contract_digest == lock.repository().contract_digest
         && plan.targets().len() == lock.targets().len()
-        && plan
-            .targets()
-            .iter()
-            .zip(lock.targets())
-            .all(|(plan, locked)| {
-                plan.target == locked.target
-                    && plan.runtimes.len() == locked.runtimes.len()
-                    && plan
-                        .runtimes
-                        .iter()
-                        .zip(&locked.runtimes)
-                        .all(|(left, right)| {
-                            left.runtime == right.runtime
-                                && left.components == right.components
-                                && left.targets == right.targets
-                                && left.source.path == right.source.path
-                        })
-                    && match (&plan.package_manager, &locked.package_manager) {
-                        (None, None) => true,
-                        (Some(left), Some(right)) => {
-                            left.family == right.family
-                                && left.ownership_root == right.ownership_root
-                                && left.source.path == right.source.path
-                        }
-                        _ => false,
-                    }
-                    && plan.signal_tools.len() == locked.signal_tools.len()
-                    && plan
-                        .signal_tools
-                        .iter()
-                        .zip(&locked.signal_tools)
-                        .all(|(left, right)| {
-                            left.tool == right.tool
-                                && left.provider == right.provider
-                                && left.scope == right.scope
-                                && left.signals == right.signals
-                                && left.source.path == right.source.path
-                        })
-                    && plan.dependency_locks.len() == locked.dependency_locks.len()
-                    && plan.dependency_locks.iter().all(|left| {
-                        locked.dependency_locks.iter().any(|right| {
-                            left.path == right.path
-                                && left.digest == right.digest
-                                && left.owner_root == right.owner_root
-                        })
+        && plan.targets().iter().all(|plan| {
+            let Some(locked) = lock
+                .targets()
+                .iter()
+                .find(|locked| locked.target == plan.target)
+            else {
+                return false;
+            };
+            plan.runtimes.len() == locked.runtimes.len()
+                && plan
+                    .runtimes
+                    .iter()
+                    .zip(&locked.runtimes)
+                    .all(|(left, right)| {
+                        left.runtime == right.runtime
+                            && left.components == right.components
+                            && left.targets == right.targets
+                            && left.source.path == right.source.path
                     })
-            })
+                && match (&plan.package_manager, &locked.package_manager) {
+                    (None, None) => true,
+                    (Some(left), Some(right)) => {
+                        left.family == right.family
+                            && left.ownership_root == right.ownership_root
+                            && left.source.path == right.source.path
+                    }
+                    _ => false,
+                }
+                && plan.signal_tools.len() == locked.signal_tools.len()
+                && plan
+                    .signal_tools
+                    .iter()
+                    .zip(&locked.signal_tools)
+                    .all(|(left, right)| {
+                        // Resolution may replace a declaration source (for
+                        // example package.json) with exact lock evidence
+                        // (package-lock.json). Identity and signal ownership
+                        // must remain stable; dependency inputs account for
+                        // source-path and digest changes separately.
+                        left.tool == right.tool
+                            && left.provider == right.provider
+                            && left.scope == right.scope
+                            && left.signals == right.signals
+                    })
+                && plan.dependency_locks.len() == locked.dependency_locks.len()
+                && plan.dependency_locks.iter().all(|left| {
+                    locked.dependency_locks.iter().any(|right| {
+                        left.path == right.path
+                            && left.digest == right.digest
+                            && left.owner_root == right.owner_root
+                    })
+                })
+        })
 }
 
 pub fn read_lock(repo_root: &Path) -> Result<EnvironmentLock, BackendError> {

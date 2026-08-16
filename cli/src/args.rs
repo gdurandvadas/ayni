@@ -203,9 +203,9 @@ impl VerifyCommands {
 #[derive(Subcommand, Debug)]
 enum ImpactCommands {
     /// Explain the quality work affected by a change without running it.
-    Show(ImpactOptions),
+    Show(ImpactShowOptions),
     /// Execute the quality work affected by a change.
-    Run(ImpactOptions),
+    Run(ImpactRunOptions),
 }
 
 impl ImpactCommands {
@@ -409,7 +409,7 @@ struct VerifyFilePackageOptions {
 }
 
 #[derive(Args, Debug)]
-struct ImpactOptions {
+struct ImpactShowOptions {
     #[arg(long, default_value = DEFAULT_CONFIG)]
     config: PathBuf,
     /// Explicit base revision used to calculate the change.
@@ -417,6 +417,24 @@ struct ImpactOptions {
     base: String,
     #[arg(long, value_enum, default_value_t)]
     output: OutputArg,
+}
+
+impl ImpactShowOptions {
+    fn into_operation(self) -> ImpactOperation {
+        ImpactOperation {
+            config: self.config,
+            base: self.base,
+            output: self.output.into(),
+            execution_mode: ExecutionMode::Managed,
+            debug: false,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct ImpactRunOptions {
+    #[command(flatten)]
+    common: ImpactShowOptions,
     /// Run on the host instead of in the managed environment.
     #[arg(long)]
     host: bool,
@@ -425,15 +443,12 @@ struct ImpactOptions {
     debug: bool,
 }
 
-impl ImpactOptions {
+impl ImpactRunOptions {
     fn into_operation(self) -> ImpactOperation {
-        ImpactOperation {
-            config: self.config,
-            base: self.base,
-            output: self.output.into(),
-            execution_mode: execution_mode(self.host),
-            debug: self.debug,
-        }
+        let mut operation = self.common.into_operation();
+        operation.execution_mode = execution_mode(self.host);
+        operation.debug = self.debug;
+        operation
     }
 }
 
@@ -700,6 +715,22 @@ mod tests {
             .is_err()
         );
         assert!(Cli::try_parse_from(["ayni", "check", "--output", "markdown"]).is_ok());
+    }
+
+    #[test]
+    fn impact_show_rejects_execution_only_options() {
+        for option in ["--host", "--debug"] {
+            assert!(
+                Cli::try_parse_from(["ayni", "impact", "show", "--base", "main", option]).is_err(),
+                "{option} must remain exclusive to impact run"
+            );
+        }
+        assert!(
+            Cli::try_parse_from([
+                "ayni", "impact", "run", "--base", "main", "--host", "--debug"
+            ])
+            .is_ok()
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use super::*;
 use ayni_adapters_common::environment::assert_environment_capability_conformance;
-use ayni_core::{Architecture, Libc, OperatingSystem, TargetIdentity, TargetPlatform};
+use ayni_core::{Architecture, Libc, OperatingSystem, SignalKind, TargetIdentity, TargetPlatform};
 use std::fs;
 use tempfile::TempDir;
 fn request(root: &Path, signals: Vec<SignalKind>) -> EnvironmentDiscoveryRequest {

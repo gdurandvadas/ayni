@@ -502,8 +502,6 @@ Explain the quality work affected by a change without running it
   - `markdown`:
     Deterministic Markdown output
 
-* `--host` — Run on the host instead of in the managed environment
-* `--debug` — Print raw command diagnostics
 
 
 

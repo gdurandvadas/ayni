@@ -24,12 +24,12 @@ cgo system libraries absent from the base image.
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | `go test` | no version enforced |
-| `coverage` | `go test` and `go tool cover` | no version enforced |
-| `size` | built-in Go source scan | no version enforced |
+| `test` | `go test` | managed: exact locked Go runtime; host: no version enforced |
+| `coverage` | `go test` and `go tool cover` | managed: exact locked Go runtime; host: no version enforced |
+| `size` | built-in Go source scan | no external tool |
 | `complexity` | `gocyclo` | managed: `0.6.0`; host: no version enforced |
-| `deps` | `go list` dependency graph | no version enforced |
-| `mutation` | `go test` mutation proxy, or a configured Go mutation command | no version enforced |
+| `deps` | `go list` dependency graph | managed: exact locked Go runtime; host: no version enforced |
+| `mutation` | `go test` mutation proxy, or a configured Go mutation command | managed default: exact locked Go runtime; host: no version enforced |
 
 ## Focused verification
 

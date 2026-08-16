@@ -1,6 +1,7 @@
 use super::util::{
     command_failure_from_output, command_for_override_or_default, format_command,
-    prepare_report_path, run_command_for_context_structured,
+    prepare_report_path, run_command_for_context_streaming_structured,
+    run_command_for_context_structured,
 };
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::failure::test_execution_incomplete;
@@ -56,13 +57,13 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     let default_args = ["--json-report", report_arg.as_str()];
     let (program, args) =
         command_for_override_or_default(context, SignalKind::Test, "pytest", &default_args);
-    collect_with_command(context, program, args, report_path)
+    collect_with_command(context, program, args, report_path, None)
 }
 
 pub fn collect_selected(
     context: &RunContext,
     selection: &VerificationSelection,
-    _on_line: &mut dyn FnMut(&str),
+    on_line: &mut dyn FnMut(&str),
 ) -> CollectorResult {
     let report_path =
         prepare_report_path(context, "pytest-report.json").map_err(CollectorError::Adapter)?;
@@ -79,7 +80,7 @@ pub fn collect_selected(
         let selector = format!("::{name}");
         args.push(selector);
     }
-    collect_with_command(context, program, args, report_path)
+    collect_with_command(context, program, args, report_path, Some(on_line))
 }
 
 fn collect_with_command(
@@ -87,9 +88,14 @@ fn collect_with_command(
     program: String,
     args: Vec<String>,
     report_path: std::path::PathBuf,
+    on_line: Option<&mut dyn FnMut(&str)>,
 ) -> CollectorResult {
     let runner = format_command(&program, &args);
-    let output = run_command_for_context_structured(context, &program, &args)?;
+    let output = if let Some(on_line) = on_line {
+        run_command_for_context_streaming_structured(context, &program, &args, on_line)?
+    } else {
+        run_command_for_context_structured(context, &program, &args)?
+    };
     let success = output.status.success();
 
     let report = read_report(&report_path).map_err(|error| {

@@ -8,7 +8,12 @@ pub static KOTLIN_CATALOG: &[CatalogEntry] = &[
         opt_in: false,
     },
     CatalogEntry {
-        name: "coverage-report",
+        name: "kover",
+        for_signals: &[SignalKind::Coverage],
+        opt_in: false,
+    },
+    CatalogEntry {
+        name: "jacoco",
         for_signals: &[SignalKind::Coverage],
         opt_in: false,
     },
@@ -23,3 +28,18 @@ pub static KOTLIN_CATALOG: &[CatalogEntry] = &[
         opt_in: true,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::KOTLIN_CATALOG;
+
+    #[test]
+    fn managed_collector_tool_names_are_cataloged() {
+        for tool in ["kover", "jacoco", "detekt", "pitest"] {
+            assert!(
+                KOTLIN_CATALOG.iter().any(|entry| entry.name == tool),
+                "{tool}"
+            );
+        }
+    }
+}

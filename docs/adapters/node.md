@@ -20,12 +20,12 @@ execution; use `--host` for those package managers.
 
 | Signal | Required tool or method | Version contract |
 | --- | --- | --- |
-| `test` | `vitest` | exact project version is read from `package-lock.json` during environment locking; no host version enforced |
-| `coverage` | `vitest`; `@vitest/coverage-v8` | exact project versions are read from `package-lock.json` during environment locking; no host version enforced |
-| `size` | built-in Node source scan | no version enforced |
-| `complexity` | `eslint`; `@stylistic/eslint-plugin` | no version enforced |
-| `deps` | package and workspace manifest graph | no version enforced |
-| `mutation` | `@stryker-mutator/core` (opt-in) | no version enforced |
+| `test` | `vitest` | managed: exact project version from `package-lock.json`; host: no version enforced |
+| `coverage` | `vitest`; `@vitest/coverage-v8` | managed: exact project versions from `package-lock.json`; host: no version enforced |
+| `size` | built-in JavaScript/TypeScript source scan | no external tool |
+| `complexity` | `eslint`; `@typescript-eslint/parser` | managed: exact project versions from `package-lock.json`; host: no version enforced |
+| `deps` | built-in package and workspace manifest graph | no external tool |
+| `mutation` | `@stryker-mutator/core` (opt-in) | managed: exact project version from `package-lock.json`; host: no version enforced |
 
 ## Focused verification
 

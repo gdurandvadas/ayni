@@ -26,8 +26,13 @@ Implement `LanguageAdapter` and `SignalCollector` from `ayni-core`.
 - `detect(root) -> DetectResult` reports language presence and confidence.
 - `resolve_execution(repo_root, root) -> ExecutionResolution` resolves the
   ancestry-aware runner and setup context.
-- `catalog() -> &[CatalogEntry]` declares signal tool requirements.
+- `catalog() -> &[CatalogEntry]` declares external signal tool requirements.
 - `collector() -> &dyn SignalCollector` provides typed collection.
+- `environment_capability()` discovers runtime, package-manager, tool, and lock
+  requirements for one target.
+- `environment_resolution_capability()` resolves exact lock values.
+- `dependency_preparation_capability()` plans native locked dependency warming.
+- `impact_capability()` maps local Git changes conservatively to checks.
 
 Collectors return `SignalRow` values with a canonical `SignalKind`, language,
 typed `result`, `budget`, and `offenders`, plus deterministic `pass`
@@ -52,6 +57,11 @@ src/
 ├── lib.rs
 ├── adapter.rs
 ├── catalog.rs
+├── discovery.rs
+├── environment.rs
+├── environment_resolution.rs
+├── preparation.rs
+├── impact.rs
 └── collectors/
     ├── mod.rs
     ├── test.rs
@@ -61,6 +71,11 @@ src/
     ├── deps.rs
     └── mutation.rs
 ```
+
+Keep implementation modules private and re-export only the adapter type and any
+explicitly supported catalog API from `lib.rs`. Language-specific helper modules
+such as `package_manager.rs` or `workspace.rs` are expected when ecosystem
+semantics require them.
 
 Each collector module owns one signal kind. For coverage, populate
 `CoverageResult.percent` with the headline 0–100 percentage when available;
@@ -72,11 +87,14 @@ for missing evidence. Follow the
 
 ## Catalog conventions
 
-Every external tool invoked for collection is a `CatalogEntry`. Include a
-stable tool name, the `for_signals` mapping, and `opt_in` for expensive checks
-such as mutation. Catalogs are declarative: they do not probe tool status,
-install dependencies, or mutate a checkout. Environment capabilities own
-managed provisioning requirements, while host prerequisites remain user-owned.
+Every external tool invoked directly for collection is a `CatalogEntry`.
+Built-in source scans are not tools. Include a stable executable or project-tool
+identity, the exact `for_signals` mapping, and `opt_in` for expensive checks such
+as mutation. Reuse catalog mappings when selecting environment signal tools;
+do not maintain an independent list that can drift. Catalogs are declarative:
+they do not probe status, install dependencies, or mutate a checkout.
+Environment capabilities add version, provider, scope, platform, and native-lock
+semantics, while host prerequisites remain user-owned.
 
 ## Policy conventions
 
@@ -89,7 +107,8 @@ collector's required threshold is missing.
 ## Documentation format
 
 The adapter user page must use this ordered H2 outline: Installation; Signal
-Coverage; Focused verification; Contract; Configuration Example. State roots and detection,
+Coverage; Focused verification; Impact planning; Contract; Configuration
+Example. State roots and detection,
 language-specific package-manager or build-system resolution, each tool's
 required/optional ownership, and only versions enforced or selected by code;
 write “no version enforced” otherwise. Map all six canonical signals to their
@@ -117,8 +136,8 @@ Do not:
 Before merging an adapter:
 
 1. Catalog selection includes every tool required by enabled signals.
-2. Unscoped `ayni check --host` emits typed rows for every enabled signal kind and
-   is the only repository-completion artifact writer.
+2. Unscoped `ayni check` and its explicit `--host` escape hatch emit typed rows
+   for every enabled signal kind; only check writes repository-completion evidence.
 3. Each supported focused selector is faithfully applied; unsupported selectors
    are rejected before tool invocation.
 4. Offender fields, stable IDs, and exact verification commands match the signal

@@ -547,14 +547,21 @@ fn parse_wrapper_properties(content: &str) -> Result<Wrapper, String> {
     })
 }
 
-fn signal_tools(
+fn plugin_declaration_inputs(
     request: &EnvironmentDiscoveryRequest,
     inputs: &[DependencyLockRequirement],
-) -> Result<Vec<SignalToolRequirement>, AdapterError> {
-    let scripts = inputs
+) -> Result<Vec<(String, String)>, AdapterError> {
+    // Plugin versions can be owned by a project build, settings/pluginManagement,
+    // or Gradle version catalog. All are staged dependency inputs, so resolve
+    // declarations only from that bounded evidence set.
+    inputs
         .iter()
         .filter(|input| {
-            input.path.ends_with("build.gradle") || input.path.ends_with("build.gradle.kts")
+            input.path.ends_with("build.gradle")
+                || input.path.ends_with("build.gradle.kts")
+                || input.path.ends_with("settings.gradle")
+                || input.path.ends_with("settings.gradle.kts")
+                || input.path.ends_with(".versions.toml")
         })
         .map(|input| {
             let path = request.repo_root().join(&input.path);
@@ -563,63 +570,75 @@ fn signal_tools(
                 .ok_or_else(|| error(format!("missing Gradle build input {}", input.path)))?;
             Ok((input.path.clone(), content))
         })
-        .collect::<Result<Vec<_>, AdapterError>>()?;
-    let mut tools = Vec::new();
-    if request.requires_any(&[SignalKind::Coverage]) {
-        let found = find_plugin(
-            &scripts,
-            &[
-                "org.jetbrains.kotlinx.kover",
-                "org.jetbrains.kotlinx.kover.gradle.plugin",
-            ],
-        )?
-        .map(|(path, version)| ("kover", path, version))
-        .or_else(|| find_jacoco(&scripts).map(|(path, version)| ("jacoco", path, version)))
-        .ok_or_else(|| {
-            error(
-                "Kotlin coverage requires an exact Kover plugin or JaCoCo toolVersion declaration",
-            )
-        })?;
-        tools.push(gradle_plugin_tool(
-            request,
-            found.0,
-            &found.1,
-            &found.2,
-            SignalKind::Coverage,
-        )?);
+        .collect()
+}
+
+fn signal_tools(
+    request: &EnvironmentDiscoveryRequest,
+    inputs: &[DependencyLockRequirement],
+) -> Result<Vec<SignalToolRequirement>, AdapterError> {
+    let scripts = plugin_declaration_inputs(request, inputs)?;
+    Ok([
+        coverage_signal_tool(request, &scripts)?,
+        complexity_signal_tool(request, &scripts)?,
+        mutation_signal_tool(request, &scripts)?,
+    ]
+    .into_iter()
+    .flatten()
+    .collect())
+}
+
+fn coverage_signal_tool(
+    request: &EnvironmentDiscoveryRequest,
+    scripts: &[(String, String)],
+) -> Result<Option<SignalToolRequirement>, AdapterError> {
+    if !request.requires_any(&[SignalKind::Coverage]) {
+        return Ok(None);
     }
-    if request.requires_any(&[SignalKind::Complexity]) {
-        let (path, version) =
-            find_plugin(&scripts, &["dev.detekt", "io.gitlab.arturbosch.detekt"])?.ok_or_else(
-                || error("Kotlin complexity requires an exact Detekt plugin declaration"),
-            )?;
-        tools.push(gradle_plugin_tool(
-            request,
-            "detekt",
-            &path,
-            &version,
-            SignalKind::Complexity,
-        )?);
+    let kover = find_plugin(
+        scripts,
+        &[
+            "org.jetbrains.kotlinx.kover",
+            "org.jetbrains.kotlinx.kover.gradle.plugin",
+        ],
+    )?
+    .map(|(path, version)| ("kover", path, version));
+    let jacoco = find_jacoco(scripts)?.map(|(path, version)| ("jacoco", path, version));
+    let found = kover.or(jacoco).ok_or_else(|| {
+        error("Kotlin coverage requires an exact Kover plugin or JaCoCo toolVersion declaration")
+    })?;
+    gradle_plugin_tool(request, found.0, &found.1, &found.2, SignalKind::Coverage).map(Some)
+}
+
+fn complexity_signal_tool(
+    request: &EnvironmentDiscoveryRequest,
+    scripts: &[(String, String)],
+) -> Result<Option<SignalToolRequirement>, AdapterError> {
+    if !request.requires_any(&[SignalKind::Complexity]) {
+        return Ok(None);
     }
-    if request.requires_any(&[SignalKind::Mutation]) {
-        let (path, version) = find_plugin(&scripts, &["info.solidsoft.pitest"])?
-            .ok_or_else(|| error("Kotlin mutation requires an exact PIT plugin declaration"))?;
-        tools.push(gradle_plugin_tool(
-            request,
-            "pitest",
-            &path,
-            &version,
-            SignalKind::Mutation,
-        )?);
+    let (path, version) = find_plugin(scripts, &["dev.detekt", "io.gitlab.arturbosch.detekt"])?
+        .ok_or_else(|| error("Kotlin complexity requires an exact Detekt plugin declaration"))?;
+    gradle_plugin_tool(request, "detekt", &path, &version, SignalKind::Complexity).map(Some)
+}
+
+fn mutation_signal_tool(
+    request: &EnvironmentDiscoveryRequest,
+    scripts: &[(String, String)],
+) -> Result<Option<SignalToolRequirement>, AdapterError> {
+    if !request.requires_any(&[SignalKind::Mutation]) {
+        return Ok(None);
     }
-    Ok(tools)
+    let (path, version) = find_plugin(scripts, &["info.solidsoft.pitest"])?
+        .ok_or_else(|| error("Kotlin mutation requires an exact PIT plugin declaration"))?;
+    gradle_plugin_tool(request, "pitest", &path, &version, SignalKind::Mutation).map(Some)
 }
 
 fn find_plugin(
     scripts: &[(String, String)],
     plugin_ids: &[&str],
 ) -> Result<Option<(String, String)>, AdapterError> {
-    let mut matches = BTreeSet::new();
+    let mut matches = std::collections::BTreeMap::new();
     for (path, content) in scripts {
         for plugin_id in plugin_ids {
             let escaped = regex::escape(plugin_id);
@@ -637,7 +656,11 @@ fn find_plugin(
                             "Gradle plugin {plugin_id} has a dynamic or unsafe version {version}"
                         )));
                     }
-                    matches.insert((path.clone(), version.to_owned()));
+                    // Identical declarations are compatible regardless of
+                    // ownership file; only distinct resolved versions conflict.
+                    matches
+                        .entry(version.to_owned())
+                        .or_insert_with(|| path.clone());
                 }
             }
         }
@@ -646,29 +669,51 @@ fn find_plugin(
         Err(error(format!(
             "Gradle plugin declarations resolve multiple versions: {}",
             matches
-                .iter()
-                .map(|(_, version)| version.as_str())
+                .keys()
+                .map(String::as_str)
                 .collect::<Vec<_>>()
                 .join(", ")
         )))
     } else {
-        Ok(matches.into_iter().next())
+        Ok(matches
+            .into_iter()
+            .next()
+            .map(|(version, path)| (path, version)))
     }
 }
 
-fn find_jacoco(scripts: &[(String, String)]) -> Option<(String, String)> {
+fn find_jacoco(scripts: &[(String, String)]) -> Result<Option<(String, String)>, AdapterError> {
     let plugin = regex::Regex::new(r#"(?:id\(\s*["']jacoco["']\s*\)|id\s+["']jacoco["'])"#)
         .expect("static JaCoCo plugin pattern");
     let version = regex::Regex::new(r#"toolVersion\s*=\s*["']([^"']+)["']"#)
         .expect("static JaCoCo version pattern");
-    scripts.iter().find_map(|(path, content)| {
-        plugin.is_match(content).then(|| {
+    let matches = scripts
+        .iter()
+        .filter(|(_, content)| plugin.is_match(content))
+        .flat_map(|(path, content)| {
             version
-                .captures(content)
-                .and_then(|captures| captures.get(1))
-                .map(|value| (path.clone(), value.as_str().to_owned()))
-        })?
-    })
+                .captures_iter(content)
+                .map(move |captures| (path.clone(), captures[1].to_owned()))
+        })
+        .collect::<Vec<_>>();
+    let versions = matches
+        .iter()
+        .map(|(_, version)| version.as_str())
+        .collect::<BTreeSet<_>>();
+    for value in &versions {
+        if !safe_plugin_version(value) {
+            return Err(error(format!(
+                "JaCoCo toolVersion has a dynamic or unsafe version {value}"
+            )));
+        }
+    }
+    if versions.len() > 1 {
+        return Err(error(format!(
+            "JaCoCo declarations resolve multiple versions: {}",
+            versions.into_iter().collect::<Vec<_>>().join(", ")
+        )));
+    }
+    Ok(matches.into_iter().next())
 }
 
 fn safe_plugin_version(value: &str) -> bool {
@@ -677,6 +722,10 @@ fn safe_plugin_version(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b'_'))
+        && !value.ends_with('+')
+        && !value.contains(".+")
+        && !value.to_ascii_lowercase().contains("latest")
+        && !value.to_ascii_lowercase().contains("release")
 }
 
 fn gradle_plugin_tool(
@@ -794,6 +843,54 @@ mod tests {
         )
         .expect("build script");
         fs::write(repo.join("gradle/wrapper/gradle-wrapper.properties"), format!("distributionUrl=https\\://services.gradle.org/distributions/gradle-{version}-bin.zip\ndistributionSha256Sum={}\n", "a".repeat(64))).expect("wrapper properties");
+    }
+
+    #[test]
+    fn plugin_versions_reject_dynamic_values_and_allow_identical_declarations() {
+        let duplicate = vec![
+            (
+                "build.gradle.kts".into(),
+                "plugins { id(\"dev.detekt\") version \"1.23.8\" }".into(),
+            ),
+            (
+                "settings.gradle.kts".into(),
+                "pluginManagement { plugins { id(\"dev.detekt\") version \"1.23.8\" } }".into(),
+            ),
+        ];
+        assert_eq!(
+            find_plugin(&duplicate, &["dev.detekt"])
+                .expect("duplicate")
+                .expect("plugin")
+                .1,
+            "1.23.8"
+        );
+        for version in ["1.+", "latest.release"] {
+            let scripts = vec![(
+                "build.gradle.kts".into(),
+                format!("plugins {{ id(\"dev.detekt\") version \"{version}\" }}"),
+            )];
+            assert!(find_plugin(&scripts, &["dev.detekt"]).is_err(), "{version}");
+        }
+    }
+
+    #[test]
+    fn jacoco_versions_detect_conflicts_and_dynamic_values() {
+        let scripts = vec![
+            (
+                "a.gradle.kts".into(),
+                "plugins { id(\"jacoco\") }; jacoco { toolVersion = \"0.8.12\" }".into(),
+            ),
+            (
+                "b.gradle.kts".into(),
+                "plugins { id(\"jacoco\") }; jacoco { toolVersion = \"0.8.13\" }".into(),
+            ),
+        ];
+        assert!(find_jacoco(&scripts).is_err());
+        let dynamic = vec![(
+            "a.gradle.kts".into(),
+            "plugins { id(\"jacoco\") }; jacoco { toolVersion = \"latest.release\" }".into(),
+        )];
+        assert!(find_jacoco(&dynamic).is_err());
     }
 
     #[test]

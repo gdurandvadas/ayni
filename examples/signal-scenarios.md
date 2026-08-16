@@ -1,8 +1,11 @@
 # Intentional signal scenarios
 
 ## Single repos (`examples/<lang>/single`)
-- No `.ayni.toml` and no `.ayni/` folder: validates `install` bootstrap. `install`
-  does not write `AGENTS.md`; validate that separately with `ayni agents sync`.
+- No `.ayni.toml`, `.ayni.lock`, or generated `.ayni/` state. These are raw
+  language fixtures for discovery and explicit contract setup; Ayni has no
+  implicit install/bootstrap command.
+- `ayni agents sync --repo-root <path>` remains the only command that creates or
+  refreshes managed agent guidance.
 - Greeting service endpoint exists.
 - Intentional complexity hotspot in `complex*` function to trigger complexity/readability signals.
 

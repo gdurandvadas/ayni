@@ -9,8 +9,8 @@ use ayni_core::{
     AdapterError, DependencyLockRequirement, EnvironmentCapability, EnvironmentConflict,
     EnvironmentContribution, EnvironmentDiscoveryRequest, EnvironmentWarning, Language,
     PackageManagerRequirement, ProvisioningSupport, RequirementConfidence, RequirementSource,
-    RuntimeRequirement, SignalKind, SignalToolRequirement, TargetEnvironment,
-    ToolInstallationScope, VersionRequirement,
+    RuntimeRequirement, SignalToolRequirement, TargetEnvironment, ToolInstallationScope,
+    VersionRequirement,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -566,17 +566,15 @@ fn signal_tools(
     owner_root: &Path,
     owner_manifest: &serde_json::Value,
 ) -> Result<Vec<SignalToolRequirement>, AdapterError> {
-    const TOOLS: &[(&str, &[SignalKind])] = &[
-        ("vitest", &[SignalKind::Test, SignalKind::Coverage]),
-        ("@vitest/coverage-v8", &[SignalKind::Coverage]),
-        ("eslint", &[SignalKind::Complexity]),
-        ("@stylistic/eslint-plugin", &[SignalKind::Complexity]),
-        ("@stryker-mutator/core", &[SignalKind::Mutation]),
-    ];
-    TOOLS
+    // The runtime is modeled separately; all project-integrated collectors
+    // are sourced directly from the catalog so their signal mappings cannot
+    // drift from managed-environment discovery.
+    crate::catalog::NODE_CATALOG
         .iter()
-        .filter(|(_, signals)| request.requires_any(signals))
-        .map(|(tool, signals)| {
+        .filter(|entry| entry.name != "node" && request.requires_any(entry.for_signals))
+        .map(|entry| {
+            let tool = entry.name;
+            let signals = entry.for_signals;
             let direct = dependency(target_manifest, tool)?.map(|value| (target_root, value));
             let inherited = if owner_root == target_root {
                 None
@@ -851,7 +849,8 @@ fn parse_package_manager(value: &str) -> Result<(String, VersionRequirement), Ad
         PackageManager::from_executable(&family.to_ascii_lowercase()).ok_or_else(|| {
             adapter_error(format!("unsupported Node package manager family {family}"))
         })?;
-    if version.trim().is_empty() {
+    let version = normalize_corepack_integrity(version.trim());
+    if version.is_empty() {
         return Err(adapter_error("packageManager version must not be empty"));
     }
     let requirement = if is_exact_semver(version) {
@@ -860,6 +859,25 @@ fn parse_package_manager(value: &str) -> Result<(String, VersionRequirement), Ad
         VersionRequirement::selector(version).map_err(adapter_error)?
     };
     Ok((manager.executable().to_string(), requirement))
+}
+
+/// Corepack permits an optional integrity suffix (`+sha512.<digest>`) in
+/// packageManager. It identifies the download, not the package-manager
+/// version, so locking/activation must use the normalized exact version.
+fn normalize_corepack_integrity(version: &str) -> &str {
+    let Some((base, suffix)) = version.rsplit_once('+') else {
+        return version;
+    };
+    let algorithm = suffix.split('.').next().unwrap_or_default();
+    if matches!(algorithm, "sha224" | "sha256" | "sha384" | "sha512")
+        && suffix
+            .strip_prefix(&format!("{algorithm}."))
+            .is_some_and(|digest| !digest.is_empty())
+    {
+        base
+    } else {
+        version
+    }
 }
 
 fn dependency<'a>(

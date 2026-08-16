@@ -70,7 +70,11 @@ before reuse and launch.
 Launch mounts the canonical checkout at `/workspace`, selects one locked target,
 uses the invoking identity, disables mise auto-install and networking, mounts a
 writable generated home, and applies read-only-root and privilege restrictions.
-Multi-target shell/run requests require `--language` and `--root`.
+Interactive `env shell` and arbitrary `env run` intentionally mount the checkout
+read-write so their declared development commands can edit it. Managed `check`,
+`verify`, and `impact run` instead mount repository source read-only and expose
+only generated `.ayni/` state as writable. Multi-target shell/run requests
+require `--language` and `--root`.
 
 `env build` runs adapter-owned preparation plans only in the isolated staged
 context. Managed launch copies seeded npm dependencies, creates fresh
@@ -110,12 +114,6 @@ captures stdout and stderr concurrently, forwards complete output lines while
 the command is still running for live progress, and on timeout kills and reaps
 the child before returning typed timeout diagnostics with captured output.
 
-## Config Materialization
-
-Generated config should stay small. Ayni materializes foundation settings only
-when behavior would otherwise be surprising, such as workspace-ancestor runner
-resolution or explicit validation opt-out.
-
 ## Partial Success
 
 Ayni should report the full repository state whenever possible. A failed tool
@@ -124,7 +122,7 @@ row should not suppress valid rows from other roots or languages.
 `ayni check` is repository-only: it plans and evaluates every configured
 language root and is the sole writer of `.ayni/last/signals.json`; `--host`
 changes execution location, not completion semantics. Use
-`ayni verify <signal> --host` for focused evidence for one of the six canonical
-signals. Its adapter-owned selectors are validated before tool invocation, and
+`ayni verify <signal>` for managed focused evidence, or add `--host` as the
+explicit escape hatch, for one of the six canonical signals. Its adapter-owned selectors are validated before tool invocation, and
 its requested-scope evidence is written separately to
 `.ayni/verify/last/signals.json`.
