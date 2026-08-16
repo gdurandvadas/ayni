@@ -1,5 +1,4 @@
 # Impact-aware execution
-# Impact-aware execution
 
 Impact analysis gives coding agents a smaller validation loop without weakening
 `ayni check` as the repository completion gate.

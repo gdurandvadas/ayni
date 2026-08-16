@@ -15,6 +15,7 @@ locally, and turn results into signals that humans and agents can act on.
   variants fail explicitly and can use the explicit `--host` escape hatch.
 - [CLI reference](/cli)
 - [Configuration reference](/product/config)
+- [Managed environments](/product/environments)
 - [Signal contract index](/product/signals)
 - [Current signal schema v3](/product/signals/v3)
 - [Historical signal schema v2](/product/signals/v2)

@@ -21,6 +21,7 @@ decisions that are not visible in the code.
 - `ARCHITECTURE.md` — layer boundaries, dependency rules, and change decision guide
 - `README.md` — product framing, AI feedback loop, and high-level architecture
 - `docs/product/config.md` — `.ayni.toml` reference
+- `docs/product/environments.md` — managed environment lifecycle, lock, build, and execution contract
 - `docs/product/signals.md` — canonical signal vocabulary, schema selection, and compatibility posture
 - `docs/product/signals/v3.md` — current `0.3.0` serialized signal-artifact contract
 - `docs/product/signals/v2.md` — historical `0.2.0` serialized signal-artifact reference only
