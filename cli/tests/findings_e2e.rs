@@ -227,7 +227,9 @@ fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
 
     let markdown = fixture.analyze(&["--output", "markdown"]);
     assert!(!markdown.status.success());
-    assert!(String::from_utf8_lossy(&markdown.stdout).contains(&format!("- `{command}`")));
+    let markdown_stdout = String::from_utf8_lossy(&markdown.stdout);
+    assert!(!markdown_stdout.contains("Verification commands"));
+    assert!(!markdown_stdout.contains(&command));
 }
 
 #[test]

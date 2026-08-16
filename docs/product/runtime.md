@@ -125,6 +125,7 @@ changes execution location, not completion semantics. Use
 `ayni verify <signal>` for managed focused evidence, or add `--host` as the
 explicit escape hatch, for one of the six canonical signals. Its adapter-owned selectors are validated before tool invocation, and
 its requested-scope evidence is written separately to
-`.ayni/verify/last/signals.json`. Human run reports stay concise instead of
-appending every rerun command. Use `ayni verify list` for the last repository
-artifact or pass `--artifact .ayni/verify/last/signals.json` for focused evidence.
+`.ayni/verify/last/signals.json`. Terminal and Markdown run reports never append
+rerun commands; commands remain available in structured artifacts. Use
+`ayni verify list` for the last repository artifact or pass
+`--artifact .ayni/verify/last/signals.json` for focused evidence.

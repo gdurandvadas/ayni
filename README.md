@@ -95,8 +95,9 @@ Focused evidence is written to `.ayni/verify/last/signals.json` and never
 replaces `.ayni/last/signals.json`. `verify` has one subcommand for each of the
 six signals; selector support is signal- and adapter-specific. Unsupported,
 conflicting, ambiguous, or out-of-scope selectors are rejected before a tool
-runs. Routine human reports do not repeat every rerun command. List the exact,
-deduplicated commands from the last repository artifact with `ayni verify list`,
+runs. Check and focused-run terminal or Markdown reports never include rerun
+commands; those remain structured artifact evidence. List the exact, deduplicated
+commands from the last repository artifact with `ayni verify list`,
 or inspect another artifact explicitly:
 
 ```sh

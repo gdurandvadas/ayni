@@ -111,18 +111,6 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
         }
     }
     render_failures(&mut out, artifact.failure_summaries());
-    let commands: Vec<_> = artifact
-        .findings
-        .iter()
-        .flat_map(ayni_core::Findings::commands)
-        .collect();
-    if !commands.is_empty() {
-        out.push_str("## Verification commands\n\n");
-        for command in commands {
-            out.push_str(&format!("- `{command}`\n"));
-        }
-        out.push('\n');
-    }
     out
 }
 
