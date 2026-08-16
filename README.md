@@ -138,13 +138,13 @@ configured thresholds and rules, and explicit tool overrides. It writes no
 artifact; use `ayni check` for managed measured results or `ayni check --host`
 for the explicit host path.
 
-Managed environment setup is owned by the explicit `env` lifecycle:
+Managed environment setup is owned by the explicit [`env` lifecycle](docs/product/environments.md):
 
 ```sh
 ayni env show
 ayni env lock
-ayni env doctor
 ayni env build
+ayni env doctor
 ayni env run -- cargo test
 ```
 
@@ -155,8 +155,7 @@ published base is unavailable, run `scripts/build-local-environment-image.sh`;
 it compiles Ayni inside a Linux container and prints the exact local
 `env lock --base` command. Project tools must already be represented in native
 npm, uv, or Gradle inputs. Doctor, build, shell, run, and managed check consume
-the validated lock without creating or refreshing it. Multi-target shell/run
-requests use `--language` and `--root`.
+the validated lock without creating or refreshing it.
 
 Environment builds stage only digest-verified Cargo/npm/Go/uv/Gradle inputs,
 warm provider caches, and retain only declared dependency outputs. Managed
@@ -164,8 +163,10 @@ quality commands materialize seeded npm dependencies and fresh uv environments
 below `.ayni/environment/`, run without network access, and mount repository
 source read-only with only generated `.ayni/` state writable. Interactive
 `env shell` and arbitrary `env run` intentionally mount the checkout read-write
-so humans and agents can edit it. Managed check and focused verification support
-locked Rust, npm Node, Go module, uv Python, and Gradle Kotlin targets. pnpm,
+so humans and agents can edit it. Select an ambiguous target with `--language`;
+add `--root` when that language still has multiple locked roots. Managed check
+and focused verification support locked Rust, npm Node, Go module, uv Python,
+and Gradle Kotlin targets. pnpm,
 Yarn, Bun, non-uv Python managers, and unsupported Gradle build shapes remain
 explicit failures.
 
@@ -272,6 +273,7 @@ For layer boundaries and change rules, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 - [CLI reference](docs/cli.md)
 - [Configuration reference](docs/product/config.md)
+- [Managed environments](docs/product/environments.md)
 - [Signal contract index](docs/product/signals.md) ([current v3](docs/product/signals/v3.md), [historical v2](docs/product/signals/v2.md), [historical v1](docs/product/signals/v1.md))
 - [Runtime and setup rules](docs/product/runtime.md)
 - [Architecture](ARCHITECTURE.md)

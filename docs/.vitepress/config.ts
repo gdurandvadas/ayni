@@ -21,6 +21,7 @@ export default defineConfig({
         text: 'Product Reference',
           items: [
             { text: 'Configuration', link: '/product/config' },
+            { text: 'Managed environments', link: '/product/environments' },
             { text: 'Impact-aware execution', link: '/product/impact' },
             {
               text: 'Signals',
@@ -59,6 +60,7 @@ export default defineConfig({
           text: 'Product Reference',
           items: [
             { text: 'Configuration', link: '/product/config' },
+            { text: 'Managed environments', link: '/product/environments' },
             { text: 'Impact-aware execution', link: '/product/impact' },
             {
               text: 'Signals',

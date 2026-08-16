@@ -47,7 +47,8 @@ Every analyzed root records:
 
 ## Environment provisioning status
 
-The `env` command vocabulary is active. `env show`
+See [Managed environments](environments.md) for the user-facing lifecycle,
+lock, build, and execution guide. The `env` command vocabulary is active. `env show`
 builds a read-only, deterministic environment plan for configured Rust, Node,
 Go, uv Python, and Gradle Kotlin targets. `env lock` resolves exact requirements
 and atomically writes schema `0.3.0`, a versioned, fingerprinted `.ayni.lock`;
@@ -73,8 +74,9 @@ writable generated home, and applies read-only-root and privilege restrictions.
 Interactive `env shell` and arbitrary `env run` intentionally mount the checkout
 read-write so their declared development commands can edit it. Managed `check`,
 `verify`, and `impact run` instead mount repository source read-only and expose
-only generated `.ayni/` state as writable. Multi-target shell/run requests
-require `--language` and `--root`.
+only generated `.ayni/` state as writable. Select an ambiguous shell/run target
+with `--language`; add `--root` when that language still has multiple locked
+roots. A root selector always requires a language selector.
 
 `env build` runs adapter-owned preparation plans only in the isolated staged
 context. Managed launch copies seeded npm dependencies, creates fresh
