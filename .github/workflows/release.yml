@@ -99,6 +99,7 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: release-*
           path: dist
 
       - name: Build checksum manifest
