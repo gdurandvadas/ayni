@@ -10,6 +10,11 @@
           "type": "toml",
           "path": "Cargo.toml",
           "jsonpath": "$.workspace.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name == \"ayni-adapters-common\" || @.name == \"ayni-adapters-go\" || @.name == \"ayni-adapters-kotlin\" || @.name == \"ayni-adapters-node\" || @.name == \"ayni-adapters-python\" || @.name == \"ayni-adapters-rust\" || @.name == \"ayni-cli\" || @.name == \"ayni-core\" || @.name == \"ayni-environment\")].version"
         }
       ]
     }
