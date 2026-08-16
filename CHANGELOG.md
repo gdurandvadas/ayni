@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.8.1...ayni-v0.9.0) (2026-08-16)
+
+
+### Features
+
+* **docs:** add managed environment product documentation ([#42](https://github.com/gdurandvadas/ayni/issues/42)) ([e507142](https://github.com/gdurandvadas/ayni/commit/e5071427183537380dca40df5bce348d79d77897))
+
 ## [0.8.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.8.0...ayni-v0.8.1) (2026-08-02)
 
 
