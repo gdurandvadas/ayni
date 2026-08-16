@@ -14,7 +14,7 @@
         {
           "type": "toml",
           "path": "Cargo.lock",
-          "jsonpath": "$.package[?(@.name == \"ayni-adapters-common\" || @.name == \"ayni-adapters-go\" || @.name == \"ayni-adapters-kotlin\" || @.name == \"ayni-adapters-node\" || @.name == \"ayni-adapters-python\" || @.name == \"ayni-adapters-rust\" || @.name == \"ayni-cli\" || @.name == \"ayni-core\" || @.name == \"ayni-environment\")].version"
+          "jsonpath": "$.package[?(@.name.value == \"ayni-adapters-common\" || @.name.value == \"ayni-adapters-go\" || @.name.value == \"ayni-adapters-kotlin\" || @.name.value == \"ayni-adapters-node\" || @.name.value == \"ayni-adapters-python\" || @.name.value == \"ayni-adapters-rust\" || @.name.value == \"ayni-cli\" || @.name.value == \"ayni-core\" || @.name.value == \"ayni-environment\")].version"
         }
       ]
     }
