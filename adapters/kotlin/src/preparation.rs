@@ -12,7 +12,9 @@ const RESOLVE_SCRIPT_CONTENT: &str = r#"gradle.projectsEvaluated {
     allprojects { project ->
         project.tasks.register("ayniResolveDependencies") {
             doLast {
-                project.configurations.findAll { it.canBeResolved }.each { configuration ->
+                project.configurations.findAll {
+                    it.canBeResolved && it.name != "kotlinNativeBundleConfiguration"
+                }.each { configuration ->
                     configuration.resolve()
                 }
             }
@@ -207,6 +209,11 @@ mod tests {
         assert_eq!(plan.commands[0].args[0], "gradlew");
         assert!(plan.commands[0].args.contains(&RESOLVE_TASK.into()));
         assert_eq!(plan.scaffolds[0].path, RESOLVE_SCRIPT);
+        assert!(
+            plan.scaffolds[0]
+                .content
+                .contains("it.name != \"kotlinNativeBundleConfiguration\"")
+        );
         assert!(plan.outputs.is_empty());
         assert_eq!(
             plan.execution_environment.get("AYNI_GRADLE_OFFLINE"),

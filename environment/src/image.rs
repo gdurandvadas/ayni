@@ -112,6 +112,12 @@ fn add_package_manager(
     manager: &LockedPackageManager,
     inventory: &mut ProvisioningInventory,
 ) -> Result<(), BackendError> {
+    // Gradle is represented by the repository-pinned wrapper. Installing a
+    // second global Gradle copy is redundant and can diverge from the wrapper
+    // distribution and checksum recorded in the lock.
+    if manager.family == "gradle" {
+        return Ok(());
+    }
     if manager.family != "npm" && manager.family != "pnpm" {
         add_tool(&mut inventory.tools, &manager.family, &manager.version);
         return Ok(());
@@ -267,19 +273,39 @@ fn mise_install_provisioning(inventory: &ProvisioningInventory) -> String {
         .tools
         .iter()
         .flat_map(|(tool, versions)| {
-            versions
-                .iter()
-                .map(move |version| (tool.contains(':'), format!("{tool}@{version}")))
+            versions.iter().map(move |version| {
+                (
+                    tool.contains(':'),
+                    tool.starts_with("go:") || tool.starts_with("pipx:"),
+                    format!("{tool}@{version}"),
+                )
+            })
         })
         .collect::<Vec<_>>();
     // Runtime and package-manager tools must precede provider-backed tools such
     // as cargo:, go:, and pipx: coordinates.
     coordinates.sort();
     let mut output = String::new();
-    for (_, coordinate) in coordinates {
-        let argv = ["mise", "install", "--yes", coordinate.as_str()];
+    for (_, experimental, coordinate) in coordinates {
         output.push_str("RUN ");
-        output.push_str(&serde_json::to_string(&argv).expect("Mise install argv serialization"));
+        if experimental {
+            let argv = [
+                "env",
+                "MISE_EXPERIMENTAL=1",
+                "mise",
+                "install",
+                "--yes",
+                coordinate.as_str(),
+            ];
+            output.push_str(
+                &serde_json::to_string(&argv)
+                    .expect("experimental Mise install argv serialization"),
+            );
+        } else {
+            let argv = ["mise", "install", "--yes", coordinate.as_str()];
+            output
+                .push_str(&serde_json::to_string(&argv).expect("Mise install argv serialization"));
+        }
         output.push('\n');
     }
     output
@@ -430,6 +456,10 @@ mod tests {
                     String::from("node"),
                     BTreeSet::from([String::from("24.14.0")]),
                 ),
+                (
+                    String::from("go:github.com/fzipp/gocyclo/cmd/gocyclo"),
+                    BTreeSet::from([String::from("0.6.0")]),
+                ),
             ]),
             ..ProvisioningInventory::default()
         };
@@ -439,9 +469,16 @@ mod tests {
         let nextest = fragment
             .find("cargo:cargo-nextest@0.9.100")
             .expect("cargo provider layer");
+        let gocyclo = fragment
+            .find("go:github.com/fzipp/gocyclo/cmd/gocyclo@0.6.0")
+            .expect("Go provider layer");
         assert!(rust < nextest);
         assert!(node < nextest);
-        assert_eq!(fragment.matches("RUN [").count(), 3);
+        assert!(node < gocyclo);
+        assert!(fragment.contains(
+            "[\"env\",\"MISE_EXPERIMENTAL=1\",\"mise\",\"install\",\"--yes\",\"go:github.com/fzipp/gocyclo/cmd/gocyclo@0.6.0\"]"
+        ));
+        assert_eq!(fragment.matches("RUN [").count(), 4);
     }
 
     #[test]
@@ -475,6 +512,28 @@ mod tests {
             node_package_manager_provisioning(&inventory),
             "RUN [\"mise\",\"exec\",\"node@24.14.0\",\"--\",\"npm\",\"install\",\"--global\",\"--no-audit\",\"--no-fund\",\"pnpm@11.15.1\"]\n"
         );
+    }
+
+    #[test]
+    fn gradle_wrapper_manager_is_not_installed_as_a_global_mise_tool() {
+        use ayni_core::{Language, TargetIdentity};
+
+        let target = LockedTargetEnvironment {
+            target: TargetIdentity::new(Language::Kotlin, ".").expect("target"),
+            runtimes: Vec::new(),
+            package_manager: Some(LockedPackageManager {
+                family: "gradle".into(),
+                version: "9.5.0".into(),
+                ownership_root: ".".into(),
+                source: source(),
+            }),
+            signal_tools: Vec::new(),
+            dependency_locks: Vec::new(),
+        };
+        let mut inventory = ProvisioningInventory::default();
+        add_target(&target, &mut inventory).expect("inventory");
+
+        assert!(!inventory.tools.contains_key("gradle"));
     }
 
     #[test]

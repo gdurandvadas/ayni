@@ -19,6 +19,25 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+const COPY_IMAGE_TREE: &str = concat!(
+    "set -eu\n",
+    "archive_dir=$(mktemp -d /tmp/ayni-copy.XXXXXX)\n",
+    "archive_fifo=$archive_dir/archive\n",
+    "mkfifo \"$archive_fifo\"\n",
+    "trap 'rm -rf \"$archive_dir\"' EXIT HUP INT TERM\n",
+    "tar -C \"$1\" -cf - . > \"$archive_fifo\" &\n",
+    "producer=$!\n",
+    "consumer_status=0\n",
+    "tar -C \"$2\" -xf - --no-same-owner --no-same-permissions --no-overwrite-dir ",
+    "< \"$archive_fifo\" || consumer_status=$?\n",
+    "producer_status=0\n",
+    "wait \"$producer\" || producer_status=$?\n",
+    "rm -rf \"$archive_dir\"\n",
+    "trap - EXIT HUP INT TERM\n",
+    "[ \"$producer_status\" -eq 0 ]\n",
+    "[ \"$consumer_status\" -eq 0 ]",
+);
+
 pub(super) fn materialize_outputs(
     root: &Path,
     engine: Engine,
@@ -446,11 +465,13 @@ fn copy_image_tree(
             destination.display()
         ),
         "--entrypoint".into(),
-        "cp".into(),
+        "/bin/sh".into(),
         image_tag.into(),
-        "-R".into(),
+        "-c".into(),
+        COPY_IMAGE_TREE.into(),
+        "copy-image-tree".into(),
         source.into(),
-        format!("{container_destination}/"),
+        container_destination.into(),
     ]);
     let copied =
         run_command(root, engine_name(engine), &args, DEFAULT_TOOL_TIMEOUT).map_err(|error| {
@@ -811,4 +832,49 @@ fn run_materialization_commands(request: MaterializationRequest<'_>) -> Result<(
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::COPY_IMAGE_TREE;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    #[test]
+    fn copy_image_tree_propagates_archive_producer_failure() {
+        let root =
+            std::env::temp_dir().join(format!("ayni-copy-image-tree-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let bin = root.join("bin");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(&bin).expect("fake bin");
+        fs::create_dir_all(&source).expect("source");
+        fs::create_dir_all(&destination).expect("destination");
+        let tar = bin.join("tar");
+        fs::write(
+            &tar,
+            "#!/bin/sh\ncase \" $* \" in *' -cf '*) printf archive; exit 9;; *) cat >/dev/null; exit 0;; esac\n",
+        )
+        .expect("fake tar");
+        let mut permissions = fs::metadata(&tar).expect("fake tar metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&tar, permissions).expect("executable fake tar");
+
+        let path = format!("{}:/usr/bin:/bin", bin.to_str().expect("UTF-8 test path"));
+        let status = Command::new("/bin/sh")
+            .args([
+                "-c",
+                COPY_IMAGE_TREE,
+                "copy-image-tree",
+                source.to_str().expect("UTF-8 source"),
+                destination.to_str().expect("UTF-8 destination"),
+            ])
+            .env("PATH", path)
+            .status()
+            .expect("run copy script");
+        let _ = fs::remove_dir_all(&root);
+        assert!(!status.success());
+    }
 }

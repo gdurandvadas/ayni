@@ -76,18 +76,19 @@ impl DependencyPreparationCapability for NodeDependencyPreparationCapability {
         // when commands execute from workspace members, so every declared tree
         // is seeded and mounted rather than only the workspace-owner tree.
         let outputs = node_module_outputs(owner, &inputs, &manager.family);
-        let mut commands = if manager.family == "pnpm" {
-            prepare_output_directories(&outputs)?
-        } else {
-            Vec::new()
-        };
-        commands.push(PreparationCommand::new(
+        let mut commands = vec![PreparationCommand::new(
             Language::Node,
             manager.family.clone(),
             install_args.into_iter().map(String::from).collect(),
             owner,
             BTreeMap::new(),
-        )?);
+        )?];
+        if manager.family == "pnpm" {
+            // pnpm removes empty package-local node_modules directories during
+            // install. Recreate every declared output afterwards so the image
+            // can seed even workspace members that have no local dependencies.
+            commands.extend(prepare_output_directories(&outputs)?);
+        }
         let mut execution_environment =
             BTreeMap::from([(String::from("npm_config_offline"), String::from("true"))]);
         if manager.family == "pnpm" {
@@ -351,11 +352,22 @@ mod tests {
         let pnpm_plan = NodeDependencyPreparationCapability
             .prepare(&pnpm_request)
             .expect("pnpm plan");
-        let install = pnpm_plan.commands.last().expect("pnpm install");
+        let install = pnpm_plan
+            .commands
+            .iter()
+            .find(|command| command.program == "pnpm")
+            .expect("pnpm install");
         assert_eq!(install.program, "pnpm");
         assert_eq!(
             install.args,
             ["install", "--frozen-lockfile", "--ignore-scripts"]
+        );
+        assert_eq!(
+            pnpm_plan
+                .commands
+                .last()
+                .map(|command| command.program.as_str()),
+            Some("mkdir")
         );
         assert_eq!(pnpm_plan.materialization_commands[0].program, "pnpm");
         assert_eq!(

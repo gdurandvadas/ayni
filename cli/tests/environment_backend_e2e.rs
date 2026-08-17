@@ -120,7 +120,7 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     write_executable(
         &root.path().join("bin/docker"),
         &format!(
-            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) printf '%s\\n' \"$@\" > '{}' ; context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; cat \"$context/mise.toml\" > '{}.mise'; find \"$context/repository\" -type f | sed \"s|$context/repository/||\" | sort > '{}.inputs'; touch '{}.built';;\nrun) printf '%s\\n' \"$@\" > '{}.run'; printf '%s\\n' \"$@\" | grep -qx cp && exit 0; exit 7;;\nesac",
+            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) printf '%s\\n' \"$@\" > '{}' ; context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; cat \"$context/mise.toml\" > '{}.mise'; find \"$context/repository\" -type f | sed \"s|$context/repository/||\" | sort > '{}.inputs'; touch '{}.built';;\nrun) printf '%s\\n' \"$@\" > '{}.run'; printf '%s\\n' \"$@\" | grep -qx -e cp -e copy-image-tree && exit 0; exit 7;;\nesac",
             record.display(),
             record.display(),
             labels,
@@ -270,16 +270,19 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     assert!(managed_args.contains("rust:one"));
     assert!(managed_args.contains("rust:two"));
     assert!(managed_args.ends_with("--output\nhuman\n"));
-    assert!(!managed_args.contains("--entrypoint"));
+    assert!(managed_args.contains("--entrypoint\n/bin/sh"));
     assert!(managed_args.contains(&format!(
-        "type=bind,source={},target=/workspace,readonly",
+        "type=bind,source={},target=/opt/ayni/checkout,readonly",
         managed_root.display()
     )));
+    assert!(managed_args.contains("/workspace:rw,exec,nosuid,size=4g,mode=1777"));
     assert!(managed_args.contains(&format!(
         "type=bind,source={},target=/workspace/.ayni",
         managed_root.join(".ayni").display()
     )));
     assert!(!managed_args.contains(&format!("{}:/workspace:rw", managed_root.display())));
+    assert!(managed_args.contains("/workspace/.ayni/environment:rw,nosuid,size=64m,mode=1777"));
+    assert!(managed_args.contains("HOME=/tmp"));
     // The writable nested mount preserves materialized cache/state while the
     // checkout-wide mount remains read-only for managed quality execution.
     assert!(cache_marker.exists());
@@ -305,15 +308,20 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     assert!(managed_verify_args.ends_with(
         "verify\ncoverage\n--host\n--config\n./.ayni.toml\n--output\njson\n--language\nrust\n--root\none\n--debug\n"
     ));
-    assert!(!managed_verify_args.contains("--entrypoint"));
+    assert!(managed_verify_args.contains("--entrypoint\n/bin/sh"));
     assert!(managed_verify_args.contains(&format!(
-        "type=bind,source={},target=/workspace,readonly",
+        "type=bind,source={},target=/opt/ayni/checkout,readonly",
         managed_root.display()
     )));
+    assert!(managed_verify_args.contains("/workspace:rw,exec,nosuid,size=4g,mode=1777"));
     assert!(managed_verify_args.contains(&format!(
         "type=bind,source={},target=/workspace/.ayni",
         managed_root.join(".ayni").display()
     )));
+    assert!(
+        managed_verify_args.contains("/workspace/.ayni/environment:rw,nosuid,size=64m,mode=1777")
+    );
+    assert!(managed_verify_args.contains("HOME=/tmp"));
     assert!(cache_marker.exists());
 
     fs::write(root.path().join("one/rust-toolchain"), "stable\n").unwrap();
@@ -378,7 +386,7 @@ fn npm_dependencies_are_staged_materialized_offline_and_mounted_for_managed_qual
     write_executable(
         &bin.join("docker"),
         &format!(
-            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; find \"$context/repository\" -type f | sed \"s|$context/repository/||\" | sort > '{}.inputs'; touch '{}.built';;\nrun) printf '%s\\n' \"$@\" >> '{}.runs'; if printf '%s\\n' \"$@\" | grep -qx npm && [ ! -f '{}.rebuild-failed' ]; then touch '{}.rebuild-failed'; exit 9; fi; printf '%s\\n' \"$@\" | grep -q -- '--entrypoint' && exit 0; exit 1;;\nesac",
+            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; find \"$context/repository\" -type f | sed \"s|$context/repository/||\" | sort > '{}.inputs'; touch '{}.built';;\nrun) printf '%s\\n' \"$@\" >> '{}.runs'; if printf '%s\\n' \"$@\" | grep -qx npm && [ ! -f '{}.rebuild-failed' ]; then touch '{}.rebuild-failed'; exit 9; fi; printf '%s\\n' \"$@\" | grep -Eq '^(check|verify)$' && exit 1; printf '%s\\n' \"$@\" | grep -q -- '--entrypoint' && exit 0; exit 1;;\nesac",
             record.display(),
             record.display(),
             labels,
@@ -510,7 +518,7 @@ fn pnpm_workspace_materializes_all_node_modules_trees_in_one_offline_run() {
     write_executable(
         &bin.join("docker"),
         &format!(
-            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; touch '{}.built';;\nrun) {{ echo BEGIN; printf '%s\\n' \"$@\"; echo END; }} >> '{}.runs'; printf '%s\\n' \"$@\" | grep -q -- '--entrypoint' && exit 0; exit 1;;\nesac",
+            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; touch '{}.built';;\nrun) {{ echo BEGIN; printf '%s\\n' \"$@\"; echo END; }} >> '{}.runs'; printf '%s\\n' \"$@\" | grep -Eq '^(check|verify)$' && exit 1; printf '%s\\n' \"$@\" | grep -q -- '--entrypoint' && exit 0; exit 1;;\nesac",
             record.display(),
             record.display(),
             labels,
@@ -727,12 +735,13 @@ fn five_language_build_composes_preparation_without_staging_source() {
     assert!(dockerfile.contains("\"sh\",\"gradlew\",\"--no-daemon\""));
     assert!(dockerfile.contains(".ayni-gradle-resolve.init.gradle"));
     let mise = fs::read_to_string(format!("{}.mise", record.display())).unwrap();
-    for tool in ["rust", "node", "go", "python", "uv", "java", "gradle"] {
+    for tool in ["rust", "node", "go", "python", "uv", "java"] {
         assert!(
             mise.contains(&format!("\"{tool}\"")),
             "missing {tool}: {mise}"
         );
     }
+    assert!(!mise.contains("\"gradle\""));
     let inputs = fs::read_to_string(format!("{}.inputs", record.display())).unwrap();
     assert!(inputs.contains("rust/Cargo.toml"));
     assert!(inputs.contains("rust/Cargo.lock"));
@@ -762,6 +771,7 @@ fn five_language_build_composes_preparation_without_staging_source() {
     assert!(run.contains("AYNI_MANAGED_TARGET_ENVIRONMENTS="));
     assert!(run.contains("AYNI_GRADLE_OUTPUT_ROOT"));
     assert!(run.contains("/workspace/.ayni/quality/kotlin/6b6f746c696e"));
-    assert!(run.contains("target=/workspace,readonly"));
+    assert!(run.contains("target=/opt/ayni/checkout,readonly"));
+    assert!(run.contains("/workspace:rw,exec,nosuid,size=4g,mode=1777"));
     assert!(run.contains("target=/workspace/.ayni"));
 }

@@ -11,6 +11,55 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub const WORKSPACE: &str = "/workspace";
+const CHECKOUT_SOURCE: &str = "/opt/ayni/checkout";
+const MANAGED_WORKSPACE_INIT: &str = concat!(
+    "set -eu\n",
+    "archive_dir=$(mktemp -d /tmp/ayni-workspace.XXXXXX)\n",
+    "archive_fifo=$archive_dir/archive\n",
+    "mkfifo \"$archive_fifo\"\n",
+    "trap 'rm -rf \"$archive_dir\"' EXIT HUP INT TERM\n",
+    "(cd /opt/ayni/checkout; set --; ",
+    "for entry in ./* ./.[!.]* ./..?*; do ",
+    "if [ -e \"$entry\" ] || [ -L \"$entry\" ]; then set -- \"$@\" \"$entry\"; fi; ",
+    "done; ",
+    "if [ \"$#\" -eq 0 ]; then tar -cf - --files-from /dev/null; ",
+    "else tar --exclude='./.ayni' --exclude='./.git' ",
+    "--exclude='./node_modules' --exclude='*/node_modules' ",
+    "--exclude='./target' --exclude='*/target' ",
+    "--exclude='./.venv' --exclude='*/.venv' ",
+    "--exclude='./build' --exclude='*/build' ",
+    "--exclude='./coverage' --exclude='*/coverage' ",
+    "--exclude='./.gradle' --exclude='*/.gradle' ",
+    "--exclude='./.svelte-kit' --exclude='*/.svelte-kit' ",
+    "--exclude='./__pycache__' --exclude='*/__pycache__' -cf - \"$@\"; fi) ",
+    "> \"$archive_fifo\" &\n",
+    "producer=$!\n",
+    "consumer_status=0\n",
+    "(cd /workspace && tar -xf - --no-same-owner --no-same-permissions --no-overwrite-dir ",
+    "< \"$archive_fifo\") || consumer_status=$?\n",
+    "producer_status=0\n",
+    "wait \"$producer\" || producer_status=$?\n",
+    "rm -rf \"$archive_dir\"\n",
+    "trap - EXIT HUP INT TERM\n",
+    "[ \"$producer_status\" -eq 0 ]\n",
+    "[ \"$consumer_status\" -eq 0 ]\n",
+    "mount_count=$1\n",
+    "shift\n",
+    "mount_index=0\n",
+    "while [ \"$mount_index\" -lt \"$mount_count\" ]; do\n",
+    "destination=$1\n",
+    "shift\n",
+    "case \"$destination\" in /workspace/*) ;; *) exit 64;; esac\n",
+    "if [ -e \"$destination\" ] || [ -L \"$destination\" ]; then exit 64; fi\n",
+    "mkdir -p \"$(dirname \"$destination\")\"\n",
+    "source=/opt/ayni/prepared-$mount_index/${destination#/workspace/}\n",
+    "ln -s \"$source\" \"$destination\"\n",
+    "mount_index=$((mount_index + 1))\n",
+    "done\n",
+    "[ \"$1\" = -- ]\n",
+    "shift\n",
+    "exec /usr/local/bin/ayni \"$@\"",
+);
 
 mod engine;
 pub use engine::{
@@ -154,16 +203,47 @@ struct RepositoryLaunch<'a> {
 fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, BackendError> {
     let mut args = base_launch_args(request.engine, request.capabilities)?;
     append_managed_workspace_state_args(&mut args, request.root, WORKSPACE, request.state_home);
-    append_prepared_mounts(&mut args, request.mounts);
+    let workspace_mounts = append_managed_prepared_mounts(&mut args, request.mounts);
     if let Some(value) = request.managed_environments {
         args.extend([
             "--env".into(),
             format!("AYNI_MANAGED_TARGET_ENVIRONMENTS={value}"),
         ]);
     }
-    args.extend([request.image_tag.to_owned()]);
+    args.extend([
+        "--entrypoint".into(),
+        "/bin/sh".into(),
+        request.image_tag.to_owned(),
+        "-c".into(),
+        MANAGED_WORKSPACE_INIT.into(),
+        "ayni-managed-workspace".into(),
+        workspace_mounts.len().to_string(),
+    ]);
+    args.extend(workspace_mounts);
+    args.push("--".into());
     args.extend(request.command.iter().cloned());
     Ok(args)
+}
+
+fn append_managed_prepared_mounts(
+    args: &mut Vec<String>,
+    mounts: &[(PathBuf, String)],
+) -> Vec<String> {
+    let mut workspace_mounts = Vec::new();
+    for (source, destination) in mounts {
+        let target = if let Some(relative) = destination.strip_prefix(&format!("{WORKSPACE}/")) {
+            let target = format!("/opt/ayni/prepared-{}/{relative}", workspace_mounts.len());
+            workspace_mounts.push(destination.clone());
+            target
+        } else {
+            destination.clone()
+        };
+        args.extend([
+            "--mount".into(),
+            format!("type=bind,source={},target={target}", source.display()),
+        ]);
+    }
+    workspace_mounts
 }
 
 fn append_prepared_mounts(args: &mut Vec<String>, mounts: &[(PathBuf, String)]) {
@@ -373,28 +453,35 @@ fn append_workspace_state_args(
     append_workspace_execution_settings(args, workdir, state_home);
 }
 
-/// Managed quality commands must not modify checkout source files. The nested
-/// `.ayni` bind mount deliberately remains writable for signal artifacts,
-/// environment state, and tool caches.
+/// Managed quality commands must not modify checkout source files. The checkout
+/// is mounted separately as read-only input and copied into an ephemeral tmpfs;
+/// prepared dependency mounts can therefore create missing nested mountpoints
+/// without writing empty directories into a clean checkout. The nested `.ayni`
+/// bind mount deliberately remains writable for signal artifacts, environment
+/// state, and tool caches.
 fn append_managed_workspace_state_args(
     args: &mut Vec<String>,
     root: &Path,
     workdir: &str,
-    state_home: &str,
+    _state_home: &str,
 ) {
     args.extend([
         "--mount".into(),
         format!(
-            "type=bind,source={},target={WORKSPACE},readonly",
+            "type=bind,source={},target={CHECKOUT_SOURCE},readonly",
             root.display()
         ),
+        "--tmpfs".into(),
+        format!("{WORKSPACE}:rw,exec,nosuid,size=4g,mode=1777"),
         "--mount".into(),
         format!(
             "type=bind,source={},target={WORKSPACE}/.ayni",
             root.join(".ayni").display()
         ),
+        "--tmpfs".into(),
+        format!("{WORKSPACE}/.ayni/environment:rw,nosuid,size=64m,mode=1777"),
     ]);
-    append_workspace_execution_settings(args, workdir, state_home);
+    append_workspace_execution_settings(args, workdir, "/tmp");
 }
 
 fn append_workspace_execution_settings(args: &mut Vec<String>, workdir: &str, state_home: &str) {
@@ -479,7 +566,7 @@ pub(crate) fn target_environment(
         // npm and pnpm are installed into the selected Node runtime rather than
         // as independent Mise tools. The Node version therefore selects the
         // matching package-manager installation as well.
-        if manager.family != "npm" && manager.family != "pnpm" {
+        if manager.family != "npm" && manager.family != "pnpm" && manager.family != "gradle" {
             variables.insert(
                 mise_version_variable(&manager.family)?,
                 manager.version.clone(),
@@ -631,7 +718,14 @@ mod tests {
     #[test]
     fn java_target_activation_sets_mise_selection_and_java_home() {
         use ayni_core::{
-            Language, LockedRequirementSource, LockedRuntime, RequirementConfidence, TargetIdentity,
+            Language, LockedPackageManager, LockedRequirementSource, LockedRuntime,
+            RequirementConfidence, TargetIdentity,
+        };
+        let source = LockedRequirementSource {
+            kind: "test".into(),
+            path: "gradle/wrapper/gradle-wrapper.properties".into(),
+            digest: None,
+            confidence: RequirementConfidence::Exact,
         };
         let target = LockedTargetEnvironment {
             target: TargetIdentity::new(Language::Kotlin, ".").expect("target"),
@@ -640,14 +734,14 @@ mod tests {
                 version: "temurin-21.0.6+7".into(),
                 components: Vec::new(),
                 targets: Vec::new(),
-                source: LockedRequirementSource {
-                    kind: "test".into(),
-                    path: ".java-version".into(),
-                    digest: None,
-                    confidence: RequirementConfidence::Exact,
-                },
+                source: source.clone(),
             }],
-            package_manager: None,
+            package_manager: Some(LockedPackageManager {
+                family: "gradle".into(),
+                version: "9.5.0".into(),
+                ownership_root: ".".into(),
+                source,
+            }),
             signal_tools: Vec::new(),
             dependency_locks: Vec::new(),
         };
@@ -657,6 +751,11 @@ mod tests {
             "JAVA_HOME".into(),
             "/opt/ayni/mise/installs/java/temurin-21.0.6+7".into()
         )));
+        assert!(
+            !environment
+                .iter()
+                .any(|(name, _)| name == "MISE_GRADLE_VERSION")
+        );
     }
 
     #[test]
@@ -752,13 +851,23 @@ mod tests {
 
     #[test]
     fn repository_launch_keeps_target_activation_inside_ayni() {
+        let mounts = [
+            (
+                PathBuf::from("/state/cache"),
+                String::from("/home/ayni/.cache"),
+            ),
+            (
+                PathBuf::from("/state/dependencies"),
+                String::from("/workspace/packages/member/node_modules"),
+            ),
+        ];
         let args = repository_launch_args(RepositoryLaunch {
             root: Path::new("/checkout"),
             engine: Engine::Docker,
             state_home: "/workspace/.ayni/environment/state/home",
             image_tag: "ayni-env:test",
             command: &["check".into(), "--host".into()],
-            mounts: &[],
+            mounts: &mounts,
             managed_environments: None,
             capabilities: EnvironmentCapabilities::default(),
         })
@@ -769,23 +878,60 @@ mod tests {
                 .any(|pair| pair == ["--workdir", "/workspace"])
         );
         assert!(
+            args.iter().any(|arg| {
+                arg == "type=bind,source=/checkout,target=/opt/ayni/checkout,readonly"
+            })
+        );
+        assert!(
             args.iter()
-                .any(|arg| { arg == "type=bind,source=/checkout,target=/workspace,readonly" })
+                .any(|arg| arg == "/workspace:rw,exec,nosuid,size=4g,mode=1777")
         );
         assert!(
             args.iter()
                 .any(|arg| { arg == "type=bind,source=/checkout/.ayni,target=/workspace/.ayni" })
         );
         assert!(!args.iter().any(|arg| arg == "/checkout:/workspace:rw"));
-        assert!(!args.iter().any(|arg| arg == "--entrypoint"));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--entrypoint", "/bin/sh"])
+        );
+        assert!(args.iter().any(|arg| arg == MANAGED_WORKSPACE_INIT));
+        assert!(
+            args.iter()
+                .any(|arg| { arg == "type=bind,source=/state/cache,target=/home/ayni/.cache" })
+        );
         assert!(args.iter().any(|arg| {
-            arg == "XDG_STATE_HOME=/workspace/.ayni/environment/state/home/.local/state"
+            arg == "type=bind,source=/state/dependencies,target=/opt/ayni/prepared-0/packages/member/node_modules"
         }));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| { arg.contains("target=/workspace/packages/member/node_modules") })
+        );
+        assert!(
+            args.iter()
+                .any(|arg| { arg == "/workspace/.ayni/environment:rw,nosuid,size=64m,mode=1777" })
+        );
+        assert!(args.iter().any(|arg| arg == "HOME=/tmp"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "XDG_STATE_HOME=/tmp/.local/state")
+        );
         assert!(
             !args
                 .iter()
                 .any(|arg| arg.starts_with("MISE_") && arg.ends_with("_VERSION"))
         );
-        assert!(args.ends_with(&["ayni-env:test".into(), "check".into(), "--host".into()]));
+        assert!(args.ends_with(&[
+            "ayni-env:test".into(),
+            "-c".into(),
+            MANAGED_WORKSPACE_INIT.into(),
+            "ayni-managed-workspace".into(),
+            "1".into(),
+            "/workspace/packages/member/node_modules".into(),
+            "--".into(),
+            "check".into(),
+            "--host".into(),
+        ]));
     }
 }

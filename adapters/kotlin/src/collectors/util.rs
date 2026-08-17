@@ -10,6 +10,18 @@ const OUTPUT_INIT_SCRIPT: &str = r#"gradle.beforeProject { project ->
     def projectKey = project.path == ":" ? "root" : project.path.substring(1).replace(':', '/')
     project.layout.buildDirectory.set(new File(outputRoot, System.getProperty("ayni.signal") + "/" + projectKey + "/build"))
 }
+
+gradle.projectsEvaluated {
+    allprojects { project ->
+        project.tasks.matching { it.name.startsWith("detekt") }.configureEach { task ->
+            if (task.hasProperty("reports")) {
+                def report = new File(project.layout.buildDirectory.get().asFile, "reports/detekt/${task.name}.xml")
+                task.reports.xml.required.set(true)
+                task.reports.xml.outputLocation.set(report)
+            }
+        }
+    }
+}
 "#;
 
 pub fn gradle_command(
@@ -283,7 +295,9 @@ mod managed_tests {
                 .display()
                 .to_string()
         }));
-        assert!(state.path().join("coverage/output.init.gradle").is_file());
+        let script = fs::read_to_string(state.path().join("coverage/output.init.gradle"))
+            .expect("output script");
+        assert!(script.contains("task.reports.xml.outputLocation.set(report)"));
         assert_eq!(
             report_root(&context, SignalKind::Coverage),
             state.path().join("coverage")

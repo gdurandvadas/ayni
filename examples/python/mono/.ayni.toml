@@ -18,7 +18,7 @@ amount = 1
 offenders_limit = 8
 
 [python]
-roots = ["libs/greeting", "libs/math", "services/greeting_service"]
+roots = ["."]
 
 [python.size]
 "**/*.py" = { warn = 120, fail = 200, exclude = [".venv/**", "venv/**", "env/**", "__pycache__/**", ".pytest_cache/**", ".ruff_cache/**", ".tox/**", ".nox/**", ".git/**", ".ayni/**"] }
