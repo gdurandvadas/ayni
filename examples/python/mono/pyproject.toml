@@ -1,0 +1,20 @@
+[project]
+name = "ayni-python-mono"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest==9.0.3",
+    "pytest-json-report==1.5.0",
+    "pytest-cov==6.0.0",
+    "coverage==7.6.12",
+    "complexipy==7.0.1",
+]
+
+[tool.uv]
+required-version = "0.10.9"
+
+[tool.uv.workspace]
+members = ["libs/*", "services/*"]

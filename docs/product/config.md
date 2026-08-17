@@ -11,7 +11,7 @@ and tool command overrides.
 Use `ayni contract show` to print a concise, deterministic projection of the
 validated configured policy. Pass `--config <path>` to select a policy other
 than `./.ayni.toml`, or `--output json` for a machine-readable, deterministic
-projection. JSON output has a `projection_version` field (currently `0.1.0`),
+projection. JSON output has a `projection_version` field (currently `0.2.0`),
 ordered `languages` and `signals` arrays, and structured `warnings`. The
 command shows every signal's enabled state for each enabled language,
 normalized roots, configured thresholds, size rules,
@@ -38,11 +38,51 @@ telemetry, see [`runtime.md`](runtime.md).
 | `[concurrency]`                                | Scheduler settings for running independent analyze roots in parallel.                                            |
 | `[execution]`                                  | Tool execution settings such as the per-command timeout.                                                          |
 | `[report]`                                     | Console report rendering settings such as offender list limits.                                                  |
+| `[environment.*]`                              | Repository-wide Mise tools, Debian packages, Docker access, and network capabilities for managed execution.     |
 | `[rust.*]`, `[go.*]`, `[node.*]`, `[python.*]`, `[kotlin.*]` | Per-language settings (roots, thresholds, dependency rules, and optional tooling command overrides). |
 
 Everything under a language key uses normal TOML **single-bracket** tables and inline tables. There are no `[[array.of.tables]]` blocks in the policy model.
 
 ---
+
+## Managed repository environment
+
+Language adapters contribute the runtimes, package managers, and signal tools
+needed for their configured quality checks. Repositories may supplement that
+inferred plan with tools for any ecosystem supported by Mise and packages from
+the Debian provisioning base:
+
+```toml
+[environment.tools]
+protoc = "35.1"
+ruby = "3.4.2"
+
+[environment.debian]
+packages = ["libssl-dev", "postgresql-client"]
+
+[environment.docker]
+access = "socket"
+network = "bridge"
+```
+
+`environment.tools` values must be exact versions. Tool identifiers and Debian
+package specifications are validated as data and are never interpolated as
+arbitrary shell commands. Debian entries may use either a package name or an
+exact `name=version` specification. The lock records the requested package
+specification; use `name=version` when the Debian repository configured by the
+base must not select a newer version.
+
+Docker access and network access are disabled by default. `access = "socket"`
+mounts the host Docker Unix socket, installs the Debian `docker.io` client, and
+configures sibling-container access for Testcontainers. This grants the managed
+environment control over the host Docker daemon and must only be enabled for a
+trusted repository. `network = "bridge"` opts out of the default
+`--network none` isolation independently of socket access. Podman socket access
+and privileged Docker-in-Docker are not supported.
+
+Environment provisioning is open-ended; quality analysis remains available for
+the languages represented by registered Ayni adapters. A generic Mise tool does
+not imply that Ayni provides quality signals for that language.
 
 ## Excluding paths (size signal)
 
@@ -182,9 +222,10 @@ Notes:
 - `command` is required inside each override table.
 - `args` is optional; when omitted, Ayni uses signal-specific defaults for that language.
 - Overrides are command execution overrides only; result parsing still expects the signal collector’s native output shape.
-- Overrides are host-execution features. Managed environment planning rejects an
-  enabled signal with an override because the lock cannot prove or provision an
-  arbitrary command. Use `--host` when an override is required.
+- Managed execution accepts overrides after the adapter has contributed and
+  locked its normal runtime and signal-tool requirements. Add any extra override
+  executable under `[environment.tools]` or `[environment.debian]`; Ayni does
+  not infer arbitrary commands from the override text.
 
 ## Language roots
 

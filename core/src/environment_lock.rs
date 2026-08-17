@@ -1,6 +1,8 @@
+use crate::environment_provisioning::normalize_debian_package_spec;
 use crate::{
-    EnvironmentPlanError, RequirementConfidence, RequirementSource, ResolvedEnvironmentPlan,
-    SignalKind, TargetIdentity, TargetPlatform, ToolInstallationScope, VersionRequirement,
+    EnvironmentCapabilities, EnvironmentPlanError, RequirementConfidence, RequirementSource,
+    ResolvedEnvironmentPlan, SignalKind, TargetIdentity, TargetPlatform, ToolInstallationScope,
+    VersionRequirement,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -8,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 /// Version of the committed, deterministic environment lock document.
-pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.3.0";
+pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.4.0";
 
 /// Immutable OCI base selected by the environment backend. The reference is
 /// human-readable while the digest is the authoritative image identity.
@@ -42,6 +44,22 @@ impl LockedRequirementSource {
             confidence: source.confidence,
         }
     }
+}
+
+/// Exact repository-wide Mise tool declared independently of a quality adapter.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedMiseTool {
+    pub tool: String,
+    pub version: String,
+    pub source: LockedRequirementSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedDebianPackage {
+    pub package: String,
+    pub source: LockedRequirementSource,
 }
 
 /// Exact lock projection for one runtime requirement.
@@ -123,6 +141,12 @@ pub struct EnvironmentLock {
     provisioning_base: ProvisioningBase,
     platforms: Vec<TargetPlatform>,
     targets: Vec<LockedTargetEnvironment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<LockedMiseTool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    debian_packages: Vec<LockedDebianPackage>,
+    #[serde(default)]
+    capabilities: EnvironmentCapabilities,
     fingerprint: String,
 }
 
@@ -141,6 +165,12 @@ impl<'de> Deserialize<'de> for EnvironmentLock {
             provisioning_base: ProvisioningBase,
             platforms: Vec<TargetPlatform>,
             targets: Vec<LockedTargetEnvironment>,
+            #[serde(default)]
+            tools: Vec<LockedMiseTool>,
+            #[serde(default)]
+            debian_packages: Vec<LockedDebianPackage>,
+            #[serde(default)]
+            capabilities: EnvironmentCapabilities,
             fingerprint: String,
         }
         let wire = Wire::deserialize(deserializer)?;
@@ -151,6 +181,9 @@ impl<'de> Deserialize<'de> for EnvironmentLock {
             provisioning_base: wire.provisioning_base,
             platforms: wire.platforms,
             targets: wire.targets,
+            tools: wire.tools,
+            debian_packages: wire.debian_packages,
+            capabilities: wire.capabilities,
             fingerprint: wire.fingerprint,
             schema_version: Some(wire.schema_version),
         })
@@ -165,6 +198,9 @@ struct EnvironmentLockParts {
     provisioning_base: ProvisioningBase,
     platforms: Vec<TargetPlatform>,
     targets: Vec<LockedTargetEnvironment>,
+    tools: Vec<LockedMiseTool>,
+    debian_packages: Vec<LockedDebianPackage>,
+    capabilities: EnvironmentCapabilities,
     fingerprint: String,
     schema_version: Option<String>,
 }
@@ -247,6 +283,24 @@ impl EnvironmentLock {
                     .collect(),
             })
             .collect();
+        let tools = plan
+            .tools()
+            .iter()
+            .map(|tool| LockedMiseTool {
+                tool: tool.tool.clone(),
+                version: exact_version(&tool.version)
+                    .expect("resolved plans have exact generic tool versions"),
+                source: LockedRequirementSource::from_source(&tool.source, source_digests),
+            })
+            .collect();
+        let debian_packages = plan
+            .debian_packages()
+            .iter()
+            .map(|package| LockedDebianPackage {
+                package: package.package.clone(),
+                source: LockedRequirementSource::from_source(&package.source, source_digests),
+            })
+            .collect();
         Self::from_parts(EnvironmentLockParts {
             repository: LockedRepositoryIdentity {
                 contract_path: contract_path.as_ref().to_owned(),
@@ -257,6 +311,9 @@ impl EnvironmentLock {
             provisioning_base,
             platforms: plan.platforms().to_vec(),
             targets,
+            tools,
+            debian_packages,
+            capabilities: plan.capabilities(),
             fingerprint: String::new(),
             schema_version: None,
         })
@@ -270,6 +327,9 @@ impl EnvironmentLock {
             mut provisioning_base,
             mut platforms,
             mut targets,
+            mut tools,
+            mut debian_packages,
+            capabilities,
             fingerprint,
             schema_version,
         } = parts;
@@ -287,6 +347,8 @@ impl EnvironmentLock {
             &mut platforms,
         )?;
         normalize_locked_targets(&mut targets)?;
+        normalize_locked_mise_tools(&mut tools)?;
+        normalize_locked_debian_packages(&mut debian_packages)?;
         let mut lock = Self {
             schema_version: ENVIRONMENT_LOCK_SCHEMA_VERSION.to_owned(),
             repository,
@@ -295,6 +357,9 @@ impl EnvironmentLock {
             provisioning_base,
             platforms,
             targets,
+            tools,
+            debian_packages,
+            capabilities,
             fingerprint: String::new(),
         };
         let expected = lock.computed_fingerprint()?;
@@ -326,6 +391,9 @@ impl EnvironmentLock {
             provisioning_base: &'a ProvisioningBase,
             platforms: &'a [TargetPlatform],
             targets: &'a [LockedTargetEnvironment],
+            tools: &'a [LockedMiseTool],
+            debian_packages: &'a [LockedDebianPackage],
+            capabilities: EnvironmentCapabilities,
         }
         let document = FingerprintDocument {
             schema_version: &self.schema_version,
@@ -335,6 +403,9 @@ impl EnvironmentLock {
             provisioning_base: &self.provisioning_base,
             platforms: &self.platforms,
             targets: &self.targets,
+            tools: &self.tools,
+            debian_packages: &self.debian_packages,
+            capabilities: self.capabilities,
         };
         let bytes = serde_json::to_vec(&document)
             .map_err(|error| EnvironmentPlanError::Serialization(error.to_string()))?;
@@ -364,6 +435,18 @@ impl EnvironmentLock {
     #[must_use]
     pub fn targets(&self) -> &[LockedTargetEnvironment] {
         &self.targets
+    }
+    #[must_use]
+    pub fn tools(&self) -> &[LockedMiseTool] {
+        &self.tools
+    }
+    #[must_use]
+    pub fn debian_packages(&self) -> &[LockedDebianPackage] {
+        &self.debian_packages
+    }
+    #[must_use]
+    pub const fn capabilities(&self) -> EnvironmentCapabilities {
+        self.capabilities
     }
     #[must_use]
     pub fn provisioning_base(&self) -> &ProvisioningBase {
@@ -402,6 +485,41 @@ fn normalize_lock_header(
     }
     platforms.sort();
     platforms.dedup();
+    Ok(())
+}
+
+fn normalize_locked_mise_tools(
+    tools: &mut Vec<LockedMiseTool>,
+) -> Result<(), EnvironmentPlanError> {
+    for tool in tools.iter_mut() {
+        tool.tool = lock_required_label("Mise tool", tool.tool.clone())?.to_ascii_lowercase();
+        if !tool.tool.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
+        }) {
+            return Err(EnvironmentPlanError::EmptyField("Mise tool"));
+        }
+        tool.version = normalize_exact_lock_version("Mise tool version", tool.version.clone())?;
+        normalize_locked_source(&mut tool.source)?;
+    }
+    tools.sort();
+    tools.dedup();
+    if let Some(duplicate) = tools.windows(2).find(|pair| pair[0].tool == pair[1].tool) {
+        return Err(EnvironmentPlanError::DuplicateMiseTool(
+            duplicate[0].tool.clone(),
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_locked_debian_packages(
+    packages: &mut Vec<LockedDebianPackage>,
+) -> Result<(), EnvironmentPlanError> {
+    for package in packages.iter_mut() {
+        package.package = normalize_debian_package_spec(package.package.clone())?;
+        normalize_locked_source(&mut package.source)?;
+    }
+    packages.sort();
+    packages.dedup();
     Ok(())
 }
 
@@ -673,6 +791,9 @@ mod tests {
                 libc: Libc::Glibc,
             }],
             targets,
+            tools: Vec::new(),
+            debian_packages: Vec::new(),
+            capabilities: EnvironmentCapabilities::default(),
             fingerprint: String::new(),
             schema_version: None,
         })
@@ -694,6 +815,35 @@ mod tests {
     }
 
     #[test]
+    fn repository_provisioning_is_fingerprinted_and_round_trips() {
+        let mut lock = lock(vec![target(Language::Rust, ".")]);
+        let source = LockedRequirementSource {
+            kind: String::from("environment_policy"),
+            path: String::from("."),
+            digest: None,
+            confidence: RequirementConfidence::Exact,
+        };
+        lock.tools = vec![LockedMiseTool {
+            tool: String::from("protoc"),
+            version: String::from("35.1"),
+            source: source.clone(),
+        }];
+        lock.debian_packages = vec![LockedDebianPackage {
+            package: String::from("libssl-dev"),
+            source,
+        }];
+        lock.capabilities = EnvironmentCapabilities {
+            docker: crate::DockerAccess::Socket,
+            network: crate::NetworkAccess::Bridge,
+        };
+        let serialized = lock.canonical_json().expect("canonical lock");
+        let parsed: EnvironmentLock = serde_json::from_str(&serialized).expect("round trip");
+        assert_eq!(parsed.tools()[0].tool, "protoc");
+        assert_eq!(parsed.debian_packages()[0].package, "libssl-dev");
+        assert_eq!(parsed.capabilities(), lock.capabilities);
+    }
+
+    #[test]
     fn construction_rejects_non_immutable_provisioning_base() {
         let mut base = base();
         base.digest = "latest".to_owned();
@@ -712,6 +862,9 @@ mod tests {
                     libc: Libc::Glibc
                 }],
                 targets: vec![target(Language::Rust, ".")],
+                tools: Vec::new(),
+                debian_packages: Vec::new(),
+                capabilities: EnvironmentCapabilities::default(),
                 fingerprint: String::new(),
                 schema_version: None,
             })
@@ -749,6 +902,9 @@ mod tests {
                     libc: Libc::Glibc,
                 }],
                 targets: vec![target],
+                tools: Vec::new(),
+                debian_packages: Vec::new(),
+                capabilities: EnvironmentCapabilities::default(),
                 fingerprint: String::new(),
                 schema_version: None,
             })

@@ -87,6 +87,7 @@ pub fn doctor_prepared(
     let plan = image_plan_with_preparation(&lock, preparations)?;
     let engine = detect_engine()?;
     validate_image(engine, &plan, &lock)?;
+    super::validate_runtime_capabilities(engine, lock.capabilities())?;
     Ok(format!(
         "environment ready: {} ({})",
         plan.tag,

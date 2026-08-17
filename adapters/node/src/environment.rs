@@ -146,7 +146,7 @@ fn runtime_requirement(
     workspace_root: &Path,
     workspace_manifest: &serde_json::Value,
 ) -> Result<(RuntimeRequirement, Vec<EnvironmentConflict>), AdapterError> {
-    let selectors = selected_runtime_selectors(request.repo_root(), target_root, workspace_root)?;
+    let selectors = selected_runtime_selectors(request.repo_root(), target_root)?;
     let (version, source, conflicts) =
         if let Some(selection) = selector_runtime(request, &selectors)? {
             selection
@@ -176,15 +176,20 @@ fn runtime_requirement(
 fn selected_runtime_selectors(
     repo_root: &Path,
     target_root: &Path,
-    workspace_root: &Path,
 ) -> Result<Vec<SelectorEvidence>, AdapterError> {
-    let target = selector_files(repo_root, target_root)?;
-    let workspace = if workspace_root == target_root {
-        Vec::new()
-    } else {
-        selector_files(repo_root, workspace_root)?
-    };
-    Ok(if target.is_empty() { workspace } else { target })
+    let mut selected = None;
+    let mut current = Some(target_root);
+    while let Some(root) = current {
+        let selectors = selector_files(repo_root, root)?;
+        if selected.is_none() && !selectors.is_empty() {
+            selected = Some(selectors);
+        }
+        if root == repo_root {
+            break;
+        }
+        current = root.parent().filter(|parent| parent.starts_with(repo_root));
+    }
+    Ok(selected.unwrap_or_default())
 }
 
 fn selector_runtime(
@@ -753,7 +758,17 @@ fn dependency_locks(
     owner: &Path,
     target_root: &Path,
 ) -> Result<Vec<DependencyLockRequirement>, AdapterError> {
-    let mut inputs = lock_paths(repo_root, owner)?
+    let mut inputs = native_lock_inputs(repo_root, owner)?;
+    inputs.extend(manifest_inputs(repo_root, owner, target_root)?);
+    inputs.extend(package_manager_config_inputs(repo_root, owner)?);
+    Ok(inputs)
+}
+
+fn native_lock_inputs(
+    repo_root: &Path,
+    owner: &Path,
+) -> Result<Vec<DependencyLockRequirement>, AdapterError> {
+    lock_paths(repo_root, owner)?
         .into_iter()
         .map(|path| {
             let bytes = read_optional_contained_bytes(repo_root, &path)
@@ -779,32 +794,73 @@ fn dependency_locks(
                 )?,
             })
         })
-        .collect::<Result<Vec<_>, AdapterError>>()?;
-    let manifests = node_manifest_inputs(repo_root, owner, target_root)?;
-    for manifest in manifests {
-        let manifest_bytes = read_optional_contained_bytes(repo_root, &manifest)
-            .map_err(adapter_error)?
-            .ok_or_else(|| {
-                adapter_error(format!(
-                    "missing required Node input {}",
-                    manifest.display()
-                ))
-            })?;
-        let manifest_path = relative(repo_root, &manifest)?;
-        inputs.push(DependencyLockRequirement {
-            path: manifest_path.clone(),
-            digest: format!("sha256:{:x}", Sha256::digest(manifest_bytes)),
-            owner_root: relative(repo_root, owner)?,
-            source: source(
-                repo_root,
-                &manifest,
-                "node_manifest",
-                None,
-                RequirementConfidence::Exact,
-            )?,
-        });
-    }
-    Ok(inputs)
+        .collect()
+}
+
+fn manifest_inputs(
+    repo_root: &Path,
+    owner: &Path,
+    target_root: &Path,
+) -> Result<Vec<DependencyLockRequirement>, AdapterError> {
+    node_manifest_inputs(repo_root, owner, target_root)?
+        .into_iter()
+        .map(|manifest| {
+            let bytes = read_optional_contained_bytes(repo_root, &manifest)
+                .map_err(adapter_error)?
+                .ok_or_else(|| {
+                    adapter_error(format!(
+                        "missing required Node input {}",
+                        manifest.display()
+                    ))
+                })?;
+            let path = relative(repo_root, &manifest)?;
+            Ok(DependencyLockRequirement {
+                path: path.clone(),
+                digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+                owner_root: relative(repo_root, owner)?,
+                source: source(
+                    repo_root,
+                    &manifest,
+                    "node_manifest",
+                    None,
+                    RequirementConfidence::Exact,
+                )?,
+            })
+        })
+        .collect()
+}
+
+fn package_manager_config_inputs(
+    repo_root: &Path,
+    owner: &Path,
+) -> Result<Vec<DependencyLockRequirement>, AdapterError> {
+    ["pnpm-workspace.yaml", ".npmrc"]
+        .into_iter()
+        .filter_map(|name| {
+            let path = owner.join(name);
+            match read_optional_contained_bytes(repo_root, &path) {
+                Ok(Some(bytes)) => Some(Ok((name, path, bytes))),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .map(|result| {
+            let (name, path, bytes) = result.map_err(adapter_error)?;
+            let input_path = relative(repo_root, &path)?;
+            Ok(DependencyLockRequirement {
+                path: input_path.clone(),
+                digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+                owner_root: relative(repo_root, owner)?,
+                source: source(
+                    repo_root,
+                    &path,
+                    "node_package_manager_config",
+                    Some(name),
+                    RequirementConfidence::Exact,
+                )?,
+            })
+        })
+        .collect()
 }
 
 fn lock_paths(repo_root: &Path, owner: &Path) -> Result<Vec<PathBuf>, AdapterError> {

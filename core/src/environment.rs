@@ -4,13 +4,18 @@
 //! backends consume validated plans without re-reading language manifests or
 //! embedding provider-specific commands in core.
 
+pub use crate::environment_provisioning::{
+    DebianPackageRequirement, DockerAccess, EnvironmentCapabilities, MiseToolRequirement,
+    NetworkAccess,
+};
+use crate::environment_provisioning::{normalize_debian_packages, normalize_mise_tools};
 use crate::{Language, SignalKind};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
 /// Version of the clean-slate, explainable environment-plan document.
-pub const ENVIRONMENT_PLAN_SCHEMA_VERSION: &str = "0.1.0";
+pub const ENVIRONMENT_PLAN_SCHEMA_VERSION: &str = "0.2.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RepositoryIdentity {
@@ -263,6 +268,12 @@ pub struct EnvironmentPlan {
     platforms: Vec<TargetPlatform>,
     targets: Vec<TargetEnvironment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<MiseToolRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    debian_packages: Vec<DebianPackageRequirement>,
+    #[serde(default)]
+    capabilities: EnvironmentCapabilities,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<EnvironmentWarning>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     conflicts: Vec<EnvironmentConflict>,
@@ -279,6 +290,12 @@ impl<'de> Deserialize<'de> for EnvironmentPlan {
             repository: RepositoryIdentity,
             platforms: Vec<TargetPlatform>,
             targets: Vec<TargetEnvironment>,
+            #[serde(default)]
+            tools: Vec<MiseToolRequirement>,
+            #[serde(default)]
+            debian_packages: Vec<DebianPackageRequirement>,
+            #[serde(default)]
+            capabilities: EnvironmentCapabilities,
             #[serde(default)]
             warnings: Vec<EnvironmentWarning>,
             #[serde(default)]
@@ -299,6 +316,9 @@ impl<'de> Deserialize<'de> for EnvironmentPlan {
             wire.warnings,
             wire.conflicts,
         )
+        .and_then(|plan| plan.with_tools(wire.tools))
+        .and_then(|plan| plan.with_debian_packages(wire.debian_packages))
+        .and_then(|plan| plan.with_capabilities(wire.capabilities))
         .map_err(serde::de::Error::custom)
     }
 }
@@ -316,6 +336,9 @@ impl EnvironmentPlan {
             repository,
             platforms,
             targets,
+            tools: Vec::new(),
+            debian_packages: Vec::new(),
+            capabilities: EnvironmentCapabilities::default(),
             warnings,
             conflicts,
         };
@@ -336,6 +359,48 @@ impl EnvironmentPlan {
     #[must_use]
     pub fn targets(&self) -> &[TargetEnvironment] {
         &self.targets
+    }
+
+    #[must_use]
+    pub fn tools(&self) -> &[MiseToolRequirement] {
+        &self.tools
+    }
+
+    pub fn with_tools(
+        mut self,
+        tools: Vec<MiseToolRequirement>,
+    ) -> Result<Self, EnvironmentPlanError> {
+        self.tools = tools;
+        self.normalize_and_validate()?;
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn debian_packages(&self) -> &[DebianPackageRequirement] {
+        &self.debian_packages
+    }
+
+    pub fn with_debian_packages(
+        mut self,
+        packages: Vec<DebianPackageRequirement>,
+    ) -> Result<Self, EnvironmentPlanError> {
+        self.debian_packages = packages;
+        self.normalize_and_validate()?;
+        Ok(self)
+    }
+
+    #[must_use]
+    pub const fn capabilities(&self) -> EnvironmentCapabilities {
+        self.capabilities
+    }
+
+    pub fn with_capabilities(
+        mut self,
+        capabilities: EnvironmentCapabilities,
+    ) -> Result<Self, EnvironmentPlanError> {
+        self.capabilities = capabilities;
+        self.normalize_and_validate()?;
+        Ok(self)
     }
 
     #[must_use]
@@ -387,6 +452,8 @@ impl EnvironmentPlan {
                 ));
             }
         }
+        normalize_mise_tools(&mut self.tools)?;
+        normalize_debian_packages(&mut self.debian_packages)?;
 
         normalize_warnings(&mut self.warnings, &self.targets)?;
         normalize_conflicts(&mut self.conflicts, &self.targets)
@@ -400,26 +467,33 @@ impl EnvironmentPlan {
     }
 
     fn unresolved_requirements(&self) -> usize {
-        self.targets
+        let tools = self
+            .tools
             .iter()
-            .map(|target| {
-                target
-                    .runtimes
-                    .iter()
-                    .filter(|runtime| !runtime.version.is_exact())
-                    .count()
-                    + target
-                        .package_manager
+            .filter(|tool| !tool.version.is_exact())
+            .count();
+        tools
+            + self
+                .targets
+                .iter()
+                .map(|target| {
+                    target
+                        .runtimes
                         .iter()
-                        .filter(|manager| !manager.version.is_exact())
+                        .filter(|runtime| !runtime.version.is_exact())
                         .count()
-                    + target
-                        .signal_tools
-                        .iter()
-                        .filter(|tool| !tool.version.is_exact())
-                        .count()
-            })
-            .sum()
+                        + target
+                            .package_manager
+                            .iter()
+                            .filter(|manager| !manager.version.is_exact())
+                            .count()
+                        + target
+                            .signal_tools
+                            .iter()
+                            .filter(|tool| !tool.version.is_exact())
+                            .count()
+                })
+                .sum::<usize>()
     }
 }
 
@@ -529,6 +603,7 @@ pub enum EnvironmentPlanError {
     },
     UnknownDiagnosticTarget(TargetIdentity),
     DuplicateTarget(TargetIdentity),
+    DuplicateMiseTool(String),
     BlockingConflicts(usize),
     UnresolvedRequirements(usize),
     UnsupportedLockSchema(String),
@@ -818,7 +893,7 @@ fn repository_components(path: &str) -> Vec<&str> {
     }
 }
 
-fn normalize_version_requirement(
+pub(crate) fn normalize_version_requirement(
     requirement: &mut VersionRequirement,
 ) -> Result<(), EnvironmentPlanError> {
     match requirement {
@@ -845,7 +920,7 @@ fn normalize_version_requirement(
     }
 }
 
-fn normalize_source(source: &mut RequirementSource) -> Result<(), EnvironmentPlanError> {
+pub(crate) fn normalize_source(source: &mut RequirementSource) -> Result<(), EnvironmentPlanError> {
     source.kind = required_label("source kind", source.kind.clone())?;
     source.path = normalize_repository_path("requirement source", &source.path)?;
     source.detail = normalize_optional_label("source detail", source.detail.take())?;
@@ -871,7 +946,10 @@ fn normalize_optional_label(
     value.map(|value| required_label(field, value)).transpose()
 }
 
-fn required_label(field: &'static str, value: String) -> Result<String, EnvironmentPlanError> {
+pub(crate) fn required_label(
+    field: &'static str,
+    value: String,
+) -> Result<String, EnvironmentPlanError> {
     let value = value.trim().to_string();
     if value.is_empty() {
         Err(EnvironmentPlanError::EmptyField(field))

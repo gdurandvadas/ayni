@@ -1,4 +1,6 @@
 use crate::adapter::PolicyEffectivenessFacts;
+use crate::environment::{DockerAccess, EnvironmentCapabilities, NetworkAccess};
+use crate::environment_provisioning::normalize_debian_package_spec;
 use crate::language::Language;
 use crate::signal::SignalKind;
 use serde::{Deserialize, Serialize};
@@ -63,6 +65,31 @@ pub struct LanguageTooling {
     pub size: BTreeMap<String, SizeThreshold>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct DebianEnvironmentPolicy {
+    /// Debian package specifications installed into the repository image.
+    /// Entries may be names or exact `name=version` specifications.
+    pub packages: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct DockerEnvironmentPolicy {
+    pub access: DockerAccess,
+    pub network: NetworkAccess,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct EnvironmentPolicy {
+    /// Exact repository-wide tools installed by Mise in addition to
+    /// adapter-inferred language and quality tooling.
+    pub tools: BTreeMap<String, String>,
+    pub debian: DebianEnvironmentPolicy,
+    pub docker: DockerEnvironmentPolicy,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct AyniPolicy {
@@ -71,6 +98,7 @@ pub struct AyniPolicy {
     pub report: ReportPolicy,
     pub concurrency: ConcurrencyPolicy,
     pub execution: ExecutionPolicy,
+    pub environment: EnvironmentPolicy,
     #[serde(default)]
     pub rust: LanguageTooling,
     #[serde(default)]
@@ -180,6 +208,24 @@ impl AyniPolicy {
     }
 
     #[must_use]
+    pub fn environment_tools(&self) -> &BTreeMap<String, String> {
+        &self.environment.tools
+    }
+
+    #[must_use]
+    pub fn environment_debian_packages(&self) -> &[String] {
+        &self.environment.debian.packages
+    }
+
+    #[must_use]
+    pub const fn environment_capabilities(&self) -> EnvironmentCapabilities {
+        EnvironmentCapabilities {
+            docker: self.environment.docker.access,
+            network: self.environment.docker.network,
+        }
+    }
+
+    #[must_use]
     pub fn language_tooling(&self, language: Language) -> &LanguageTooling {
         match language {
             Language::Rust => &self.rust,
@@ -248,28 +294,9 @@ impl AyniPolicy {
     }
 
     fn normalize_and_validate(&mut self) -> Result<(), String> {
-        if self.languages.enabled.is_empty() {
-            return Err(String::from(
-                "languages.enabled must be an explicit non-empty list (for example: [\"rust\"])",
-            ));
-        }
-        for value in &self.languages.enabled {
-            if value == "auto" {
-                return Err(String::from(
-                    "languages.enabled value 'auto' is not supported in v0; use an explicit list like [\"rust\"]",
-                ));
-            }
-            Language::from_str(value).map_err(|_| {
-                format!(
-                    "languages.enabled contains unsupported language '{value}'; expected rust, go, node, python, or kotlin"
-                )
-            })?;
-        }
-        self.rust.roots = normalize_roots("rust", &self.rust.roots)?;
-        self.go.roots = normalize_roots("go", &self.go.roots)?;
-        self.node.roots = normalize_roots("node", &self.node.roots)?;
-        self.python.roots = normalize_roots("python", &self.python.roots)?;
-        self.kotlin.roots = normalize_roots("kotlin", &self.kotlin.roots)?;
+        validate_enabled_languages(&self.languages.enabled)?;
+        normalize_policy_roots(self)?;
+        normalize_environment_policy(&mut self.environment)?;
         if self.concurrency.amount == 0 {
             return Err(String::from("concurrency.amount must be at least 1"));
         }
@@ -460,6 +487,82 @@ impl AyniPolicy {
             SignalKind::Mutation => self.checks.mutation,
         }
     }
+}
+
+fn validate_enabled_languages(enabled: &[String]) -> Result<(), String> {
+    if enabled.is_empty() {
+        return Err(String::from(
+            "languages.enabled must be an explicit non-empty list (for example: [\"rust\"])",
+        ));
+    }
+    for value in enabled {
+        if value == "auto" {
+            return Err(String::from(
+                "languages.enabled value 'auto' is not supported in v0; use an explicit list like [\"rust\"]",
+            ));
+        }
+        Language::from_str(value).map_err(|_| {
+            format!(
+                "languages.enabled contains unsupported language '{value}'; expected rust, go, node, python, or kotlin"
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn normalize_policy_roots(policy: &mut AyniPolicy) -> Result<(), String> {
+    policy.rust.roots = normalize_roots("rust", &policy.rust.roots)?;
+    policy.go.roots = normalize_roots("go", &policy.go.roots)?;
+    policy.node.roots = normalize_roots("node", &policy.node.roots)?;
+    policy.python.roots = normalize_roots("python", &policy.python.roots)?;
+    policy.kotlin.roots = normalize_roots("kotlin", &policy.kotlin.roots)?;
+    Ok(())
+}
+
+fn normalize_environment_policy(environment: &mut EnvironmentPolicy) -> Result<(), String> {
+    normalize_environment_tools(&mut environment.tools)?;
+    normalize_debian_packages(&mut environment.debian.packages)
+}
+
+fn normalize_environment_tools(tools: &mut BTreeMap<String, String>) -> Result<(), String> {
+    let declared = std::mem::take(tools);
+    for (raw_tool, raw_version) in declared {
+        let tool = raw_tool.trim().to_ascii_lowercase();
+        if tool.is_empty()
+            || !tool.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
+            })
+        {
+            return Err(format!(
+                "environment.tools key '{raw_tool}' is not a valid Mise tool identifier"
+            ));
+        }
+        let version = raw_version.trim().to_owned();
+        if version.is_empty() {
+            return Err(format!(
+                "environment.tools.{tool} must declare a non-empty exact version"
+            ));
+        }
+        if tools.insert(tool.clone(), version).is_some() {
+            return Err(format!(
+                "environment.tools contains duplicate normalized tool '{tool}'"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_debian_packages(packages: &mut Vec<String>) -> Result<(), String> {
+    for package in packages.iter_mut() {
+        *package = normalize_debian_package_spec(package.clone()).map_err(|_| {
+            format!(
+                "environment.debian.packages contains invalid package specification '{package}'"
+            )
+        })?;
+    }
+    packages.sort();
+    packages.dedup();
+    Ok(())
 }
 
 fn validate_language_thresholds(language: &str, tooling: &LanguageTooling) -> Result<(), String> {
@@ -756,6 +859,68 @@ args = ["exec", "stryker", "run"]
             .tool_override_for(Language::Node, SignalKind::Mutation)
             .expect("node mutation override");
         assert_eq!(node_mutation.command, "pnpm");
+    }
+
+    #[test]
+    fn repository_environment_tools_packages_and_docker_capabilities_parse() {
+        let document = r#"
+[languages]
+enabled = ["rust"]
+
+[environment.tools]
+protoc = "35.1"
+"cargo:cargo-nextest" = "0.9.100"
+
+[environment.debian]
+packages = ["libssl-dev", "protobuf-compiler=3.21.12+ABC-3"]
+
+[environment.docker]
+access = "socket"
+network = "bridge"
+"#;
+        let policy = AyniPolicy::parse(document).expect("policy");
+        assert_eq!(
+            policy.environment_tools().get("protoc"),
+            Some(&String::from("35.1"))
+        );
+        assert_eq!(
+            policy.environment_debian_packages(),
+            ["libssl-dev", "protobuf-compiler=3.21.12+ABC-3"]
+        );
+        assert_eq!(
+            policy.environment_capabilities().docker,
+            DockerAccess::Socket
+        );
+        assert_eq!(
+            policy.environment_capabilities().network,
+            NetworkAccess::Bridge
+        );
+    }
+
+    #[test]
+    fn repository_environment_rejects_shell_like_package_and_tool_values() {
+        let invalid_package = r#"
+[languages]
+enabled = ["rust"]
+[environment.debian]
+packages = ["curl; id"]
+"#;
+        assert!(AyniPolicy::parse(invalid_package).is_err());
+        let apt_option = r#"
+[languages]
+enabled = ["rust"]
+[environment.debian]
+packages = ["--allow-unauthenticated"]
+"#;
+        assert!(AyniPolicy::parse(apt_option).is_err());
+
+        let invalid_tool = r#"
+[languages]
+enabled = ["rust"]
+[environment.tools]
+"node;id" = "24.0.0"
+"#;
+        assert!(AyniPolicy::parse(invalid_tool).is_err());
     }
 
     #[test]

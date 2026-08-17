@@ -1,14 +1,14 @@
 use crate::policy::load_from_path;
 use ayni_core::{
-    AyniPolicy, Language, PolicyEffectivenessFacts, PolicyEffectivenessWarning, SignalKind,
-    ThresholdFloat, ToolCommandOverride,
+    AyniPolicy, DockerAccess, Language, NetworkAccess, PolicyEffectivenessFacts,
+    PolicyEffectivenessWarning, SignalKind, ThresholdFloat, ToolCommandOverride,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 
-const CONTRACT_PROJECTION_VERSION: &str = "0.1.0";
+const CONTRACT_PROJECTION_VERSION: &str = "0.2.0";
 const SIGNALS: [SignalKind; 6] = [
     SignalKind::Test,
     SignalKind::Coverage,
@@ -21,8 +21,23 @@ const SIGNALS: [SignalKind; 6] = [
 #[derive(Debug, Serialize)]
 struct ContractProjection {
     projection_version: &'static str,
+    environment: EnvironmentProjection,
     languages: Vec<LanguageProjection>,
     warnings: Vec<PolicyEffectivenessWarning>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnvironmentProjection {
+    tools: Vec<EnvironmentToolProjection>,
+    debian_packages: Vec<String>,
+    docker: DockerAccess,
+    network: NetworkAccess,
+}
+
+#[derive(Debug, Serialize)]
+struct EnvironmentToolProjection {
+    tool: String,
+    version: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -126,8 +141,22 @@ fn project(
                 .collect(),
         })
         .collect();
+    let capabilities = policy.environment_capabilities();
     Ok(ContractProjection {
         projection_version: CONTRACT_PROJECTION_VERSION,
+        environment: EnvironmentProjection {
+            tools: policy
+                .environment_tools()
+                .iter()
+                .map(|(tool, version)| EnvironmentToolProjection {
+                    tool: tool.clone(),
+                    version: version.clone(),
+                })
+                .collect(),
+            debian_packages: policy.environment_debian_packages().to_vec(),
+            docker: capabilities.docker,
+            network: capabilities.network,
+        },
         languages,
         warnings: policy.effectiveness_warnings(adapter_facts),
     })
@@ -224,6 +253,30 @@ fn render_human(projection: &ContractProjection) -> String {
         "Configured signal contract (projection version {})\n",
         projection.projection_version
     );
+    writeln!(output, "\nenvironment:").expect("writing to String cannot fail");
+    writeln!(
+        output,
+        "  docker: {:?} | network: {:?}",
+        projection.environment.docker, projection.environment.network
+    )
+    .expect("writing to String cannot fail");
+    writeln!(output, "  tools:").expect("writing to String cannot fail");
+    if projection.environment.tools.is_empty() {
+        writeln!(output, "    none").expect("writing to String cannot fail");
+    } else {
+        for tool in &projection.environment.tools {
+            writeln!(output, "    - {}@{}", tool.tool, tool.version)
+                .expect("writing to String cannot fail");
+        }
+    }
+    writeln!(output, "  Debian packages:").expect("writing to String cannot fail");
+    if projection.environment.debian_packages.is_empty() {
+        writeln!(output, "    none").expect("writing to String cannot fail");
+    } else {
+        for package in &projection.environment.debian_packages {
+            writeln!(output, "    - {package}").expect("writing to String cannot fail");
+        }
+    }
     for language in &projection.languages {
         writeln!(output, "\nlanguage: {}", language.language)
             .expect("writing to String cannot fail");

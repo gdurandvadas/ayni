@@ -22,7 +22,7 @@ fn lock(root: &TempDir) -> Output {
 
 fn fixture() -> TempDir {
     let root = TempDir::new().expect("tempdir");
-    fs::write(root.path().join(".ayni.toml"), "[checks]\ntest = true\ncoverage = false\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n[languages]\nenabled = [\"rust\"]\n").unwrap();
+    fs::write(root.path().join(".ayni.toml"), "[checks]\ntest = true\ncoverage = false\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n[languages]\nenabled = [\"rust\"]\n[environment.tools]\nprotoc = \"35.1\"\n[environment.debian]\npackages = [\"libssl-dev\"]\n[environment.docker]\naccess = \"socket\"\nnetwork = \"bridge\"\n").unwrap();
     fs::write(
         root.path().join("Cargo.toml"),
         "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nrust-version = \"1.93.0\"\n",
@@ -55,6 +55,23 @@ fn writes_a_valid_deterministic_lock_without_generated_state() {
     let parsed: ayni_core::EnvironmentLock = serde_json::from_slice(&one).expect("valid lock");
     assert_eq!(parsed.targets().len(), 1);
     assert!(parsed.targets()[0].runtimes[0].source.digest.is_some());
+    assert_eq!(parsed.tools()[0].tool, "protoc");
+    assert_eq!(
+        parsed
+            .debian_packages()
+            .iter()
+            .map(|package| package.package.as_str())
+            .collect::<Vec<_>>(),
+        ["docker.io", "libssl-dev"]
+    );
+    assert_eq!(
+        parsed.capabilities().docker,
+        ayni_core::DockerAccess::Socket
+    );
+    assert_eq!(
+        parsed.capabilities().network,
+        ayni_core::NetworkAccess::Bridge
+    );
     assert!(!root.path().join(".ayni").exists());
     let second = lock(&root);
     assert!(second.status.success());
@@ -76,6 +93,25 @@ fn failure_preserves_an_existing_lock() {
     let output = lock(&root);
     assert_eq!(output.status.code(), Some(3));
     assert_eq!(existing, fs::read(path).unwrap());
+}
+
+#[test]
+fn older_schema_lock_is_replaced_without_manual_deletion() {
+    let root = fixture();
+    let path = root.path().join(".ayni.lock");
+    fs::write(&path, "{\"schema_version\":\"0.3.0\"}\n").unwrap();
+    let output = lock(&root);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: ayni_core::EnvironmentLock =
+        serde_json::from_slice(&fs::read(path).unwrap()).expect("current lock");
+    assert_eq!(
+        ayni_core::ENVIRONMENT_LOCK_SCHEMA_VERSION,
+        serde_json::to_value(parsed).unwrap()["schema_version"]
+    );
 }
 
 #[test]
@@ -167,6 +203,50 @@ exit 1"#,
     let lock: serde_json::Value =
         serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
     assert_eq!(lock["targets"][0]["runtimes"][0]["version"], "22.12.0");
+}
+
+#[cfg(unix)]
+#[test]
+fn pnpm_project_tools_resolve_from_the_native_lockfile() {
+    let root = TempDir::new().expect("tempdir");
+    fs::write(root.path().join(".ayni.toml"), "[checks]\ntest = true\ncoverage = false\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n[languages]\nenabled = [\"node\"]\n").unwrap();
+    fs::write(root.path().join(".node-version"), "24.14.0\n").unwrap();
+    fs::write(
+        root.path().join("package.json"),
+        r#"{"name":"fixture","packageManager":"pnpm@11.15.1","devDependencies":{"vitest":"^3.2.0"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("pnpm-lock.yaml"),
+        r#"lockfileVersion: '9.0'
+importers:
+  .:
+    devDependencies:
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.4
+packages:
+  vitest@3.2.4: {}
+"#,
+    )
+    .unwrap();
+    fake_mise(
+        &root,
+        r#"if [ "$1" = "version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
+exit 1"#,
+    );
+    let output = lock(&root);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: ayni_core::EnvironmentLock =
+        serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
+    let target = &parsed.targets()[0];
+    assert_eq!(target.package_manager.as_ref().unwrap().family, "pnpm");
+    assert_eq!(target.signal_tools[0].tool, "vitest");
+    assert_eq!(target.signal_tools[0].version, "3.2.4");
 }
 
 #[cfg(unix)]

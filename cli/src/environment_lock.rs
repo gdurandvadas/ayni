@@ -1,6 +1,9 @@
 use crate::application::{EnvLockOperation, EnvShowOperation, OutputFormat};
 use crate::environment;
-use ayni_core::{AdapterRegistry, EnvironmentLock, EnvironmentPlan, EnvironmentResolutionRequest};
+use ayni_core::{
+    AdapterRegistry, ENVIRONMENT_LOCK_SCHEMA_VERSION, EnvironmentLock, EnvironmentPlan,
+    EnvironmentResolutionRequest,
+};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
@@ -200,6 +203,9 @@ fn resolve_plan(
         Vec::new(),
         Vec::new(),
     )
+    .and_then(|resolved| resolved.with_tools(plan.tools().to_vec()))
+    .and_then(|resolved| resolved.with_debian_packages(plan.debian_packages().to_vec()))
+    .and_then(|resolved| resolved.with_capabilities(plan.capabilities()))
     .map_err(|error| LockError::environment(error.to_string()))?
     .resolve()
     .map_err(|error| LockError::environment(error.to_string()))
@@ -262,6 +268,12 @@ fn source_digests(
     repo_root: &Path,
 ) -> Result<BTreeMap<String, String>, LockError> {
     let mut paths = BTreeSet::new();
+    paths.extend(plan.tools().iter().map(|tool| tool.source.path.clone()));
+    paths.extend(
+        plan.debian_packages()
+            .iter()
+            .map(|package| package.source.path.clone()),
+    );
     for target in plan.targets() {
         paths.extend(target.runtimes.iter().map(|item| item.source.path.clone()));
         if let Some(manager) = &target.package_manager {
@@ -420,12 +432,29 @@ fn validate_existing_lock(path: &Path) -> Result<Option<String>, LockError> {
             path.display()
         ))
     })?;
-    serde_json::from_str::<EnvironmentLock>(&content).map_err(|error| {
+    let document: serde_json::Value = serde_json::from_str(&content).map_err(|error| {
         LockError::input(format!(
             "failed to validate existing lock {}: {error}",
             path.display()
         ))
     })?;
+    let schema = document
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            LockError::input(format!(
+                "failed to validate existing lock {}: missing schema_version",
+                path.display()
+            ))
+        })?;
+    if schema == ENVIRONMENT_LOCK_SCHEMA_VERSION {
+        serde_json::from_value::<EnvironmentLock>(document).map_err(|error| {
+            LockError::input(format!(
+                "failed to validate existing lock {}: {error}",
+                path.display()
+            ))
+        })?;
+    }
     Ok(Some(content))
 }
 

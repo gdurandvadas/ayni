@@ -30,8 +30,10 @@ effect of `check`. Pull requests expose one workflow per adapter:
 `mono/` fixture, while `ayni-rust` validates the Ayni repository itself as the
 Rust target. `ayni-quality` runs the classic repository gates, and
 `ayni-status` reports the single `status` context required by the repository
-ruleset after all six workflows pass. Python's pinned host-only CI tools live
-with its fixture in `examples/python/mono/requirements-ci.txt`.
+ruleset after all six workflows pass. Python pins its runtime, uv version, and
+signal tools in `.python-version`, `pyproject.toml`, and `uv.lock`; Kotlin pins
+its JDK contract, Gradle wrapper distribution, dependency locks, and artifact
+verification metadata with the fixture.
 
 The `single/` fixtures intentionally omit Ayni configuration so they can be
 used as raw language examples. Use `ayni agents sync --repo-root <path>` only

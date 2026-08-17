@@ -154,21 +154,22 @@ Docker Buildx for the published base-image digest.
 published base is unavailable, run `scripts/build-local-environment-image.sh`;
 it compiles Ayni inside a Linux container and prints the exact local
 `env lock --base` command. Project tools must already be represented in native
-npm, uv, or Gradle inputs. Doctor, build, shell, run, and managed check consume
+npm, pnpm, uv, or Gradle inputs. Doctor, build, shell, run, and managed check consume
 the validated lock without creating or refreshing it.
 
-Environment builds stage only digest-verified Cargo/npm/Go/uv/Gradle inputs,
+Environment builds stage only digest-verified Cargo/npm/pnpm/Go/uv/Gradle inputs,
 warm provider caches, and retain only declared dependency outputs. Managed
-quality commands materialize seeded npm dependencies and fresh uv environments
+quality commands materialize seeded npm or pnpm dependencies and fresh uv environments
 below `.ayni/environment/`, run without network access, and mount repository
 source read-only with only generated `.ayni/` state writable. Interactive
 `env shell` and arbitrary `env run` intentionally mount the checkout read-write
 so humans and agents can edit it. Select an ambiguous target with `--language`;
 add `--root` when that language still has multiple locked roots. Managed check
-and focused verification support locked Rust, npm Node, Go module, uv Python,
-and Gradle Kotlin targets. pnpm,
-Yarn, Bun, non-uv Python managers, and unsupported Gradle build shapes remain
-explicit failures.
+and focused verification support locked Rust, npm or pnpm Node, Go module, uv
+Python, and Gradle Kotlin targets. Yarn, Bun, non-uv Python managers, and
+unsupported Gradle build shapes remain explicit failures. Repositories may add
+exact Mise tools and validated Debian packages under `[environment]`; Docker
+socket and bridge-network access are explicit, security-sensitive opt-ins.
 
 Run `ayni agents sync` explicitly when you want the managed guidance block
 created or refreshed.

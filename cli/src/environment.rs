@@ -1,8 +1,10 @@
 use crate::application::{EnvShowOperation, OutputFormat};
 use ayni_adapters_common::environment::environment_discovery_request;
 use ayni_core::{
-    AdapterRegistry, Architecture, AyniPolicy, EnvironmentPlan, Libc, OperatingSystem,
-    RepositoryIdentity, TargetIdentity, TargetPlatform,
+    AdapterRegistry, Architecture, AyniPolicy, DebianPackageRequirement, DockerAccess,
+    EnvironmentConflict, EnvironmentPlan, Libc, MiseToolRequirement, OperatingSystem,
+    RepositoryIdentity, RequirementConfidence, RequirementSource, TargetIdentity, TargetPlatform,
+    VersionRequirement,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -39,8 +41,11 @@ pub(crate) fn build_plan(
 ) -> Result<EnvironmentPlan, ShowError> {
     let (repo_root, config, config_bytes, policy) = load_context(operation)?;
     let platforms = default_platforms();
-    let (targets, warnings, conflicts) =
+    let (targets, warnings, mut conflicts) =
         discover_targets(&repo_root, &policy, &platforms, registry)?;
+    let tools = repository_tools(&repo_root, &config, &policy)?;
+    let debian_packages = repository_debian_packages(&repo_root, &config, &policy)?;
+    conflicts.extend(generic_tool_conflicts(&tools, &targets));
     EnvironmentPlan::new(
         repository_identity(&repo_root, &config_bytes)?,
         platforms,
@@ -48,6 +53,9 @@ pub(crate) fn build_plan(
         warnings,
         conflicts,
     )
+    .and_then(|plan| plan.with_tools(tools))
+    .and_then(|plan| plan.with_debian_packages(debian_packages))
+    .and_then(|plan| plan.with_capabilities(policy.environment_capabilities()))
     .map_err(|error| {
         ShowError::environment(format!(
             "failed to aggregate environment plan from {}: {error}",
@@ -90,6 +98,158 @@ fn load_context(
     Ok((repo_root, config, config_bytes, policy))
 }
 
+fn repository_tools(
+    repo_root: &Path,
+    config: &Path,
+    policy: &AyniPolicy,
+) -> Result<Vec<MiseToolRequirement>, ShowError> {
+    let path = config
+        .strip_prefix(repo_root)
+        .map_err(|_| ShowError::input("environment contract escapes repository root"))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    policy
+        .environment_tools()
+        .iter()
+        .map(|(tool, version)| {
+            Ok(MiseToolRequirement {
+                tool: tool.clone(),
+                version: VersionRequirement::exact(version).map_err(|error| {
+                    ShowError::input(format!(
+                        "environment.tools.{tool} must be an exact version: {error}"
+                    ))
+                })?,
+                source: RequirementSource::new(
+                    "environment_tool",
+                    &path,
+                    Some(format!("environment.tools.{tool}")),
+                    RequirementConfidence::Declared,
+                )
+                .map_err(|error| ShowError::input(error.to_string()))?,
+            })
+        })
+        .collect()
+}
+
+fn repository_debian_packages(
+    repo_root: &Path,
+    config: &Path,
+    policy: &AyniPolicy,
+) -> Result<Vec<DebianPackageRequirement>, ShowError> {
+    let path = config
+        .strip_prefix(repo_root)
+        .map_err(|_| ShowError::input("environment contract escapes repository root"))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let mut requested = policy.environment_debian_packages().to_vec();
+    if policy.environment_capabilities().docker == DockerAccess::Socket
+        && !requested
+            .iter()
+            .any(|package| package == "docker.io" || package.starts_with("docker.io="))
+    {
+        requested.push(String::from("docker.io"));
+    }
+    requested
+        .into_iter()
+        .map(|package| {
+            Ok(DebianPackageRequirement {
+                package: package.clone(),
+                source: RequirementSource::new(
+                    if package == "docker.io" {
+                        "environment_docker_socket"
+                    } else {
+                        "environment_debian_package"
+                    },
+                    &path,
+                    Some(format!("environment.debian.packages:{package}")),
+                    RequirementConfidence::Declared,
+                )
+                .map_err(|error| ShowError::input(error.to_string()))?,
+            })
+        })
+        .collect()
+}
+
+fn generic_tool_conflicts(
+    tools: &[MiseToolRequirement],
+    targets: &[ayni_core::TargetEnvironment],
+) -> Vec<EnvironmentConflict> {
+    let adapter_tools = adapter_mise_tools(targets);
+    let mut conflicts = Vec::new();
+    for tool in tools {
+        for adapter in adapter_tools
+            .iter()
+            .filter(|adapter| adapter.coordinate == tool.tool && adapter.version != &tool.version)
+        {
+            conflicts.push(EnvironmentConflict {
+                code: String::from("environment_tool_version_conflict"),
+                message: format!(
+                    "repository tool {} {:?} conflicts with adapter requirement {:?}",
+                    tool.tool, tool.version, adapter.version
+                ),
+                target: Some(adapter.identity.clone()),
+                sources: vec![tool.source.clone(), adapter.source.clone()],
+            });
+        }
+    }
+    conflicts
+}
+
+struct AdapterMiseTool<'a> {
+    identity: &'a TargetIdentity,
+    coordinate: String,
+    version: &'a VersionRequirement,
+    source: &'a RequirementSource,
+}
+
+fn adapter_mise_tools(targets: &[ayni_core::TargetEnvironment]) -> Vec<AdapterMiseTool<'_>> {
+    let mut tools = Vec::new();
+    for target in targets {
+        tools.extend(target.runtimes.iter().map(|runtime| AdapterMiseTool {
+            identity: &target.target,
+            coordinate: runtime.runtime.clone(),
+            version: &runtime.version,
+            source: &runtime.source,
+        }));
+        tools.extend(
+            target
+                .package_manager
+                .iter()
+                .map(|manager| AdapterMiseTool {
+                    identity: &target.target,
+                    coordinate: manager.family.clone(),
+                    version: &manager.version,
+                    source: &manager.source,
+                }),
+        );
+        tools.extend(target.signal_tools.iter().filter_map(|tool| {
+            signal_tool_coordinate(tool).map(|coordinate| AdapterMiseTool {
+                identity: &target.target,
+                coordinate,
+                version: &tool.version,
+                source: &tool.source,
+            })
+        }));
+    }
+    tools
+}
+
+fn signal_tool_coordinate(tool: &ayni_core::SignalToolRequirement) -> Option<String> {
+    match tool.scope {
+        ayni_core::ToolInstallationScope::Project => None,
+        ayni_core::ToolInstallationScope::Runtime => Some(tool.tool.clone()),
+        ayni_core::ToolInstallationScope::Isolated if tool.provider == "cargo-install" => {
+            Some(format!("cargo:{}", tool.tool))
+        }
+        ayni_core::ToolInstallationScope::Isolated
+            if tool.provider.starts_with("go:") || tool.provider.starts_with("pipx:") =>
+        {
+            Some(tool.provider.clone())
+        }
+        ayni_core::ToolInstallationScope::Isolated => None,
+    }
+}
+
 type DiscoveryParts = (
     Vec<ayni_core::TargetEnvironment>,
     Vec<ayni_core::EnvironmentWarning>,
@@ -111,7 +271,6 @@ fn discover_targets(
         .enabled_languages()
         .map_err(|error| ShowError::input(format!("invalid environment configuration: {error}")))?
     {
-        reject_tool_overrides(policy, language, &enabled_signals)?;
         let adapter = registry
             .adapters()
             .iter()
@@ -148,22 +307,6 @@ fn discover_targets(
         }
     }
     Ok((targets, warnings, conflicts))
-}
-
-fn reject_tool_overrides(
-    policy: &AyniPolicy,
-    language: ayni_core::Language,
-    signals: &[ayni_core::SignalKind],
-) -> Result<(), ShowError> {
-    if let Some(signal) = signals
-        .iter()
-        .find(|signal| policy.tool_override_for(language, **signal).is_some())
-    {
-        return Err(ShowError::environment(format!(
-            "environment planning does not yet support the configured {language} {signal:?} tool override"
-        )));
-    }
-    Ok(())
 }
 
 fn ensure_detected(
@@ -265,6 +408,9 @@ fn print_human(plan: &EnvironmentPlan) {
     )
     .expect("string write");
     render_platforms(&mut output, plan);
+    render_repository_tools(&mut output, plan);
+    render_debian_packages(&mut output, plan);
+    render_capabilities(&mut output, plan);
     render_targets(&mut output, plan);
     render_diagnostics(&mut output, plan);
     print!("{output}");
@@ -277,6 +423,48 @@ fn render_platforms(output: &mut String, plan: &EnvironmentPlan) {
             output,
             "  - {:?}/{:?}/{:?}",
             platform.os, platform.architecture, platform.libc
+        )
+        .expect("string write");
+    }
+}
+
+fn render_repository_tools(output: &mut String, plan: &EnvironmentPlan) {
+    if plan.tools().is_empty() {
+        return;
+    }
+    writeln!(output, "repository tools:").expect("string write");
+    for tool in plan.tools() {
+        writeln!(
+            output,
+            "  - {} {:?} [{} {} {:?}]",
+            tool.tool, tool.version, tool.source.kind, tool.source.path, tool.source.confidence
+        )
+        .expect("string write");
+    }
+}
+
+fn render_debian_packages(output: &mut String, plan: &EnvironmentPlan) {
+    if plan.debian_packages().is_empty() {
+        return;
+    }
+    writeln!(output, "Debian packages:").expect("string write");
+    for package in plan.debian_packages() {
+        writeln!(output, "  - {}", package.package).expect("string write");
+    }
+}
+
+fn render_capabilities(output: &mut String, plan: &EnvironmentPlan) {
+    let capabilities = plan.capabilities();
+    writeln!(
+        output,
+        "runtime capabilities: docker={:?} network={:?}",
+        capabilities.docker, capabilities.network
+    )
+    .expect("string write");
+    if capabilities.docker == DockerAccess::Socket {
+        writeln!(
+            output,
+            "  warning: Docker socket access grants the environment control over the host Docker daemon"
         )
         .expect("string write");
     }
@@ -442,7 +630,7 @@ mod tests {
     #[test]
     fn aggregates_mixed_targets_deterministically_without_writes() {
         let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join(".ayni.toml"), "[checks]\ntest = true\n[languages]\nenabled = [\"node\", \"rust\", \"node\"]\n[rust]\nroots = [\"rust\"]\n[node]\nroots = [\"node\"]\n").unwrap();
+        fs::write(temp.path().join(".ayni.toml"), "[checks]\ntest = true\n[languages]\nenabled = [\"node\", \"rust\", \"node\"]\n[rust]\nroots = [\"rust\"]\n[node]\nroots = [\"node\"]\n[environment.tools]\nprotoc = \"35.1\"\n[environment.debian]\npackages = [\"libssl-dev\"]\n[environment.docker]\naccess = \"socket\"\nnetwork = \"bridge\"\n").unwrap();
         fs::create_dir(temp.path().join("rust")).unwrap();
         fs::write(
             temp.path().join("rust/Cargo.toml"),
@@ -467,7 +655,44 @@ mod tests {
             serde_json::to_vec(&two).unwrap()
         );
         assert_eq!(one.targets().len(), 2);
+        assert_eq!(one.tools()[0].tool, "protoc");
+        assert_eq!(
+            one.debian_packages()
+                .iter()
+                .map(|package| package.package.as_str())
+                .collect::<Vec<_>>(),
+            ["docker.io", "libssl-dev"]
+        );
+        assert_eq!(one.capabilities().docker, DockerAccess::Socket);
+        assert_eq!(one.capabilities().network, ayni_core::NetworkAccess::Bridge);
         assert!(!temp.path().join(".ayni").exists());
+    }
+
+    #[test]
+    fn repository_tool_conflicts_include_adapter_provider_coordinates() {
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join(".ayni.toml"),
+            "[checks]\ntest=false\ncoverage=true\nsize=false\ncomplexity=false\ndeps=false\nmutation=false\n[languages]\nenabled=[\"rust\"]\n[environment.tools]\n\"cargo:cargo-llvm-cov\"=\"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname=\"fixture\"\nversion=\"0.1.0\"\nrust-version=\"1.97.1\"\n",
+        )
+        .unwrap();
+        fs::write(temp.path().join("Cargo.lock"), "version = 4\n").unwrap();
+        let operation = EnvShowOperation {
+            config: PathBuf::from(".ayni.toml"),
+            repo_root: temp.path().to_path_buf(),
+            output: OutputFormat::Json,
+        };
+        let plan = build_plan(&operation, &registry()).expect("plan with conflict");
+        assert!(
+            plan.conflicts()
+                .iter()
+                .any(|conflict| conflict.code == "environment_tool_version_conflict")
+        );
     }
 
     #[test]

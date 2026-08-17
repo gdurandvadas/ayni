@@ -26,21 +26,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: examples/python/mono/requirements-ci.txt
+          python-version: '3.12.11'
 
-      - name: Install pinned Python signal tools
-        run: >-
-          python -m pip install --disable-pip-version-check
-          --requirement examples/python/mono/requirements-ci.txt
+      - name: Install pinned uv and sync the native lock
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.10.9
+          uv sync --frozen --project examples/python/mono
 
       - name: Validate Python example
         uses: ./.github/actions/validate-example
         with:
           language: python
           fixture: examples/python/mono
-          expected-roots: |
-            libs/greeting
-            libs/math
-            services/greeting_service
+          expected-roots: .

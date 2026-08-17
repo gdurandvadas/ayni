@@ -8,7 +8,6 @@ use crate::{BackendError, concise_output};
 use ayni_adapters_common::exec::{DEFAULT_TOOL_TIMEOUT, run_command};
 use ayni_core::{DependencyPreparationPlan, EnvironmentLock, PreparationOutputMode};
 use std::collections::BTreeMap;
-use std::env;
 #[cfg(unix)]
 use std::ffi::CString;
 use std::fs::{self, OpenOptions};
@@ -19,6 +18,25 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
+
+const COPY_IMAGE_TREE: &str = concat!(
+    "set -eu\n",
+    "archive_dir=$(mktemp -d /tmp/ayni-copy.XXXXXX)\n",
+    "archive_fifo=$archive_dir/archive\n",
+    "mkfifo \"$archive_fifo\"\n",
+    "trap 'rm -rf \"$archive_dir\"' EXIT HUP INT TERM\n",
+    "tar -C \"$1\" -cf - . > \"$archive_fifo\" &\n",
+    "producer=$!\n",
+    "consumer_status=0\n",
+    "tar -C \"$2\" -xf - --no-same-owner --no-same-permissions --no-overwrite-dir ",
+    "< \"$archive_fifo\" || consumer_status=$?\n",
+    "producer_status=0\n",
+    "wait \"$producer\" || producer_status=$?\n",
+    "rm -rf \"$archive_dir\"\n",
+    "trap - EXIT HUP INT TERM\n",
+    "[ \"$producer_status\" -eq 0 ]\n",
+    "[ \"$consumer_status\" -eq 0 ]",
+);
 
 pub(super) fn materialize_outputs(
     root: &Path,
@@ -38,24 +56,70 @@ pub(super) fn materialize_outputs(
     let state_root = PathBuf::from(".ayni/environment")
         .join(&fingerprint[..16.min(fingerprint.len())])
         .join(&preparation[..16.min(preparation.len())]);
+    validate_output_ownership(preparations)?;
     let cache_destination = materialize_cache(root, engine, image_plan, &state_root)?;
-    let mut mounts = vec![(cache_destination.clone(), String::from("/home/ayni/.cache"))];
-    for output in crate::preparation::unique_outputs(preparations) {
-        let key = crate::preparation::output_key(&output);
-        let destination = materialize_output(OutputMaterialization {
+    let outputs = crate::preparation::unique_outputs(preparations);
+    let mut destinations = BTreeMap::new();
+    let mut handled = std::collections::BTreeSet::new();
+
+    for plan in preparations {
+        let mut plan_outputs = outputs
+            .iter()
+            .filter(|output| {
+                plan.outputs.contains(output)
+                    && handled.insert(crate::preparation::output_key(output))
+            })
+            .collect::<Vec<_>>();
+        plan_outputs.sort_by(|left, right| left.path.cmp(&right.path));
+        for (key, destination) in materialize_preparation_outputs(
             root,
             engine,
             lock,
             image_plan,
-            preparations,
-            state_root: &state_root,
-            cache_state: &cache_destination,
-            key: &key,
-            output: &output,
+            plan,
+            &plan_outputs,
+            &state_root,
+            &cache_destination,
+        )? {
+            destinations.insert(key, destination);
+        }
+    }
+
+    if handled.len() != outputs.len() {
+        return Err(BackendError::environment(
+            "dependency preparation output has no owning plan",
+        ));
+    }
+    let mut mounts = vec![(cache_destination, String::from("/home/ayni/.cache"))];
+    for output in outputs {
+        let key = crate::preparation::output_key(&output);
+        let destination = destinations.remove(&key).ok_or_else(|| {
+            BackendError::environment("dependency preparation output was not materialized")
         })?;
         mounts.push((destination, crate::preparation::workspace_mount(&output)));
     }
     Ok(mounts)
+}
+
+fn validate_output_ownership(
+    preparations: &[DependencyPreparationPlan],
+) -> Result<(), BackendError> {
+    let mut owners = BTreeMap::new();
+    for plan in preparations {
+        for output in &plan.outputs {
+            if let Some(previous) = owners.insert(output.mount_path.clone(), &plan.target) {
+                return Err(BackendError::environment(format!(
+                    "dependency output {} is claimed by both {}:{} and {}:{}",
+                    output.mount_path,
+                    previous.language,
+                    previous.root,
+                    plan.target.language,
+                    plan.target.root
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn materialize_cache(
@@ -98,114 +162,209 @@ fn materialize_cache(
     Ok(destination)
 }
 
-struct OutputMaterialization<'a> {
-    root: &'a Path,
-    engine: Engine,
-    lock: &'a EnvironmentLock,
-    image_plan: &'a ImagePlan,
-    preparations: &'a [DependencyPreparationPlan],
-    state_root: &'a Path,
-    cache_state: &'a Path,
-    key: &'a str,
+struct PendingOutput<'a> {
+    key: String,
     output: &'a ayni_core::PreparationOutput,
+    destination: PathBuf,
+    marker: PathBuf,
+    current: bool,
+    staging: Option<StagingDirectory>,
 }
 
-fn materialize_output(request: OutputMaterialization<'_>) -> Result<PathBuf, BackendError> {
-    let parent_relative = request.state_root.join("dependencies").join(request.key);
-    create_contained_directory_tree(request.root, &parent_relative)?;
-    let destination = request.root.join(&parent_relative).join("content");
-    let marker = request
-        .root
-        .join(request.state_root)
-        .join("dependencies")
-        .join(format!("{}.complete", request.key));
-    if reuse_materialization(
-        request.root,
-        &marker,
-        &request.image_plan.preparation_digest,
-        &destination,
-    )? {
-        return Ok(destination);
-    }
-    let _lock = MaterializationLock::acquire(
-        request.root,
-        &marker.with_extension("lock"),
-        &marker,
-        &request.image_plan.preparation_digest,
-    )?;
-    if reuse_materialization(
-        request.root,
-        &marker,
-        &request.image_plan.preparation_digest,
-        &destination,
-    )? {
-        return Ok(destination);
-    }
-    let staging = stage_dependency_output(&request, &destination)?;
-    staging.publish(&destination)?;
-    write_completion_marker(
-        request.root,
-        &marker,
-        &request.image_plan.preparation_digest,
-    )?;
-    Ok(destination)
-}
-
-fn reuse_materialization(
+#[allow(clippy::too_many_arguments)]
+fn materialize_preparation_outputs(
     root: &Path,
-    marker: &Path,
-    expected: &str,
-    destination: &Path,
-) -> Result<bool, BackendError> {
-    if !materialization_marker_current(root, marker, expected)? {
-        return Ok(false);
+    engine: Engine,
+    lock: &EnvironmentLock,
+    image_plan: &ImagePlan,
+    preparation: &DependencyPreparationPlan,
+    outputs: &[&ayni_core::PreparationOutput],
+    state_root: &Path,
+    cache_state: &Path,
+) -> Result<Vec<(String, PathBuf)>, BackendError> {
+    if outputs.is_empty() {
+        return Ok(Vec::new());
     }
-    validate_materialized_directory(root, destination)?;
-    Ok(true)
-}
-
-fn stage_dependency_output(
-    request: &OutputMaterialization<'_>,
-    destination: &Path,
-) -> Result<StagingDirectory, BackendError> {
-    reject_partial_materialization(destination)?;
-    let staging = StagingDirectory::create(destination.parent().expect("dependency parent"))?;
-    if request.output.mode == PreparationOutputMode::Seeded {
-        copy_image_tree(
-            request.root,
-            request.engine,
-            &request.image_plan.tag,
-            &format!("{}/{}/.", crate::preparation::SEED_ROOT, request.key),
-            staging.path(),
-            "/tmp/ayni/dependencies",
-            "locked dependencies",
-        )?;
+    let mut pending = create_pending_outputs(root, outputs, state_root)?;
+    refresh_materialization_state(root, image_plan, &mut pending)?;
+    if all_outputs_current(&pending) {
+        return Ok(pending_destinations(pending));
     }
-    rebuild_dependency_output(request, staging.path())?;
-    Ok(staging)
-}
 
-fn rebuild_dependency_output(
-    request: &OutputMaterialization<'_>,
-    output_state: &Path,
-) -> Result<(), BackendError> {
-    let Some(preparation) = request
-        .preparations
-        .iter()
-        .find(|preparation| preparation.outputs.contains(request.output))
-    else {
-        return Ok(());
-    };
-    run_materialization_commands(MaterializationRequest {
-        root: request.root,
-        engine: request.engine,
-        lock: request.lock,
-        image_tag: &request.image_plan.tag,
+    // Acquire every output lock in stable path order. A workspace package
+    // manager may update several nested outputs in one operation.
+    let _locks = acquire_output_locks(root, image_plan, &pending)?;
+    refresh_materialization_state(root, image_plan, &mut pending)?;
+    if all_outputs_current(&pending) {
+        return Ok(pending_destinations(pending));
+    }
+
+    stage_pending_outputs(root, engine, image_plan, &mut pending)?;
+    run_preparation_for_outputs(
+        root,
+        engine,
+        lock,
+        image_plan,
         preparation,
-        cache_state: request.cache_state,
-        output_state,
-        output: request.output,
+        state_root,
+        cache_state,
+        &pending,
+    )?;
+    publish_pending_outputs(root, image_plan, &mut pending)?;
+    Ok(pending_destinations(pending))
+}
+
+fn create_pending_outputs<'a>(
+    root: &Path,
+    outputs: &[&'a ayni_core::PreparationOutput],
+    state_root: &Path,
+) -> Result<Vec<PendingOutput<'a>>, BackendError> {
+    let mut pending = Vec::with_capacity(outputs.len());
+    for output in outputs {
+        let key = crate::preparation::output_key(output);
+        let parent_relative = state_root.join("dependencies").join(&key);
+        create_contained_directory_tree(root, &parent_relative)?;
+        pending.push(PendingOutput {
+            destination: root.join(&parent_relative).join("content"),
+            marker: root
+                .join(state_root)
+                .join("dependencies")
+                .join(format!("{key}.complete")),
+            key,
+            output,
+            current: false,
+            staging: None,
+        });
+    }
+    Ok(pending)
+}
+
+fn all_outputs_current(outputs: &[PendingOutput<'_>]) -> bool {
+    outputs.iter().all(|output| output.current)
+}
+
+fn pending_destinations(outputs: Vec<PendingOutput<'_>>) -> Vec<(String, PathBuf)> {
+    outputs
+        .into_iter()
+        .map(|output| (output.key, output.destination))
+        .collect()
+}
+
+fn acquire_output_locks(
+    root: &Path,
+    image_plan: &ImagePlan,
+    outputs: &[PendingOutput<'_>],
+) -> Result<Vec<MaterializationLock>, BackendError> {
+    outputs
+        .iter()
+        .map(|output| {
+            MaterializationLock::acquire(
+                root,
+                &output.marker.with_extension("lock"),
+                &output.marker,
+                &image_plan.preparation_digest,
+            )
+        })
+        .collect()
+}
+
+fn stage_pending_outputs(
+    root: &Path,
+    engine: Engine,
+    image_plan: &ImagePlan,
+    outputs: &mut [PendingOutput<'_>],
+) -> Result<(), BackendError> {
+    for output in outputs {
+        if !output.current {
+            reject_partial_materialization(&output.destination)?;
+        }
+        let staging = StagingDirectory::create(
+            output
+                .destination
+                .parent()
+                .expect("dependency output parent"),
+        )?;
+        if output.output.mode == PreparationOutputMode::Seeded {
+            copy_image_tree(
+                root,
+                engine,
+                &image_plan.tag,
+                &format!("{}/{}/.", crate::preparation::SEED_ROOT, output.key),
+                staging.path(),
+                "/tmp/ayni/dependencies",
+                "locked dependencies",
+            )?;
+        }
+        output.staging = Some(staging);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_preparation_for_outputs(
+    root: &Path,
+    engine: Engine,
+    lock: &EnvironmentLock,
+    image_plan: &ImagePlan,
+    preparation: &DependencyPreparationPlan,
+    state_root: &Path,
+    cache_state: &Path,
+    outputs: &[PendingOutput<'_>],
+) -> Result<(), BackendError> {
+    let workspace_parent = state_root.join("workspaces");
+    create_contained_directory_tree(root, &workspace_parent)?;
+    let workspace = StagingDirectory::create(&root.join(&workspace_parent))?;
+    crate::preparation::stage_inputs(root, workspace.path(), std::slice::from_ref(preparation))?;
+    let output_states = outputs
+        .iter()
+        .map(|output| {
+            (
+                output.output,
+                output.staging.as_ref().expect("staged output").path(),
+            )
+        })
+        .collect::<Vec<_>>();
+    run_materialization_commands(MaterializationRequest {
+        root,
+        engine,
+        lock,
+        image_tag: &image_plan.tag,
+        preparation,
+        cache_state,
+        workspace_state: &workspace.path().join("repository"),
+        output_states: &output_states,
     })
+}
+
+fn publish_pending_outputs(
+    root: &Path,
+    image_plan: &ImagePlan,
+    outputs: &mut [PendingOutput<'_>],
+) -> Result<(), BackendError> {
+    for output in outputs {
+        let staging = output.staging.take().expect("staged output");
+        if output.current {
+            drop(staging);
+            continue;
+        }
+        staging.publish(&output.destination)?;
+        write_completion_marker(root, &output.marker, &image_plan.preparation_digest)?;
+    }
+    Ok(())
+}
+fn refresh_materialization_state(
+    root: &Path,
+    image_plan: &ImagePlan,
+    outputs: &mut [PendingOutput<'_>],
+) -> Result<(), BackendError> {
+    for output in outputs {
+        output.current =
+            materialization_marker_current(root, &output.marker, &image_plan.preparation_digest)?;
+        if output.current {
+            validate_materialized_directory(root, &output.destination)?;
+        }
+    }
+    Ok(())
 }
 
 fn reject_partial_materialization(destination: &Path) -> Result<(), BackendError> {
@@ -356,7 +515,7 @@ fn copy_image_tree(
     container_destination: &str,
     description: &str,
 ) -> Result<(), BackendError> {
-    let mut args = base_launch_args(engine);
+    let mut args = base_launch_args(engine, ayni_core::EnvironmentCapabilities::default())?;
     args.extend([
         "--mount".into(),
         format!(
@@ -364,11 +523,13 @@ fn copy_image_tree(
             destination.display()
         ),
         "--entrypoint".into(),
-        "cp".into(),
+        "/bin/sh".into(),
         image_tag.into(),
-        "-R".into(),
+        "-c".into(),
+        COPY_IMAGE_TREE.into(),
+        "copy-image-tree".into(),
         source.into(),
-        format!("{container_destination}/"),
+        container_destination.into(),
     ]);
     let copied =
         run_command(root, engine_name(engine), &args, DEFAULT_TOOL_TIMEOUT).map_err(|error| {
@@ -624,8 +785,8 @@ struct MaterializationRequest<'a> {
     image_tag: &'a str,
     preparation: &'a DependencyPreparationPlan,
     cache_state: &'a Path,
-    output_state: &'a Path,
-    output: &'a ayni_core::PreparationOutput,
+    workspace_state: &'a Path,
+    output_states: &'a [(&'a ayni_core::PreparationOutput, &'a Path)],
 }
 
 fn run_materialization_commands(request: MaterializationRequest<'_>) -> Result<(), BackendError> {
@@ -636,8 +797,8 @@ fn run_materialization_commands(request: MaterializationRequest<'_>) -> Result<(
         image_tag,
         preparation,
         cache_state,
-        output_state,
-        output,
+        workspace_state,
+        output_states,
     } = request;
     if preparation.materialization_commands.is_empty() {
         return Ok(());
@@ -650,29 +811,45 @@ fn run_materialization_commands(request: MaterializationRequest<'_>) -> Result<(
     let mut activation = target_environment(target)?
         .into_iter()
         .collect::<BTreeMap<_, _>>();
+    // Materialization containers have a read-only root filesystem. Mise may
+    // track version files discovered in the read-only checkout, so direct its
+    // ephemeral state into the writable /tmp tmpfs.
+    activation.insert(String::from("HOME"), String::from("/tmp/ayni/home"));
+    activation.insert(
+        String::from("XDG_DATA_HOME"),
+        String::from("/tmp/ayni/xdg-data"),
+    );
+    activation.insert(
+        String::from("XDG_STATE_HOME"),
+        String::from("/tmp/ayni/xdg-state"),
+    );
     activation.extend(preparation.execution_environment.clone());
-    let cwd = env::current_dir().map_err(|error| {
-        BackendError::execution(format!("failed to establish current directory: {error}"))
-    })?;
+    let cwd = root.to_path_buf();
     for command in &preparation.materialization_commands {
         let workdir = if command.cwd == "." {
             WORKSPACE.to_owned()
         } else {
             format!("{WORKSPACE}/{}", command.cwd)
         };
-        let mut args = base_launch_args(engine);
+        let mut args = base_launch_args(engine, ayni_core::EnvironmentCapabilities::default())?;
         args.extend([
             "--mount".into(),
             format!(
-                "type=bind,source={},target={WORKSPACE},readonly",
-                root.display()
+                "type=bind,source={},target={WORKSPACE}",
+                workspace_state.display()
             ),
-            "--mount".into(),
-            format!(
-                "type=bind,source={},target={}",
-                output_state.display(),
-                crate::preparation::workspace_mount(output)
-            ),
+        ]);
+        for (output, state) in output_states {
+            args.extend([
+                "--mount".into(),
+                format!(
+                    "type=bind,source={},target={}",
+                    state.display(),
+                    crate::preparation::workspace_mount(output)
+                ),
+            ]);
+        }
+        args.extend([
             "--mount".into(),
             format!(
                 "type=bind,source={},target=/home/ayni/.cache",
@@ -700,11 +877,62 @@ fn run_materialization_commands(request: MaterializationRequest<'_>) -> Result<(
             },
         )?;
         if !result.status.success() {
+            let stderr = concise_output(&result.stderr);
+            let diagnostics = if stderr == "command failed without diagnostics" {
+                concise_output(&result.stdout)
+            } else {
+                stderr
+            };
             return Err(BackendError::execution(format!(
-                "offline dependency materialization failed: {}",
-                concise_output(&result.stderr)
+                "offline dependency materialization command {} failed with {}: {diagnostics}",
+                command.program, result.status
             )));
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::COPY_IMAGE_TREE;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    #[test]
+    fn copy_image_tree_propagates_archive_producer_failure() {
+        let root =
+            std::env::temp_dir().join(format!("ayni-copy-image-tree-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let bin = root.join("bin");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(&bin).expect("fake bin");
+        fs::create_dir_all(&source).expect("source");
+        fs::create_dir_all(&destination).expect("destination");
+        let tar = bin.join("tar");
+        fs::write(
+            &tar,
+            "#!/bin/sh\ncase \" $* \" in *' -cf '*) printf archive; exit 9;; *) cat >/dev/null; exit 0;; esac\n",
+        )
+        .expect("fake tar");
+        let mut permissions = fs::metadata(&tar).expect("fake tar metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&tar, permissions).expect("executable fake tar");
+
+        let path = format!("{}:/usr/bin:/bin", bin.to_str().expect("UTF-8 test path"));
+        let status = Command::new("/bin/sh")
+            .args([
+                "-c",
+                COPY_IMAGE_TREE,
+                "copy-image-tree",
+                source.to_str().expect("UTF-8 source"),
+                destination.to_str().expect("UTF-8 destination"),
+            ])
+            .env("PATH", path)
+            .status()
+            .expect("run copy script");
+        let _ = fs::remove_dir_all(&root);
+        assert!(!status.success());
+    }
 }

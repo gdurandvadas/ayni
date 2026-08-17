@@ -19,8 +19,10 @@ supported managed environment.
 | Python | uv projects |
 | Kotlin | Supported locked Gradle builds |
 
-pnpm, Yarn, Bun, non-uv Python package managers, and unsupported Gradle build
-shapes fail explicitly rather than silently running with a different setup.
+Yarn, Bun, non-uv Python package managers, and unsupported Gradle build shapes
+fail explicitly rather than silently running with a different setup. Node
+managed environments support npm and pnpm workspaces with committed native
+lockfiles.
 Language adapters own ecosystem discovery and resolution; the environment
 backend consumes their validated plans without interpreting language manifests.
 See the ecosystem-specific guides for [Rust](/adapters/rust),
@@ -84,7 +86,9 @@ fingerprinted `.ayni.lock` atomically. The lock records:
 - the quality-contract path and digest;
 - an immutable OCI provisioning base and SHA-256 digest;
 - supported target platforms;
-- exact runtimes, package manager, and signal-tool providers per target; and
+- exact runtimes, package manager, and signal-tool providers per target;
+- repository-wide exact Mise tools and validated Debian package specifications;
+- opt-in runtime capabilities such as bridge networking and Docker socket access; and
 - digests of adapter-owned dependency and requirement inputs.
 
 The lock intentionally omits credentials, host-specific paths, arbitrary system
@@ -124,10 +128,18 @@ credentials are not copied into that context. The build installs the locked
 runtime and analysis tooling, warms provider caches, and retains only declared
 dependency outputs.
 
-Project tools for npm, uv, and Gradle must already be represented in their
-native project inputs. Cargo and Go analysis tools may be provisioned from exact
-adapter-owned provider coordinates. Managed runs materialize or reuse prepared
-state below `.ayni/environment/` and execute with networking disabled.
+Project tools for npm, pnpm, uv, and Gradle must already be represented in
+their native project inputs. Cargo and Go analysis tools may be provisioned from
+exact adapter-owned provider coordinates. Repository-wide tools and Debian
+packages may be declared under `[environment]`; these supplement rather than
+replace adapter requirements. Managed runs materialize or reuse prepared state
+below `.ayni/environment/` and execute with networking disabled unless bridge
+networking is explicitly enabled.
+
+Docker socket access is also opt-in. When enabled, Ayni mounts the host Unix
+socket, configures Testcontainers to reach sibling containers, and reports the
+host-control security implication in `env show`. This is socket sharing, not a
+privileged Docker-in-Docker daemon.
 
 ## Running commands
 
