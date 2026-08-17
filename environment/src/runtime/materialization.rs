@@ -185,6 +185,40 @@ fn materialize_preparation_outputs(
     if outputs.is_empty() {
         return Ok(Vec::new());
     }
+    let mut pending = create_pending_outputs(root, outputs, state_root)?;
+    refresh_materialization_state(root, image_plan, &mut pending)?;
+    if all_outputs_current(&pending) {
+        return Ok(pending_destinations(pending));
+    }
+
+    // Acquire every output lock in stable path order. A workspace package
+    // manager may update several nested outputs in one operation.
+    let _locks = acquire_output_locks(root, image_plan, &pending)?;
+    refresh_materialization_state(root, image_plan, &mut pending)?;
+    if all_outputs_current(&pending) {
+        return Ok(pending_destinations(pending));
+    }
+
+    stage_pending_outputs(root, engine, image_plan, &mut pending)?;
+    run_preparation_for_outputs(
+        root,
+        engine,
+        lock,
+        image_plan,
+        preparation,
+        state_root,
+        cache_state,
+        &pending,
+    )?;
+    publish_pending_outputs(root, image_plan, &mut pending)?;
+    Ok(pending_destinations(pending))
+}
+
+fn create_pending_outputs<'a>(
+    root: &Path,
+    outputs: &[&'a ayni_core::PreparationOutput],
+    state_root: &Path,
+) -> Result<Vec<PendingOutput<'a>>, BackendError> {
     let mut pending = Vec::with_capacity(outputs.len());
     for output in outputs {
         let key = crate::preparation::output_key(output);
@@ -202,35 +236,45 @@ fn materialize_preparation_outputs(
             staging: None,
         });
     }
+    Ok(pending)
+}
 
-    refresh_materialization_state(root, image_plan, &mut pending)?;
-    if pending.iter().all(|output| output.current) {
-        return Ok(pending
-            .into_iter()
-            .map(|output| (output.key, output.destination))
-            .collect());
-    }
+fn all_outputs_current(outputs: &[PendingOutput<'_>]) -> bool {
+    outputs.iter().all(|output| output.current)
+}
 
-    // Acquire every output lock in stable path order. A workspace package
-    // manager may update several nested outputs in one operation.
-    let mut locks = Vec::with_capacity(pending.len());
-    for output in &pending {
-        locks.push(MaterializationLock::acquire(
-            root,
-            &output.marker.with_extension("lock"),
-            &output.marker,
-            &image_plan.preparation_digest,
-        )?);
-    }
-    refresh_materialization_state(root, image_plan, &mut pending)?;
-    if pending.iter().all(|output| output.current) {
-        return Ok(pending
-            .into_iter()
-            .map(|output| (output.key, output.destination))
-            .collect());
-    }
+fn pending_destinations(outputs: Vec<PendingOutput<'_>>) -> Vec<(String, PathBuf)> {
+    outputs
+        .into_iter()
+        .map(|output| (output.key, output.destination))
+        .collect()
+}
 
-    for output in &mut pending {
+fn acquire_output_locks(
+    root: &Path,
+    image_plan: &ImagePlan,
+    outputs: &[PendingOutput<'_>],
+) -> Result<Vec<MaterializationLock>, BackendError> {
+    outputs
+        .iter()
+        .map(|output| {
+            MaterializationLock::acquire(
+                root,
+                &output.marker.with_extension("lock"),
+                &output.marker,
+                &image_plan.preparation_digest,
+            )
+        })
+        .collect()
+}
+
+fn stage_pending_outputs(
+    root: &Path,
+    engine: Engine,
+    image_plan: &ImagePlan,
+    outputs: &mut [PendingOutput<'_>],
+) -> Result<(), BackendError> {
+    for output in outputs {
         if !output.current {
             reject_partial_materialization(&output.destination)?;
         }
@@ -253,12 +297,25 @@ fn materialize_preparation_outputs(
         }
         output.staging = Some(staging);
     }
+    Ok(())
+}
 
+#[allow(clippy::too_many_arguments)]
+fn run_preparation_for_outputs(
+    root: &Path,
+    engine: Engine,
+    lock: &EnvironmentLock,
+    image_plan: &ImagePlan,
+    preparation: &DependencyPreparationPlan,
+    state_root: &Path,
+    cache_state: &Path,
+    outputs: &[PendingOutput<'_>],
+) -> Result<(), BackendError> {
     let workspace_parent = state_root.join("workspaces");
     create_contained_directory_tree(root, &workspace_parent)?;
     let workspace = StagingDirectory::create(&root.join(&workspace_parent))?;
     crate::preparation::stage_inputs(root, workspace.path(), std::slice::from_ref(preparation))?;
-    let output_states = pending
+    let output_states = outputs
         .iter()
         .map(|output| {
             (
@@ -276,9 +333,15 @@ fn materialize_preparation_outputs(
         cache_state,
         workspace_state: &workspace.path().join("repository"),
         output_states: &output_states,
-    })?;
+    })
+}
 
-    for output in &mut pending {
+fn publish_pending_outputs(
+    root: &Path,
+    image_plan: &ImagePlan,
+    outputs: &mut [PendingOutput<'_>],
+) -> Result<(), BackendError> {
+    for output in outputs {
         let staging = output.staging.take().expect("staged output");
         if output.current {
             drop(staging);
@@ -287,13 +350,8 @@ fn materialize_preparation_outputs(
         staging.publish(&output.destination)?;
         write_completion_marker(root, &output.marker, &image_plan.preparation_digest)?;
     }
-    drop(locks);
-    Ok(pending
-        .into_iter()
-        .map(|output| (output.key, output.destination))
-        .collect())
+    Ok(())
 }
-
 fn refresh_materialization_state(
     root: &Path,
     image_plan: &ImagePlan,
