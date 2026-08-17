@@ -1,8 +1,9 @@
 import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 
 const base = process.env.VITEPRESS_BASE ?? '/'
 
-export default defineConfig({
+export default withMermaid(defineConfig({
   title: 'Ayni',
   description: 'Reproducible quality signals for repositories and coding agents.',
   base,
@@ -79,7 +80,7 @@ export default defineConfig({
       {
         text: 'Contributing',
         items: [
-          { text: 'Adapter Design', link: '/contributing/adapters' },
+          { text: 'Building Language Adapters', link: '/contributing/adapters' },
         ],
       },
     ],
@@ -90,4 +91,4 @@ export default defineConfig({
       provider: 'local',
     },
   },
-})
+}))
