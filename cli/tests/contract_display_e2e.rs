@@ -37,6 +37,16 @@ complexity = true
 deps = true
 mutation = false
 
+[environment.tools]
+protoc = "35.1"
+
+[environment.debian]
+packages = ["libssl-dev"]
+
+[environment.docker]
+access = "socket"
+network = "bridge"
+
 [languages]
 enabled = ["node", "rust", "node"]
 
@@ -101,6 +111,9 @@ args = ["mutation"]
         assert_eq!(stdout.matches(&format!("    {signal}:")).count(), 2);
     }
     for expected in [
+        "  docker: Socket | network: Bridge",
+        "    - protoc@35.1",
+        "    - libssl-dev",
         "    - crates/api",
         "line_percent (minimum): warn 80 | fail 70",
         "branch_percent (minimum): not configured",
@@ -120,7 +133,7 @@ args = ["mutation"]
         !stdout.trim_start().starts_with('{'),
         "display must not emit JSON"
     );
-    assert!(stdout.contains("projection version 0.1.0"));
+    assert!(stdout.contains("projection version 0.2.0"));
     assert!(stdout.contains("warnings:"));
     assert!(stdout.contains("policy.effectiveness.size.no_rules"));
 }
@@ -163,7 +176,14 @@ fn_cognitive = { warn = 10, fail = 20 }
     );
 
     let value: serde_json::Value = serde_json::from_slice(&first.stdout).expect("JSON projection");
-    assert_eq!(value["projection_version"], "0.1.0");
+    assert_eq!(value["projection_version"], "0.2.0");
+    assert_eq!(value["environment"]["tools"], serde_json::json!([]));
+    assert_eq!(
+        value["environment"]["debian_packages"],
+        serde_json::json!([])
+    );
+    assert_eq!(value["environment"]["docker"], "none");
+    assert_eq!(value["environment"]["network"], "none");
     assert_eq!(value["languages"][0]["language"], "rust");
     assert_eq!(value["languages"][0]["signals"][0]["kind"], "test");
     assert_eq!(

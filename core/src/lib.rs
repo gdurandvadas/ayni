@@ -7,6 +7,7 @@ pub mod environment;
 pub mod environment_adapter;
 mod environment_lock;
 pub mod environment_preparation;
+mod environment_provisioning;
 pub mod environment_resolution;
 pub mod finding;
 pub mod impact;
@@ -31,18 +32,20 @@ pub use comparison::{
     ValueChange, compare_artifacts,
 };
 pub use environment::{
-    Architecture, DependencyLockRequirement, ENVIRONMENT_PLAN_SCHEMA_VERSION, EnvironmentConflict,
+    Architecture, DebianPackageRequirement, DependencyLockRequirement, DockerAccess,
+    ENVIRONMENT_PLAN_SCHEMA_VERSION, EnvironmentCapabilities, EnvironmentConflict,
     EnvironmentContribution, EnvironmentPlan, EnvironmentPlanError, EnvironmentWarning, Libc,
-    OperatingSystem, PackageManagerRequirement, ProvisioningSupport, RepositoryIdentity,
-    RequirementConfidence, RequirementSource, ResolvedEnvironmentPlan, RuntimeRequirement,
-    SignalToolRequirement, SystemRequirement, SystemRequirementKind, TargetEnvironment,
-    TargetIdentity, TargetPlatform, ToolInstallationScope, VersionRequirement,
+    MiseToolRequirement, NetworkAccess, OperatingSystem, PackageManagerRequirement,
+    ProvisioningSupport, RepositoryIdentity, RequirementConfidence, RequirementSource,
+    ResolvedEnvironmentPlan, RuntimeRequirement, SignalToolRequirement, SystemRequirement,
+    SystemRequirementKind, TargetEnvironment, TargetIdentity, TargetPlatform,
+    ToolInstallationScope, VersionRequirement,
 };
 pub use environment_adapter::{EnvironmentCapability, EnvironmentDiscoveryRequest};
 pub use environment_lock::{
-    ENVIRONMENT_LOCK_SCHEMA_VERSION, EnvironmentLock, LockedDependencyLock, LockedPackageManager,
-    LockedRepositoryIdentity, LockedRequirementSource, LockedRuntime, LockedSignalTool,
-    LockedTargetEnvironment, ProvisioningBase,
+    ENVIRONMENT_LOCK_SCHEMA_VERSION, EnvironmentLock, LockedDebianPackage, LockedDependencyLock,
+    LockedMiseTool, LockedPackageManager, LockedRepositoryIdentity, LockedRequirementSource,
+    LockedRuntime, LockedSignalTool, LockedTargetEnvironment, ProvisioningBase,
 };
 pub use environment_preparation::{
     DependencyPreparationCapability, DependencyPreparationPlan, DependencyPreparationRequest,

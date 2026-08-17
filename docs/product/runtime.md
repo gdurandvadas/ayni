@@ -51,7 +51,7 @@ See [Managed environments](environments.md) for the user-facing lifecycle,
 lock, build, and execution guide. The `env` command vocabulary is active. `env show`
 builds a read-only, deterministic environment plan for configured Rust, Node,
 Go, uv Python, and Gradle Kotlin targets. `env lock` resolves exact requirements
-and atomically writes schema `0.3.0`, a versioned, fingerprinted `.ayni.lock`;
+and atomically writes schema `0.4.0`, a versioned, fingerprinted `.ayni.lock`; older schema locks are replaced atomically during an explicit `env lock`;
 unchanged inputs produce byte-stable output across equivalent checkout directory
 names, and failed resolution preserves the previous lock. Adapter-owned
 resolvers interpret each ecosystem's selectors. Project tools must already be
@@ -90,7 +90,7 @@ network-disabled.
 
 Managed `check` and focused `verify` are available for locked Rust, npm Node,
 Go modules, uv Python projects, and locked Gradle Kotlin builds, preserving
-inner quality exit codes. pnpm, Yarn, Bun, non-uv Python managers, and unsupported
+inner quality exit codes. Yarn, Bun, non-uv Python managers, and unsupported
 Gradle build shapes fail explicitly. `--host` retains adapter-owned runner
 resolution as an escape hatch; it does not install tools or mutate repository
 dependencies. No operation reuses removed `install` behavior.

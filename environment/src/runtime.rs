@@ -1,7 +1,8 @@
 use crate::image::image_plan_with_preparation;
 use crate::{BackendError, read_lock};
 use ayni_core::{
-    DependencyPreparationPlan, EnvironmentLock, LockedTargetEnvironment, TargetIdentity,
+    DependencyPreparationPlan, DockerAccess, EnvironmentCapabilities, EnvironmentLock,
+    LockedTargetEnvironment, NetworkAccess, TargetIdentity,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -77,15 +78,16 @@ pub fn launch_repository_prepared(
     let mounts = materialize_outputs(&root, engine, &lock, &plan, preparations)?;
     let managed_environments =
         crate::preparation::managed_environments(&lock, preparations, &state_home)?;
-    let args = repository_launch_args(
-        &root,
+    let args = repository_launch_args(RepositoryLaunch {
+        root: &root,
         engine,
-        &state_home,
-        &plan.tag,
+        state_home: &state_home,
+        image_tag: &plan.tag,
         command,
-        &mounts,
-        Some(&managed_environments),
-    );
+        mounts: &mounts,
+        managed_environments: Some(&managed_environments),
+        capabilities: lock.capabilities(),
+    })?;
     execute_launch(engine, &args)
 }
 
@@ -130,6 +132,7 @@ pub fn launch_prepared(
         shell,
         mounts: &mounts,
         execution_environment: &execution_environment,
+        capabilities: lock.capabilities(),
     })?;
     execute_launch(engine, &args)
 }
@@ -137,27 +140,30 @@ pub fn launch_prepared(
 mod materialization;
 use materialization::materialize_outputs;
 
-fn repository_launch_args(
-    root: &Path,
+struct RepositoryLaunch<'a> {
+    root: &'a Path,
     engine: Engine,
-    state_home: &str,
-    image_tag: &str,
-    command: &[String],
-    mounts: &[(PathBuf, String)],
-    managed_environments: Option<&str>,
-) -> Vec<String> {
-    let mut args = base_launch_args(engine);
-    append_managed_workspace_state_args(&mut args, root, WORKSPACE, state_home);
-    append_prepared_mounts(&mut args, mounts);
-    if let Some(value) = managed_environments {
+    state_home: &'a str,
+    image_tag: &'a str,
+    command: &'a [String],
+    mounts: &'a [(PathBuf, String)],
+    managed_environments: Option<&'a str>,
+    capabilities: EnvironmentCapabilities,
+}
+
+fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, BackendError> {
+    let mut args = base_launch_args(request.engine, request.capabilities)?;
+    append_managed_workspace_state_args(&mut args, request.root, WORKSPACE, request.state_home);
+    append_prepared_mounts(&mut args, request.mounts);
+    if let Some(value) = request.managed_environments {
         args.extend([
             "--env".into(),
             format!("AYNI_MANAGED_TARGET_ENVIRONMENTS={value}"),
         ]);
     }
-    args.extend([image_tag.to_owned()]);
-    args.extend(command.iter().cloned());
-    args
+    args.extend([request.image_tag.to_owned()]);
+    args.extend(request.command.iter().cloned());
+    Ok(args)
 }
 
 fn append_prepared_mounts(args: &mut Vec<String>, mounts: &[(PathBuf, String)]) {
@@ -179,10 +185,11 @@ struct TargetLaunch<'a> {
     shell: bool,
     mounts: &'a [(PathBuf, String)],
     execution_environment: &'a BTreeMap<String, String>,
+    capabilities: EnvironmentCapabilities,
 }
 
 fn launch_args(request: TargetLaunch<'_>) -> Result<Vec<String>, BackendError> {
-    let mut args = base_launch_args(request.engine);
+    let mut args = base_launch_args(request.engine, request.capabilities)?;
     append_workspace_args(&mut args, request.root, request.target, request.state_home);
     append_prepared_mounts(&mut args, request.mounts);
     append_target_environment(&mut args, request.target)?;
@@ -193,12 +200,19 @@ fn launch_args(request: TargetLaunch<'_>) -> Result<Vec<String>, BackendError> {
     Ok(args)
 }
 
-fn base_launch_args(engine: Engine) -> Vec<String> {
+fn base_launch_args(
+    engine: Engine,
+    capabilities: EnvironmentCapabilities,
+) -> Result<Vec<String>, BackendError> {
+    let network = match capabilities.network {
+        NetworkAccess::None => "none",
+        NetworkAccess::Bridge => "bridge",
+    };
     let mut args = vec![
         "run".into(),
         "--rm".into(),
         "--network".into(),
-        "none".into(),
+        network.into(),
         "--read-only".into(),
         "--cap-drop".into(),
         "ALL".into(),
@@ -211,7 +225,125 @@ fn base_launch_args(engine: Engine) -> Vec<String> {
         Engine::Docker => args.extend(["--user".into(), host_identity()]),
         Engine::Podman => args.extend(["--userns".into(), "keep-id".into()]),
     }
-    args
+    append_docker_socket_args(&mut args, engine, capabilities.docker)?;
+    Ok(args)
+}
+
+fn validate_runtime_capabilities(
+    engine: Engine,
+    capabilities: EnvironmentCapabilities,
+) -> Result<(), BackendError> {
+    if capabilities.docker == DockerAccess::Socket {
+        if engine != Engine::Docker {
+            return Err(BackendError::environment(
+                "Docker socket access currently requires the Docker runtime",
+            ));
+        }
+        docker_socket_path()?;
+    }
+    Ok(())
+}
+
+fn append_docker_socket_args(
+    args: &mut Vec<String>,
+    engine: Engine,
+    access: DockerAccess,
+) -> Result<(), BackendError> {
+    if access == DockerAccess::None {
+        return Ok(());
+    }
+    if engine != Engine::Docker {
+        return Err(BackendError::environment(
+            "Docker socket access currently requires the Docker runtime",
+        ));
+    }
+    let socket = docker_socket_path()?;
+    // Docker Desktop projects its host socket into the Linux VM as root:root,
+    // regardless of the macOS socket's owner/group metadata. Native Unix
+    // engines preserve the socket GID and must use that group instead.
+    #[cfg(target_os = "macos")]
+    let gid = Some(0);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let gid = {
+        use std::os::unix::fs::MetadataExt;
+        Some(
+            fs::metadata(&socket)
+                .map_err(|error| {
+                    BackendError::environment(format!(
+                        "failed to inspect Docker socket {}: {error}",
+                        socket.display()
+                    ))
+                })?
+                .gid(),
+        )
+    };
+    #[cfg(not(unix))]
+    let gid = None;
+    append_known_docker_socket_args(args, &socket, gid);
+    Ok(())
+}
+
+fn append_known_docker_socket_args(args: &mut Vec<String>, socket: &Path, gid: Option<u32>) {
+    args.extend([
+        "--mount".into(),
+        format!(
+            "type=bind,source={},target=/var/run/docker.sock",
+            socket.display()
+        ),
+        "--env".into(),
+        "DOCKER_HOST=unix:///var/run/docker.sock".into(),
+        "--env".into(),
+        "TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal".into(),
+        "--env".into(),
+        "TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock".into(),
+        "--add-host".into(),
+        "host.docker.internal:host-gateway".into(),
+    ]);
+    if let Some(gid) = gid {
+        args.extend(["--group-add".into(), gid.to_string()]);
+    }
+}
+
+fn active_docker_context_host() -> Option<String> {
+    let output = Command::new("docker")
+        .args([
+            "context",
+            "inspect",
+            "--format",
+            "{{.Endpoints.docker.Host}}",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let host = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!host.is_empty()).then_some(host)
+}
+
+fn docker_unix_socket_path(host: Option<&str>) -> Result<PathBuf, BackendError> {
+    match host {
+        Some(host) if host.starts_with("unix://") => Ok(PathBuf::from(&host[7..])),
+        Some(host) => Err(BackendError::environment(format!(
+            "Docker socket access requires a unix Docker context, found {host}"
+        ))),
+        None => Ok(PathBuf::from("/var/run/docker.sock")),
+    }
+}
+
+fn docker_socket_path() -> Result<PathBuf, BackendError> {
+    let configured = std::env::var("DOCKER_HOST")
+        .ok()
+        .or_else(active_docker_context_host);
+    let path = docker_unix_socket_path(configured.as_deref())?;
+    if fs::metadata(&path).is_ok() {
+        Ok(path)
+    } else {
+        Err(BackendError::environment(format!(
+            "Docker socket is unavailable at {}",
+            path.display()
+        )))
+    }
 }
 
 fn append_workspace_args(
@@ -271,6 +403,8 @@ fn append_workspace_execution_settings(args: &mut Vec<String>, workdir: &str, st
         workdir.to_owned(),
         "--env".into(),
         format!("HOME={state_home}"),
+        "--env".into(),
+        format!("XDG_STATE_HOME={state_home}/.local/state"),
         "--env".into(),
         "RUSTUP_HOME=/home/ayni/.rustup".into(),
         "--env".into(),
@@ -342,10 +476,15 @@ pub(crate) fn target_environment(
         }
     }
     if let Some(manager) = &target.package_manager {
-        variables.insert(
-            mise_version_variable(&manager.family)?,
-            manager.version.clone(),
-        );
+        // npm and pnpm are installed into the selected Node runtime rather than
+        // as independent Mise tools. The Node version therefore selects the
+        // matching package-manager installation as well.
+        if manager.family != "npm" && manager.family != "pnpm" {
+            variables.insert(
+                mise_version_variable(&manager.family)?,
+                manager.version.clone(),
+            );
+        }
     }
     Ok(variables.into_iter().collect())
 }
@@ -521,16 +660,109 @@ mod tests {
     }
 
     #[test]
-    fn repository_launch_keeps_target_activation_inside_ayni() {
-        let args = repository_launch_args(
-            Path::new("/checkout"),
-            Engine::Docker,
-            "/workspace/.ayni/environment/state/home",
-            "ayni-env:test",
-            &["check".into(), "--host".into()],
-            &[],
-            None,
+    fn node_package_manager_activation_follows_the_selected_node_runtime() {
+        use ayni_core::{
+            Language, LockedPackageManager, LockedRequirementSource, LockedRuntime,
+            RequirementConfidence, TargetIdentity,
+        };
+        let source = LockedRequirementSource {
+            kind: "test".into(),
+            path: "package.json".into(),
+            digest: None,
+            confidence: RequirementConfidence::Exact,
+        };
+        let target = LockedTargetEnvironment {
+            target: TargetIdentity::new(Language::Node, ".").expect("target"),
+            runtimes: vec![LockedRuntime {
+                runtime: "node".into(),
+                version: "24.14.0".into(),
+                components: Vec::new(),
+                targets: Vec::new(),
+                source: source.clone(),
+            }],
+            package_manager: Some(LockedPackageManager {
+                family: "pnpm".into(),
+                version: "11.15.1".into(),
+                ownership_root: ".".into(),
+                source,
+            }),
+            signal_tools: Vec::new(),
+            dependency_locks: Vec::new(),
+        };
+
+        let environment = target_environment(&target).expect("activation");
+        assert!(environment.contains(&("MISE_NODE_VERSION".into(), "24.14.0".into())));
+        assert!(
+            !environment
+                .iter()
+                .any(|(name, _)| name == "MISE_PNPM_VERSION")
         );
+    }
+
+    #[test]
+    fn docker_context_host_selects_only_unix_sockets() {
+        assert_eq!(
+            docker_unix_socket_path(Some("unix:///home/user/.docker/run/docker.sock"))
+                .expect("unix context"),
+            PathBuf::from("/home/user/.docker/run/docker.sock")
+        );
+        assert!(docker_unix_socket_path(Some("tcp://remote:2376")).is_err());
+        assert_eq!(
+            docker_unix_socket_path(None).expect("default socket"),
+            PathBuf::from("/var/run/docker.sock")
+        );
+    }
+
+    #[test]
+    fn docker_socket_args_are_explicit_and_testcontainers_aware() {
+        let mut args = Vec::new();
+        append_known_docker_socket_args(&mut args, Path::new("/host/docker.sock"), Some(123));
+        assert!(args.iter().any(|arg| {
+            arg == "type=bind,source=/host/docker.sock,target=/var/run/docker.sock"
+        }));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "DOCKER_HOST=unix:///var/run/docker.sock")
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal")
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock")
+        );
+        assert!(args.windows(2).any(|pair| pair == ["--group-add", "123"]));
+    }
+
+    #[test]
+    fn bridge_network_is_explicit_while_socket_access_remains_opt_in() {
+        let args = base_launch_args(
+            Engine::Docker,
+            EnvironmentCapabilities {
+                docker: DockerAccess::None,
+                network: NetworkAccess::Bridge,
+            },
+        )
+        .expect("launch args");
+        assert!(args.windows(2).any(|pair| pair == ["--network", "bridge"]));
+        assert!(!args.iter().any(|arg| arg.contains("docker.sock")));
+        assert!(args.windows(2).any(|pair| pair == ["--cap-drop", "ALL"]));
+    }
+
+    #[test]
+    fn repository_launch_keeps_target_activation_inside_ayni() {
+        let args = repository_launch_args(RepositoryLaunch {
+            root: Path::new("/checkout"),
+            engine: Engine::Docker,
+            state_home: "/workspace/.ayni/environment/state/home",
+            image_tag: "ayni-env:test",
+            command: &["check".into(), "--host".into()],
+            mounts: &[],
+            managed_environments: None,
+            capabilities: EnvironmentCapabilities::default(),
+        })
+        .expect("launch args");
         assert!(args.windows(2).any(|pair| pair == ["--network", "none"]));
         assert!(
             args.windows(2)
@@ -546,6 +778,9 @@ mod tests {
         );
         assert!(!args.iter().any(|arg| arg == "/checkout:/workspace:rw"));
         assert!(!args.iter().any(|arg| arg == "--entrypoint"));
+        assert!(args.iter().any(|arg| {
+            arg == "XDG_STATE_HOME=/workspace/.ayni/environment/state/home/.local/state"
+        }));
         assert!(
             !args
                 .iter()

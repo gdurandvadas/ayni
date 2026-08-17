@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const INPUT_ROOT: &str = "/tmp/ayni/repository";
 pub(crate) const SEED_ROOT: &str = "/opt/ayni/dependencies";
-const PREPARATION_IMPLEMENTATION_VERSION: &str = "2";
+const PREPARATION_IMPLEMENTATION_VERSION: &str = "3";
 
 pub(crate) fn dockerfile_fragment(
     lock: &EnvironmentLock,

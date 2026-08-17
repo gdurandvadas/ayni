@@ -111,11 +111,11 @@ fn undetected_configured_target_uses_environment_exit() {
 }
 
 #[test]
-fn configured_tool_override_fails_instead_of_planning_the_default_tool() {
+fn configured_tool_override_plans_with_explicit_repository_tooling() {
     let root = TempDir::new().expect("tempdir");
     fs::write(
         root.path().join(".ayni.toml"),
-        "[checks]\ntest = true\ncoverage = false\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n[languages]\nenabled = [\"rust\"]\n[rust.tooling.test]\ncommand = \"nextest\"\n",
+        "[checks]\ntest = true\ncoverage = false\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n[languages]\nenabled = [\"rust\"]\n[rust.tooling.test]\ncommand = \"cargo\"\nargs = [\"nextest\", \"run\"]\n[environment.tools]\n\"cargo:cargo-nextest\" = \"0.9.100\"\n",
     )
     .unwrap();
     fs::write(
@@ -124,9 +124,9 @@ fn configured_tool_override_fails_instead_of_planning_the_default_tool() {
     )
     .unwrap();
     let output = show(&root, "json");
-    assert_eq!(output.status.code(), Some(3));
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("tool override"));
+    assert!(output.status.success());
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
+    assert_eq!(plan["tools"][0]["tool"], "cargo:cargo-nextest");
 }
 
 #[test]

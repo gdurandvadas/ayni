@@ -3,7 +3,7 @@ use ayni_core::{
     DependencyPreparationRequest, Language, PreparationCommand, PreparationInput,
     PreparationOutput,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
 #[derive(Debug, Default)]
@@ -25,15 +25,26 @@ impl DependencyPreparationCapability for NodeDependencyPreparationCapability {
                 "Node dependency preparation requires a package manager",
             )
         })?;
-        if manager.family != "npm" {
-            return Err(AdapterError::new(
-                Language::Node,
-                format!(
-                    "Node dependency preparation supports npm/package-lock.json only; {} is unsupported",
-                    manager.family
-                ),
-            ));
-        }
+        let (lock_name, install_args, materialization_args) = match manager.family.as_str() {
+            "npm" => (
+                "package-lock.json",
+                vec!["ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+                vec!["rebuild", "--offline", "--no-audit", "--no-fund"],
+            ),
+            "pnpm" => (
+                "pnpm-lock.yaml",
+                vec!["install", "--frozen-lockfile", "--ignore-scripts"],
+                vec!["rebuild"],
+            ),
+            unsupported => {
+                return Err(AdapterError::new(
+                    Language::Node,
+                    format!(
+                        "Node dependency preparation supports npm and pnpm; {unsupported} is unsupported"
+                    ),
+                ));
+            }
+        };
         let owner = &manager.ownership_root;
         let inputs = target
             .dependency_locks
@@ -46,59 +57,123 @@ impl DependencyPreparationCapability for NodeDependencyPreparationCapability {
             })
             .collect::<Vec<_>>();
         let lock_path = if owner == "." {
-            "package-lock.json".to_owned()
+            lock_name.to_owned()
         } else {
-            format!("{owner}/package-lock.json")
+            format!("{owner}/{lock_name}")
         };
         if !inputs.iter().any(|input| input.path == lock_path) {
             return Err(AdapterError::new(
                 Language::Node,
-                format!("npm dependency preparation requires {lock_path}"),
+                format!(
+                    "{} dependency preparation requires {lock_path}",
+                    manager.family
+                ),
             ));
         }
         reject_unstaged_local_dependencies(request.repo_root(), &inputs)?;
-        // The backend must execute this only in a staged copy of `inputs`; npm
-        // materializes node_modules, which must never be written to the checkout.
-        let node_modules = if owner == "." {
-            String::from("node_modules")
+        // The backend executes these commands only in a staged copy. pnpm
+        // creates package-local node_modules trees whose symlinks are required
+        // when commands execute from workspace members, so every declared tree
+        // is seeded and mounted rather than only the workspace-owner tree.
+        let outputs = node_module_outputs(owner, &inputs, &manager.family);
+        let mut commands = if manager.family == "pnpm" {
+            prepare_output_directories(&outputs)?
         } else {
-            format!("{owner}/node_modules")
+            Vec::new()
         };
+        commands.push(PreparationCommand::new(
+            Language::Node,
+            manager.family.clone(),
+            install_args.into_iter().map(String::from).collect(),
+            owner,
+            BTreeMap::new(),
+        )?);
+        let mut execution_environment =
+            BTreeMap::from([(String::from("npm_config_offline"), String::from("true"))]);
+        if manager.family == "pnpm" {
+            // The prepared modules tree is authoritative and mounted read-only
+            // with respect to the checkout. pnpm 11 otherwise tries to run an
+            // implicit install before `pnpm exec`, which cannot safely rewrite
+            // that managed tree during quality execution.
+            execution_environment.insert(
+                String::from("PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN"),
+                String::from("false"),
+            );
+        }
         DependencyPreparationPlan::new(
             target.target.clone(),
             inputs,
-            vec![PreparationCommand::new(
-                Language::Node,
-                "npm",
-                vec![
-                    String::from("ci"),
-                    String::from("--ignore-scripts"),
-                    String::from("--no-audit"),
-                    String::from("--no-fund"),
-                ],
-                owner,
-                BTreeMap::new(),
-            )?],
+            commands,
             Vec::new(),
             vec![PreparationCommand::new(
                 Language::Node,
-                "npm",
-                vec![
-                    String::from("rebuild"),
-                    String::from("--offline"),
-                    String::from("--no-audit"),
-                    String::from("--no-fund"),
-                ],
+                manager.family.clone(),
+                materialization_args.into_iter().map(String::from).collect(),
                 owner,
                 BTreeMap::new(),
             )?],
-            vec![PreparationOutput {
-                path: node_modules.clone(),
-                mount_path: node_modules,
-                mode: ayni_core::PreparationOutputMode::Seeded,
-            }],
-            BTreeMap::from([(String::from("npm_config_offline"), String::from("true"))]),
+            outputs,
+            execution_environment,
         )
+    }
+}
+
+fn node_module_outputs(
+    owner: &str,
+    inputs: &[PreparationInput],
+    manager: &str,
+) -> Vec<PreparationOutput> {
+    let owner_modules = join_repository_path(owner, "node_modules");
+    let mut paths = BTreeSet::from([owner_modules]);
+    if manager == "pnpm" {
+        for input in inputs
+            .iter()
+            .filter(|input| input.path.ends_with("package.json"))
+        {
+            let parent = std::path::Path::new(&input.path)
+                .parent()
+                .and_then(std::path::Path::to_str)
+                .unwrap_or(".");
+            paths.insert(join_repository_path(parent, "node_modules"));
+        }
+    }
+    paths
+        .into_iter()
+        .map(|path| PreparationOutput {
+            mount_path: path.clone(),
+            path,
+            mode: ayni_core::PreparationOutputMode::Seeded,
+        })
+        .collect()
+}
+
+fn prepare_output_directories(
+    outputs: &[PreparationOutput],
+) -> Result<Vec<PreparationCommand>, AdapterError> {
+    outputs
+        .iter()
+        .map(|output| {
+            let cwd = output
+                .path
+                .strip_suffix("/node_modules")
+                .filter(|path| !path.is_empty())
+                .unwrap_or(".");
+            PreparationCommand::new(
+                Language::Node,
+                "mkdir",
+                vec![String::from("-p"), String::from("node_modules")],
+                cwd,
+                BTreeMap::new(),
+            )
+        })
+        .collect()
+}
+
+fn join_repository_path(parent: &str, child: &str) -> String {
+    if parent == "." || parent.is_empty() {
+        child.to_owned()
+    } else {
+        format!("{parent}/{child}")
     }
 }
 
@@ -217,25 +292,32 @@ mod tests {
             }),
             signal_tools: vec![],
             system_requirements: vec![],
-            dependency_locks: ["package.json", "package-lock.json"]
-                .into_iter()
-                .map(|path| DependencyLockRequirement {
-                    path: path.into(),
-                    digest: format!("sha256:{}", "0".repeat(64)),
-                    owner_root: String::from("."),
-                    source: RequirementSource::new(
-                        "node_input",
-                        path,
-                        None::<String>,
-                        RequirementConfidence::Exact,
-                    )
-                    .expect("source"),
-                })
-                .collect(),
+            dependency_locks: [
+                "package.json",
+                if family == "pnpm" {
+                    "pnpm-lock.yaml"
+                } else {
+                    "package-lock.json"
+                },
+            ]
+            .into_iter()
+            .map(|path| DependencyLockRequirement {
+                path: path.into(),
+                digest: format!("sha256:{}", "0".repeat(64)),
+                owner_root: String::from("."),
+                source: RequirementSource::new(
+                    "node_input",
+                    path,
+                    None::<String>,
+                    RequirementConfidence::Exact,
+                )
+                .expect("source"),
+            })
+            .collect(),
         }
     }
     #[test]
-    fn plans_npm_ci_only_and_rejects_other_managers() {
+    fn plans_npm_and_pnpm_dependency_preparation() {
         let repo = TempDir::new().expect("repo");
         fs::write(repo.path().join("package.json"), r#"{"name":"fixture"}"#).expect("manifest");
         fs::write(
@@ -258,14 +340,69 @@ mod tests {
             plan.execution_environment.get("npm_config_offline"),
             Some(&String::from("true"))
         );
-        let unsupported =
+        assert!(
+            !plan
+                .execution_environment
+                .contains_key("PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN")
+        );
+        let pnpm_request =
             DependencyPreparationRequest::new(PathBuf::from(repo.path()), target("pnpm"))
                 .expect("request");
-        assert!(
-            NodeDependencyPreparationCapability
-                .prepare(&unsupported)
-                .is_err()
+        let pnpm_plan = NodeDependencyPreparationCapability
+            .prepare(&pnpm_request)
+            .expect("pnpm plan");
+        let install = pnpm_plan.commands.last().expect("pnpm install");
+        assert_eq!(install.program, "pnpm");
+        assert_eq!(
+            install.args,
+            ["install", "--frozen-lockfile", "--ignore-scripts"]
         );
+        assert_eq!(pnpm_plan.materialization_commands[0].program, "pnpm");
+        assert_eq!(
+            pnpm_plan
+                .execution_environment
+                .get("PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN"),
+            Some(&String::from("false"))
+        );
+
+        fs::create_dir_all(repo.path().join("packages/app")).expect("member directory");
+        fs::write(
+            repo.path().join("packages/app/package.json"),
+            r#"{"name":"app","dependencies":{"vitest":"3.2.4"}}"#,
+        )
+        .expect("member manifest");
+        let mut workspace_target = target("pnpm");
+        workspace_target
+            .dependency_locks
+            .push(DependencyLockRequirement {
+                path: String::from("packages/app/package.json"),
+                digest: format!("sha256:{}", "1".repeat(64)),
+                owner_root: String::from("."),
+                source: RequirementSource::new(
+                    "node_manifest",
+                    "packages/app/package.json",
+                    None::<String>,
+                    RequirementConfidence::Exact,
+                )
+                .expect("source"),
+            });
+        let workspace_request =
+            DependencyPreparationRequest::new(PathBuf::from(repo.path()), workspace_target)
+                .expect("workspace request");
+        let workspace_plan = NodeDependencyPreparationCapability
+            .prepare(&workspace_request)
+            .expect("workspace pnpm plan");
+        assert!(
+            workspace_plan
+                .outputs
+                .iter()
+                .any(|output| output.mount_path == "packages/app/node_modules")
+        );
+        assert!(workspace_plan.commands.iter().any(|command| {
+            command.program == "mkdir"
+                && command.cwd == "packages/app"
+                && command.args == ["-p", "node_modules"]
+        }));
     }
 
     #[test]

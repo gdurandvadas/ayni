@@ -26,6 +26,6 @@ fn validate_emits_concise_human_success_and_the_contract_json_projection() {
     assert!(json.status.success());
     assert!(json.stderr.is_empty());
     let value: serde_json::Value = serde_json::from_slice(&json.stdout).expect("projection");
-    assert_eq!(value["projection_version"], "0.1.0");
+    assert_eq!(value["projection_version"], "0.2.0");
     assert_eq!(value["languages"][0]["language"], "rust");
 }
