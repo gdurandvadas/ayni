@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.9.1...ayni-v0.10.0) (2026-08-17)
+
+
+### Features
+
+* **environment:** add polyglot managed provisioning ([#48](https://github.com/gdurandvadas/ayni/issues/48)) ([826b168](https://github.com/gdurandvadas/ayni/commit/826b1685df9629d05d748bdc0fddbc044d396220))
+
 ## [0.9.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.9.0...ayni-v0.9.1) (2026-08-16)
 
 
