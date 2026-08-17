@@ -12,7 +12,8 @@ package-manager inputs, runs an ignore-scripts frozen installation (`npm ci` or
 `pnpm install --frozen-lockfile`), and stores `node_modules` as an image seed.
 Shell, run, managed check, and managed focused verification copy the seed below
 `.ayni/environment/`, mount it over the target, and run the corresponding
-offline rebuild with the checkout read-only. npm `file:` and `link:`
+offline rebuild in an ephemeral workspace without modifying the host checkout.
+npm `file:` and `link:`
 dependencies are rejected because their referenced content is not part of the
 staged input contract. Yarn and Bun remain unsupported for managed execution;
 use `--host` for those package managers.

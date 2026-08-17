@@ -1,50 +1,77 @@
-# Signal Contract
+# Signals
 
-This is the stable entry point for Ayni's canonical signal vocabulary. It does
-not define a single JSON run-artifact envelope: select the versioned contract
-named by an artifact's `schema_version` before reading envelope or row fields.
+A signal is a normalized quality measurement, not just a shell command. The
+language adapter chooses and runs ecosystem-specific tooling; Ayni parses the
+result into common evidence and evaluates it against `.ayni.toml`.
 
-- [Schema v3 (`0.3.0`)](signals/v3.md) is the current emitted contract.
-- [Schema v2 (`0.2.0`)](signals/v2.md) is a historical reference only.
-- [Schema v1 (`0.1.0`)](signals/v1.md) is a historical reference only.
+## Signals, policy, and execution
 
-Repository policy lives in `.ayni.toml`; for checks, languages, thresholds, and
-excluding paths (for example, skipping `target/**` in the size signal), see the
-[Configuration reference](config.md). For command failure categories and runtime
-diagnostics, see [Runtime and setup rules](runtime.md).
+The three parts of a signal run remain explicit:
+
+```text
+Signal policy             Managed tools             Requested scope
+.ayni.toml            +   .ayni.lock / OCI image +  check / verify / impact
+thresholds and rules      exact execution            measured evidence
+```
+
+Enabling a signal contributes its required analysis tools to the managed
+environment plan. After that environment is locked and built, `ayni check`,
+`ayni verify <signal>`, and `ayni impact run` launch it automatically. Use
+`--host` only as an explicit escape hatch; do not wrap quality commands in
+`ayni env run`.
+
+See [How Ayni works](/getting-started/how-ayni-works) for the complete mental
+model and [Managed environments](/product/environments) for provisioning.
 
 ## Canonical vocabulary
 
-All versions document rows for this closed vocabulary. New adapters must emit
-only these `kind` values.
+All schema versions document rows from this closed vocabulary. New adapters
+must emit only these `kind` values.
 
-| `kind` | Purpose |
+| `kind` | Question answered |
 | --- | --- |
-| `test` | Test execution outcome |
-| `coverage` | Coverage quality |
-| `size` | File or module size budgets |
-| `complexity` | Function complexity budgets |
-| `deps` | Architectural dependency constraints |
-| `mutation` | Test-suite fault-detection strength |
+| `test` | Did expected behavior pass? |
+| `coverage` | How much code was exercised? |
+| `size` | Which files or modules exceeded their budgets? |
+| `complexity` | Which functions exceeded structural budgets? |
+| `deps` | Did source dependencies respect architectural constraints? |
+| `mutation` | Did the test suite detect injected behavioral changes? |
 
 The currently serialized language values are `rust`, `go`, `node`, `python`,
 and `kotlin`. A row scope identifies a measurement target with a workspace root
-and optional path, package, and file. Exact serialized row fields, optionality,
-and payload shapes are version-specific; use the selected version reference.
+and optional path, package, and file.
+
+Repository policy lives in `.ayni.toml`; for enabled checks, languages,
+thresholds, and excluded paths, see the [Configuration reference](/product/config).
+For command failure categories and runtime diagnostics, see [Runtime and
+verification](/product/runtime).
+
+## Signal contract versions
+
+This page is the stable entry point for Ayni's canonical vocabulary. It does
+not define a single JSON run-artifact envelope: select the versioned contract
+named by an artifact's `schema_version` before reading envelope or row fields.
+
+- [Schema v3 (`0.3.0`)](/product/signals/v3) is the current emitted contract.
+- [Schema v2 (`0.2.0`)](/product/signals/v2) is a historical reference only.
+- [Schema v1 (`0.1.0`)](/product/signals/v1) is a historical reference only.
+
+Exact serialized row fields, optionality, and payload shapes are
+version-specific; use the selected version reference.
 
 ## Version selection and compatibility
 
 `ayni check` and the explicit `ayni check --host` path both write
 `.ayni/last/signals.json`; adding `--output json` prints the same artifact.
-Current output uses
-schema `0.3.0`. Consumers must inspect `schema_version` and use the matching
-version page rather than assuming fields from another envelope.
+Current output uses schema `0.3.0`. Consumers must inspect `schema_version` and
+use the matching version page rather than assuming fields from another
+envelope.
 
 Schema v3 is a breaking replacement for v2 consumers. Explicit artifact
 comparison accepts only two valid, complete artifacts whose `schema_version`
 is the current schema string. Use `ayni results compare --baseline <artifact>
---candidate <artifact> [--output human|json]`; it reads exactly those files
-and has no implicit prior-artifact, repository, Git, fetch, storage, or write
+--candidate <artifact> [--output human|json]`; it reads exactly those files and
+has no implicit prior-artifact, repository, Git, fetch, storage, or write
 behavior. There is no compatibility payload or automatic conversion from an
 earlier schema.
 
@@ -53,7 +80,7 @@ evidence records Git changes, inclusion reasons, uncertainty, and selected-job
 accounting rather than repository completion. It may contain the same typed
 signal rows, but it is not a schema-v3 `RunArtifact`, cannot replace
 `.ayni/last/signals.json`, and is not accepted by `results compare`. See the
-[impact execution contract](impact.md).
+[impact execution contract](/product/impact).
 
 V1 and v2 are retained only as historical documentation. Ayni makes no current
 parsing, conversion, migration, or compatibility promise for either schema.

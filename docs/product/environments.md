@@ -5,19 +5,49 @@ quality commands. It makes the repository's configured runtimes, package
 manager, analysis tools, native dependency inputs, and base image explicit
 before a check runs.
 
-Managed execution is the default for `ayni check`, `ayni verify`, and
-`ayni impact run`. Use `--host` only when a repository cannot yet use a
-supported managed environment.
+The quality contract and environment answer different questions:
+
+```text
+.ayni.toml                    .ayni.lock + OCI image
+What must be measured?   +    Which exact tools run it?
+                     ↓
+          check / verify / impact run
+```
+
+Signal results depend on runtime, package-manager, dependency, and analysis-tool
+versions. Managed execution gives humans, coding agents, and CI the same locked
+inputs instead of relying on whichever tools happen to be installed on a host.
+Enabled signals contribute their required tools to the environment plan; the
+configured language roots and native project metadata contribute runtime,
+package-manager, and dependency requirements. `env lock` resolves those inputs,
+and `env build` prepares them before quality execution.
+
+Managed execution is built into `ayni check`, `ayni verify`, and
+`ayni impact run`. Run these commands directly—do not wrap them in `ayni env
+run`. Use `--host` only when a repository cannot yet use a supported managed
+environment.
+
+## Prerequisites
+
+- Install the Ayni CLI separately by following [Installation](/getting-started/installation).
+- Use Docker with Buildx for default release-base resolution during `env lock`.
+- Install Mise; every `env lock` records its version, and adapters may also use it to resolve runtime or tool selectors.
+- Commit the native tool declarations and dependency locks required by each adapter.
+
+Commands that consume an existing lock use Docker first and compatible Podman
+second. To create a lock without Docker Buildx base resolution, pass an explicit
+`--base <reference>@sha256:<digest>`; other resolution prerequisites still
+apply.
 
 ## Supported targets
 
 | Language | Managed target |
 | --- | --- |
 | Rust | Cargo projects and workspaces |
-| Node | npm projects and workspaces |
+| Node | npm and pnpm projects and workspaces |
 | Go | Go modules and workspaces |
-| Python | uv projects |
-| Kotlin | Supported locked Gradle builds |
+| Python | uv projects and workspaces |
+| Kotlin | Supported locked Gradle projects and workspaces |
 
 Yarn, Bun, non-uv Python package managers, and unsupported Gradle build shapes
 fail explicitly rather than silently running with a different setup. Node
@@ -141,10 +171,24 @@ socket, configures Testcontainers to reach sibling containers, and reports the
 host-control security implication in `env show`. This is socket sharing, not a
 privileged Docker-in-Docker daemon.
 
-## Running commands
+## Quality commands versus development commands
 
-When a lock contains one target, `env shell` and `env run` can select it
-implicitly:
+Quality commands own their managed launch and evidence semantics:
+
+```sh
+ayni check
+ayni verify test
+ayni impact run --base origin/main
+```
+
+They select locked targets, run adapter-owned signal commands, normalize the
+result, and apply `.ayni.toml` policy. The host checkout is mounted as read-only
+input and copied into an ephemeral writable workspace; source changes inside the
+quality run are discarded.
+
+`env shell` and `env run` instead expose one target for arbitrary development
+work. They do not normalize evidence or apply quality thresholds. When a lock
+contains one target, they can select it implicitly:
 
 ```sh
 ayni env shell
@@ -160,10 +204,11 @@ ayni env run --language node --root apps/web -- npm test
 ayni env shell --language rust
 ```
 
-Interactive shells and arbitrary `env run` commands mount the checkout
+Interactive shells and arbitrary `env run` commands mount the host checkout
 read-write because they are development tools. Managed quality commands instead
-mount repository source read-only, expose only generated `.ayni/` state as
-writable, and preserve the quality command's exit code.
+copy a read-only host input into an ephemeral writable workspace. Workspace
+source changes are discarded after the run, while generated `.ayni/` state can
+persist; the inner quality command's exit code is preserved.
 
 For command flags, see the [CLI reference](/cli). For runner resolution,
 timeouts, diagnostics, and failure categories, see [Runtime and setup

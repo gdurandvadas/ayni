@@ -4,8 +4,12 @@ Ayni is an open-source code quality signal tool for repositories that use AI
 agents.
 
 It installs agent-facing repository guidance, runs language-specific analysis
-locally, and normalizes the results into one report that humans and AI agents
-can act on.
+through adapters in a reproducible managed environment, and normalizes the
+results into one report that humans and AI agents can act on.
+
+**Documentation:** [Installation](docs/getting-started/installation.md) ·
+[Quickstart](docs/getting-started/quickstart.md) ·
+[How Ayni works](docs/getting-started/how-ayni-works.md)
 
 ## Why
 
@@ -25,7 +29,7 @@ repair targets.
 - can create or update its marked agent-facing guidance in `AGENTS.md` with an explicit command
 - defines the repository-agent quality contract in `.ayni.toml`
 - collects `test`, `coverage`, `size`, `complexity`, `deps`, and `mutation` signals
-- runs language-specific tooling locally through adapters
+- runs language-specific tooling through adapters in locked managed environments
 - writes machine-readable artifacts under `.ayni/`
 - prints terminal or Markdown reports for local workflows and AI repair loops
 
@@ -36,49 +40,68 @@ repair targets.
 Install the latest published release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | sh
 ```
 
 The installer detects the current platform, installs `ayni` into
-`~/.local/bin` by default, verifies checksums when possible, and can
-optionally help add the install directory to `PATH` in interactive shells.
+`~/.local/bin` by default, and verifies checksums when possible. A piped install
+is non-interactive and prints the required `PATH` line when needed; download
+and run `install.sh` directly if you want its interactive prompts.
 
 Pin a specific release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | VERSION=ayni-v0.8.1 sh
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | VERSION=ayni-v0.10.0 sh
 ```
 
 Choose a custom install directory:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | INSTALL_DIR="$HOME/bin" sh
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/gdurandvadas/ayni/main/install.sh | INSTALL_DIR="$HOME/bin" sh
 ```
+
+For supported targets, direct release downloads, checksum verification,
+upgrades, and uninstall instructions, see the [installation guide](docs/getting-started/installation.md).
 
 ### From source
 
 Build and install directly from this repository:
 
 ```sh
-cargo install --path cli
+cargo install --locked --path cli
 ```
 
 ## Quick Start
 
-Rust, npm-based Node, Go module, uv Python, and locked Gradle Kotlin
-repositories can lock and build a managed OCI environment, warm locked native
+Ayni keeps the repository's quality policy separate from its execution
+environment:
+
+```text
+.ayni.toml + .ayni.lock / OCI image → check / verify / impact
+ policy          exact runtime          measured evidence
+```
+
+Rust, npm or pnpm Node, Go module, uv Python, and locked Gradle Kotlin
+repositories can lock and build a managed OCI environment, prepare locked native
 dependencies, and run the repository gate offline by default:
 
 ```sh
-ayni contract show
-ayni agents sync
+ayni contract validate
+ayni env show
 ayni env lock
 ayni env build
+ayni env doctor
 ayni check
 ```
 
-Use `check --host` as the explicit escape hatch for repositories whose language
-or package manager does not yet support managed preparation.
+`check`, `verify`, and `impact run` launch managed execution automatically; do
+not wrap them in `ayni env run`. Use `--host` as the explicit escape hatch for
+repositories whose language or package manager does not yet support managed
+preparation. See the [complete quickstart](docs/getting-started/quickstart.md)
+and [conceptual guide](docs/getting-started/how-ayni-works.md).
 
 Use focused verification for the inner TDD loop. `check` evaluates the configured
 repository and is the only completion gate and writer of `.ayni/last/signals.json`:
@@ -145,11 +168,12 @@ ayni env show
 ayni env lock
 ayni env build
 ayni env doctor
-ayni env run -- cargo test
+ayni env run -- cargo test parser::tests
 ```
 
-Locking may query `mise` for exact adapter-owned runtime and tool versions and
-Docker Buildx for the published base-image digest.
+Locking requires `mise`, records its version, and may query it for exact
+adapter-owned runtime and tool versions. It uses Docker Buildx for the published
+base-image digest.
 `--base <reference>@sha256:<digest>` supplies an explicit base instead. If the
 published base is unavailable, run `scripts/build-local-environment-image.sh`;
 it compiles Ayni inside a Linux container and prints the exact local
@@ -160,10 +184,11 @@ the validated lock without creating or refreshing it.
 Environment builds stage only digest-verified Cargo/npm/pnpm/Go/uv/Gradle inputs,
 warm provider caches, and retain only declared dependency outputs. Managed
 quality commands materialize seeded npm or pnpm dependencies and fresh uv environments
-below `.ayni/environment/`, run without network access, and mount repository
-source read-only with only generated `.ayni/` state writable. Interactive
-`env shell` and arbitrary `env run` intentionally mount the checkout read-write
-so humans and agents can edit it. Select an ambiguous target with `--language`;
+below `.ayni/environment/`, run without network access, and copy the read-only
+host checkout into an ephemeral writable workspace. Source changes made there
+are discarded; only generated `.ayni/` state persists to the host. Interactive
+`env shell` and arbitrary `env run` intentionally mount the host checkout
+read-write so humans and agents can edit it. Select an ambiguous target with `--language`;
 add `--root` when that language still has multiple locked roots. Managed check
 and focused verification support locked Rust, npm or pnpm Node, Go module, uv
 Python, and Gradle Kotlin targets. Yarn, Bun, non-uv Python managers, and
@@ -184,7 +209,9 @@ Emit the schema-v3 artifact for scripts:
 
 ```sh
 ayni check --output json
-``` JSON is written to stdout and progress to stderr.
+```
+
+JSON is written to stdout and progress to stderr.
 
 Compare two already-produced complete schema-v3 artifacts explicitly. This
 command reads only the two supplied files: it does not discover a repository,

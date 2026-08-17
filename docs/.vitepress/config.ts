@@ -4,36 +4,67 @@ const base = process.env.VITEPRESS_BASE ?? '/'
 
 export default defineConfig({
   title: 'Ayni',
-  description: 'Open-source code quality signals for repositories that use AI agents.',
+  description: 'Reproducible quality signals for repositories and coding agents.',
   base,
+  lastUpdated: true,
   cleanUrls: true,
+  ignoreDeadLinks: [
+    /^https:\/\/example\.com/,
+  ],
   themeConfig: {
-    socialLinks: [
-      { icon: 'github', link: 'https://github.com/gdurandvadas/ayni' },
-    ],
-    search: {
-      provider: 'local',
-    },
     nav: [
-      { text: 'Home', link: '/' },
-      { text: 'CLI', link: '/cli' },
+      { text: 'Getting Started', link: '/getting-started/quickstart' },
       {
-        text: 'Product Reference',
-          items: [
-            { text: 'Configuration', link: '/product/config' },
-            { text: 'Managed environments', link: '/product/environments' },
-            { text: 'Impact-aware execution', link: '/product/impact' },
-            {
-              text: 'Signals',
-              link: '/product/signals',
-              items: [
-                { text: 'Schema v3 (current)', link: '/product/signals/v3' },
-                { text: 'Schema v2 (historical)', link: '/product/signals/v2' },
-                { text: 'Schema v1 (historical)', link: '/product/signals/v1' },
-              ],
-            },
-            { text: 'Runtime', link: '/product/runtime' },
-          ],
+        text: 'Guides',
+        items: [
+          { text: 'How Ayni Works', link: '/getting-started/how-ayni-works' },
+          { text: 'Managed Environments', link: '/product/environments' },
+          { text: 'Signals', link: '/product/signals' },
+          { text: 'Verification', link: '/product/runtime' },
+          { text: 'Impact Analysis', link: '/product/impact' },
+        ],
+      },
+      {
+        text: 'Reference',
+        items: [
+          { text: 'Configuration', link: '/product/config' },
+          { text: 'CLI', link: '/cli' },
+          { text: 'Rust Adapter', link: '/adapters/rust' },
+          { text: 'Node Adapter', link: '/adapters/node' },
+          { text: 'Go Adapter', link: '/adapters/go' },
+          { text: 'Python Adapter', link: '/adapters/python' },
+          { text: 'Kotlin Adapter', link: '/adapters/kotlin' },
+        ],
+      },
+    ],
+    sidebar: [
+      {
+        text: 'Getting Started',
+        items: [
+          { text: 'Introduction', link: '/' },
+          { text: 'Installation', link: '/getting-started/installation' },
+          { text: 'Quickstart', link: '/getting-started/quickstart' },
+          { text: 'How Ayni Works', link: '/getting-started/how-ayni-works' },
+        ],
+      },
+      {
+        text: 'Guides',
+        items: [
+          { text: 'Managed Environments', link: '/product/environments' },
+          { text: 'Signals', link: '/product/signals' },
+          { text: 'Runtime and Verification', link: '/product/runtime' },
+          { text: 'Impact Analysis', link: '/product/impact' },
+        ],
+      },
+      {
+        text: 'Reference',
+        items: [
+          { text: 'Configuration', link: '/product/config' },
+          { text: 'CLI', link: '/cli' },
+          { text: 'Signal Schema v3', link: '/product/signals/v3' },
+          { text: 'Signal Schema v2', link: '/product/signals/v2' },
+          { text: 'Signal Schema v1', link: '/product/signals/v1' },
+        ],
       },
       {
         text: 'Adapters',
@@ -45,50 +76,18 @@ export default defineConfig({
           { text: 'Kotlin', link: '/adapters/kotlin' },
         ],
       },
-      { text: 'Contributing', link: '/contributing/adapters' },
+      {
+        text: 'Contributing',
+        items: [
+          { text: 'Adapter Design', link: '/contributing/adapters' },
+        ],
+      },
     ],
-    sidebar: {
-      '/': [
-        {
-          text: 'Docs',
-          items: [
-            { text: 'Home', link: '/' },
-            { text: 'CLI', link: '/cli' },
-          ],
-        },
-        {
-          text: 'Product Reference',
-          items: [
-            { text: 'Configuration', link: '/product/config' },
-            { text: 'Managed environments', link: '/product/environments' },
-            { text: 'Impact-aware execution', link: '/product/impact' },
-            {
-              text: 'Signals',
-              link: '/product/signals',
-              items: [
-                { text: 'Schema v3 (current)', link: '/product/signals/v3' },
-                { text: 'Schema v2 (historical)', link: '/product/signals/v2' },
-                { text: 'Schema v1 (historical)', link: '/product/signals/v1' },
-              ],
-            },
-            { text: 'Runtime', link: '/product/runtime' },
-          ],
-        },
-        {
-          text: 'Adapters',
-          items: [
-            { text: 'Rust', link: '/adapters/rust' },
-            { text: 'Node', link: '/adapters/node' },
-            { text: 'Go', link: '/adapters/go' },
-            { text: 'Python', link: '/adapters/python' },
-            { text: 'Kotlin', link: '/adapters/kotlin' },
-          ],
-        },
-        {
-          text: 'Contributing',
-          items: [{ text: 'Language adapters', link: '/contributing/adapters' }],
-        },
-      ],
+    socialLinks: [
+      { icon: 'github', link: 'https://github.com/gdurandvadas/ayni' },
+    ],
+    search: {
+      provider: 'local',
     },
   },
 })

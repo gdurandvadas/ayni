@@ -1,43 +1,93 @@
-# Ayni
+---
+layout: home
 
-Ayni is an open-source code quality signal tool for repositories that use AI
-agents.
+hero:
+  name: Ayni
+  text: Reproducible quality signals for every repository
+  tagline: Define what healthy means once, run it in a locked environment, and give humans and agents the same focused feedback.
+  actions:
+    - theme: brand
+      text: Get started
+      link: /getting-started/installation
+    - theme: alt
+      text: How Ayni works
+      link: /getting-started/how-ayni-works
+    - theme: alt
+      text: View on GitHub
+      link: https://github.com/gdurandvadas/ayni
 
-It helps teams define a clear quality contract, run language-aware analysis
-locally, and turn results into signals that humans and agents can act on.
+features:
+  - title: One quality contract
+    details: Version tests, coverage, size, complexity, dependency, and mutation policy in .ayni.toml.
+    link: /product/config
+  - title: Managed execution
+    details: Resolve exact tools and dependencies into a committed lock and a local OCI image.
+    link: /product/environments
+  - title: Focused feedback
+    details: Verify one signal or run only the quality work affected by an explicit change.
+    link: /product/runtime
+  - title: Polyglot by design
+    details: Use the same quality model across Rust, Node, Go, Python, and Kotlin roots.
+    link: /getting-started/quickstart
+---
 
-## Start here
+## The core model
 
-- For an already configured repository, run `ayni contract show`,
-  `ayni env show`, `ayni env lock`, `ayni env build`, `ayni agents sync`, and
-  `ayni check`. Managed execution is available for Rust, npm Node, Go modules,
-  uv Python projects, and locked Gradle Kotlin builds; unsupported ecosystem
-  variants fail explicitly and can use the explicit `--host` escape hatch.
-- [CLI reference](/cli)
-- [Configuration reference](/product/config)
-- [Managed environments](/product/environments)
-- [Signal contract index](/product/signals)
-- [Current signal schema v3](/product/signals/v3)
-- [Historical signal schema v2](/product/signals/v2)
-- [Historical signal schema v1](/product/signals/v1)
-- [Runtime and setup rules](/product/runtime)
-- [Impact-aware execution](/product/impact)
-- [Rust adapter](/adapters/rust)
-- [Go adapter](/adapters/go)
-- [Node adapter](/adapters/node)
-- [Python adapter](/adapters/python)
-- [Kotlin adapter](/adapters/kotlin)
-- [Contributing language adapters](/contributing/adapters)
+```text
+Quality contract       Managed environment       Signal execution
+.ayni.toml          +  .ayni.lock / OCI image  → check / verify / impact
+"What is healthy?"    "Where does it run?"       "What did we measure?"
+```
 
-## Project docs
+Ayni keeps these responsibilities separate and reviewable:
 
-- [README](https://github.com/gdurandvadas/ayni)
-- [Architecture](https://github.com/gdurandvadas/ayni/blob/main/ARCHITECTURE.md)
-- [Contributing](https://github.com/gdurandvadas/ayni/blob/main/CONTRIBUTING.md)
-- [Changelog](https://github.com/gdurandvadas/ayni/blob/main/CHANGELOG.md)
+1. **Define policy.** `.ayni.toml` selects languages, signals, thresholds, structural rules, and optional runtime capabilities.
+2. **Lock execution.** `.ayni.lock` records exact tools, native dependency inputs, preparation state, and an immutable base image.
+3. **Measure code.** `check`, `verify`, and `impact run` launch managed environments automatically and produce normalized evidence.
 
-## What you’ll find
+Installing the CLI is separate from provisioning a repository environment. Ayni never silently creates a lock or rebuilds an image during a quality run.
 
-- `docs/cli.md` for command usage and flags
-- `docs/product/*.md` for the product contract and runtime behavior
-- `docs/adapters/*.md` for language-specific adapter guidance
+## Start in five commands
+
+After [installing Ayni](/getting-started/installation) and adding `.ayni.toml`:
+
+```sh
+ayni contract validate
+ayni env show
+ayni env lock
+ayni env build
+ayni check
+```
+
+Commit `.ayni.toml`, `.ayni.lock`, and your native dependency/tool locks. Keep `.ayni/` and the generated OCI image local.
+
+[Follow the complete quickstart →](/getting-started/quickstart)
+
+## A quality loop for humans and agents
+
+Use a focused command while developing:
+
+```sh
+ayni verify test
+ayni impact run --base origin/main
+```
+
+Then run the complete repository contract before integration:
+
+```sh
+ayni check
+```
+
+These commands use the managed environment directly. `ayni env run` and `ayni env shell` remain available for arbitrary development commands; they are not wrappers required by Ayni's quality commands.
+
+## Supported language adapters
+
+| Language | Managed project shape | Adapter guide |
+| --- | --- | --- |
+| Rust | Cargo projects and workspaces | [Rust](/adapters/rust) |
+| Node | npm and pnpm projects and workspaces | [Node](/adapters/node) |
+| Go | Go modules and workspaces | [Go](/adapters/go) |
+| Python | uv projects and workspaces | [Python](/adapters/python) |
+| Kotlin | Supported Gradle projects and workspaces | [Kotlin](/adapters/kotlin) |
+
+Unsupported project variants fail explicitly instead of silently falling back to host tools. The `--host` option is an intentional escape hatch.

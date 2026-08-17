@@ -68,21 +68,23 @@ contains only those allowlisted manifests, locks, wrapper files, and generated
 scaffolds—never application source or credentials. Image labels are checked
 before reuse and launch.
 
-Launch mounts the canonical checkout at `/workspace`, selects one locked target,
-uses the invoking identity, disables mise auto-install and networking, mounts a
-writable generated home, and applies read-only-root and privilege restrictions.
-Interactive `env shell` and arbitrary `env run` intentionally mount the checkout
-read-write so their declared development commands can edit it. Managed `check`,
-`verify`, and `impact run` instead mount repository source read-only and expose
-only generated `.ayni/` state as writable. Select an ambiguous shell/run target
-with `--language`; add `--root` when that language still has multiple locked
-roots. A root selector always requires a language selector.
+Launch selects one locked target, uses the invoking identity, disables Mise
+auto-install and networking, mounts a writable generated home, and applies
+read-only-root and privilege restrictions. Interactive `env shell` and arbitrary
+`env run` mount the canonical host checkout read-write at `/workspace` so their
+development commands can edit it. Managed `check`, `verify`, and `impact run`
+instead mount the host checkout as read-only input and copy it into an ephemeral
+writable `/workspace`; source changes are discarded after execution, while
+generated `.ayni/` state can persist. Select an ambiguous shell/run target with
+`--language`; add `--root` when that language still has multiple locked roots. A
+root selector always requires a language selector.
 
 `env build` runs adapter-owned preparation plans only in the isolated staged
 context. Managed launch copies seeded npm dependencies, creates fresh
 non-relocatable uv environments, and reuses prepared Cargo, Go, uv, and Gradle
 caches from fingerprinted state below `.ayni/environment/`. Outputs are mounted
-over their repository locations with the checkout read-only. Per-target runtime
+over their matching locations in the ephemeral workspace without modifying the
+host checkout. Per-target runtime
 and offline variables—including Go cache/toolchain controls, uv frozen state,
 and Gradle/JDK activation—are injected only into that target's collector
 process. Normal managed launch, check, and focused verification remain
