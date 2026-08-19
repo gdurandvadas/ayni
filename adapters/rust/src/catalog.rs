@@ -28,9 +28,19 @@ pub static RUST_CATALOG: &[CatalogEntry] = &[
         for_signals: &[SignalKind::Complexity],
         opt_in: false,
     },
-    CatalogEntry {
-        name: "cargo-mutants",
-        for_signals: &[SignalKind::Mutation],
-        opt_in: true,
-    },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::RUST_CATALOG;
+    use ayni_core::SignalKind;
+
+    #[test]
+    fn does_not_advertise_mutation_tools() {
+        assert!(
+            RUST_CATALOG
+                .iter()
+                .all(|entry| !entry.for_signals.contains(&SignalKind::Mutation))
+        );
+    }
+}

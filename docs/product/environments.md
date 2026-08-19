@@ -171,7 +171,7 @@ socket, configures Testcontainers to reach sibling containers, and reports the
 host-control security implication in `env show`. This is socket sharing, not a
 privileged Docker-in-Docker daemon.
 
-## Quality commands versus development commands
+## Quality commands
 
 Quality commands own their managed launch and evidence semantics:
 
@@ -186,8 +186,11 @@ result, and apply `.ayni.toml` policy. The host checkout is mounted as read-only
 input and copied into an ephemeral writable workspace; source changes inside the
 quality run are discarded.
 
-`env shell` and `env run` instead expose one target for arbitrary development
-work. They do not normalize evidence or apply quality thresholds. When a lock
+## Advanced development access
+
+`env shell` and `env run` expose one target for intentional, arbitrary
+development work. They are not part of setup or the quality loop, do not
+normalize evidence, and do not apply quality thresholds. When a lock
 contains one target, they can select it implicitly:
 
 ```sh

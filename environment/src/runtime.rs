@@ -1,8 +1,9 @@
 use crate::image::image_plan_with_preparation;
 use crate::{BackendError, read_lock};
+use ayni_adapters_common::workspace::GENERATED_WORKSPACE_ENTRY_NAMES;
 use ayni_core::{
-    DependencyPreparationPlan, DockerAccess, EnvironmentCapabilities, EnvironmentLock,
-    LockedTargetEnvironment, NetworkAccess, TargetIdentity,
+    ArtifactToolVersion, DependencyPreparationPlan, DockerAccess, EnvironmentCapabilities,
+    EnvironmentLock, LockedTargetEnvironment, NetworkAccess, TargetIdentity,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -12,54 +13,60 @@ use std::process::{Command, Stdio};
 
 pub const WORKSPACE: &str = "/workspace";
 const CHECKOUT_SOURCE: &str = "/opt/ayni/checkout";
-const MANAGED_WORKSPACE_INIT: &str = concat!(
-    "set -eu\n",
-    "archive_dir=$(mktemp -d /tmp/ayni-workspace.XXXXXX)\n",
-    "archive_fifo=$archive_dir/archive\n",
-    "mkfifo \"$archive_fifo\"\n",
-    "trap 'rm -rf \"$archive_dir\"' EXIT HUP INT TERM\n",
-    "(cd /opt/ayni/checkout; set --; ",
-    "for entry in ./* ./.[!.]* ./..?*; do ",
-    "if [ -e \"$entry\" ] || [ -L \"$entry\" ]; then set -- \"$@\" \"$entry\"; fi; ",
-    "done; ",
-    "if [ \"$#\" -eq 0 ]; then tar -cf - --files-from /dev/null; ",
-    "else tar --exclude='./.ayni' --exclude='./.git' ",
-    "--exclude='./node_modules' --exclude='*/node_modules' ",
-    "--exclude='./target' --exclude='*/target' ",
-    "--exclude='./.venv' --exclude='*/.venv' ",
-    "--exclude='./build' --exclude='*/build' ",
-    "--exclude='./coverage' --exclude='*/coverage' ",
-    "--exclude='./.gradle' --exclude='*/.gradle' ",
-    "--exclude='./.svelte-kit' --exclude='*/.svelte-kit' ",
-    "--exclude='./__pycache__' --exclude='*/__pycache__' -cf - \"$@\"; fi) ",
-    "> \"$archive_fifo\" &\n",
-    "producer=$!\n",
-    "consumer_status=0\n",
-    "(cd /workspace && tar -xf - --no-same-owner --no-same-permissions --no-overwrite-dir ",
-    "< \"$archive_fifo\") || consumer_status=$?\n",
-    "producer_status=0\n",
-    "wait \"$producer\" || producer_status=$?\n",
-    "rm -rf \"$archive_dir\"\n",
-    "trap - EXIT HUP INT TERM\n",
-    "[ \"$producer_status\" -eq 0 ]\n",
-    "[ \"$consumer_status\" -eq 0 ]\n",
-    "mount_count=$1\n",
-    "shift\n",
-    "mount_index=0\n",
-    "while [ \"$mount_index\" -lt \"$mount_count\" ]; do\n",
-    "destination=$1\n",
-    "shift\n",
-    "case \"$destination\" in /workspace/*) ;; *) exit 64;; esac\n",
-    "if [ -e \"$destination\" ] || [ -L \"$destination\" ]; then exit 64; fi\n",
-    "mkdir -p \"$(dirname \"$destination\")\"\n",
-    "source=/opt/ayni/prepared-$mount_index/${destination#/workspace/}\n",
-    "ln -s \"$source\" \"$destination\"\n",
-    "mount_index=$((mount_index + 1))\n",
-    "done\n",
-    "[ \"$1\" = -- ]\n",
-    "shift\n",
-    "exec /usr/local/bin/ayni \"$@\"",
-);
+
+fn managed_workspace_init() -> String {
+    let mut script = String::from(concat!(
+        "set -eu\n",
+        "archive_dir=$(mktemp -d /tmp/ayni-workspace.XXXXXX)\n",
+        "archive_fifo=$archive_dir/archive\n",
+        "mkfifo \"$archive_fifo\"\n",
+        "trap 'rm -rf \"$archive_dir\"' EXIT HUP INT TERM\n",
+        "(cd /opt/ayni/checkout; set --; ",
+        "for entry in ./* ./.[!.]* ./..?*; do ",
+        "if [ -e \"$entry\" ] || [ -L \"$entry\" ]; then set -- \"$@\" \"$entry\"; fi; ",
+        "done; ",
+        "if [ \"$#\" -eq 0 ]; then tar -cf - --files-from /dev/null; ",
+        "else tar "
+    ));
+    for name in GENERATED_WORKSPACE_ENTRY_NAMES {
+        script.push_str("--exclude='./");
+        script.push_str(name);
+        script.push_str("' --exclude='*/");
+        script.push_str(name);
+        script.push_str("' ");
+    }
+    script.push_str(concat!(
+        "-cf - \"$@\"; fi) ",
+        "> \"$archive_fifo\" &\n",
+        "producer=$!\n",
+        "consumer_status=0\n",
+        "(cd /workspace && tar -xf - --no-same-owner --no-same-permissions --no-overwrite-dir ",
+        "< \"$archive_fifo\") || consumer_status=$?\n",
+        "producer_status=0\n",
+        "wait \"$producer\" || producer_status=$?\n",
+        "rm -rf \"$archive_dir\"\n",
+        "trap - EXIT HUP INT TERM\n",
+        "[ \"$producer_status\" -eq 0 ]\n",
+        "[ \"$consumer_status\" -eq 0 ]\n",
+        "mount_count=$1\n",
+        "shift\n",
+        "mount_index=0\n",
+        "while [ \"$mount_index\" -lt \"$mount_count\" ]; do\n",
+        "destination=$1\n",
+        "shift\n",
+        "case \"$destination\" in /workspace/*) ;; *) exit 64;; esac\n",
+        "if [ -e \"$destination\" ] || [ -L \"$destination\" ]; then exit 64; fi\n",
+        "mkdir -p \"$(dirname \"$destination\")\"\n",
+        "source=/opt/ayni/prepared-$mount_index/${destination#/workspace/}\n",
+        "ln -s \"$source\" \"$destination\"\n",
+        "mount_index=$((mount_index + 1))\n",
+        "done\n",
+        "[ \"$1\" = -- ]\n",
+        "shift\n",
+        "exec /usr/local/bin/ayni \"$@\""
+    ));
+    script
+}
 
 mod engine;
 pub use engine::{
@@ -127,6 +134,7 @@ pub fn launch_repository_prepared(
     let mounts = materialize_outputs(&root, engine, &lock, &plan, preparations)?;
     let managed_environments =
         crate::preparation::managed_environments(&lock, preparations, &state_home)?;
+    let tool_versions = managed_tool_versions(&lock)?;
     let args = repository_launch_args(RepositoryLaunch {
         root: &root,
         engine,
@@ -136,6 +144,8 @@ pub fn launch_repository_prepared(
         mounts: &mounts,
         managed_environments: Some(&managed_environments),
         capabilities: lock.capabilities(),
+        lock_fingerprint: lock.fingerprint(),
+        tool_versions: &tool_versions,
     })?;
     execute_launch(engine, &args)
 }
@@ -198,6 +208,8 @@ struct RepositoryLaunch<'a> {
     mounts: &'a [(PathBuf, String)],
     managed_environments: Option<&'a str>,
     capabilities: EnvironmentCapabilities,
+    lock_fingerprint: &'a str,
+    tool_versions: &'a str,
 }
 
 fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, BackendError> {
@@ -211,11 +223,17 @@ fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, 
         ]);
     }
     args.extend([
+        "--env".into(),
+        format!("AYNI_MANAGED_LOCK_FINGERPRINT={}", request.lock_fingerprint),
+        "--env".into(),
+        format!("AYNI_MANAGED_TOOL_VERSIONS={}", request.tool_versions),
+    ]);
+    args.extend([
         "--entrypoint".into(),
         "/bin/sh".into(),
         request.image_tag.to_owned(),
         "-c".into(),
-        MANAGED_WORKSPACE_INIT.into(),
+        managed_workspace_init(),
         "ayni-managed-workspace".into(),
         workspace_mounts.len().to_string(),
     ]);
@@ -223,6 +241,41 @@ fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, 
     args.push("--".into());
     args.extend(request.command.iter().cloned());
     Ok(args)
+}
+
+fn managed_tool_versions(lock: &EnvironmentLock) -> Result<String, BackendError> {
+    let mut versions = vec![ArtifactToolVersion {
+        tool: String::from("mise"),
+        version: lock.mise_version().to_owned(),
+    }];
+    for target in lock.targets() {
+        let prefix = format!("{}:{}", target.target.language.as_str(), target.target.root);
+        versions.extend(target.runtimes.iter().map(|runtime| ArtifactToolVersion {
+            tool: format!("{prefix}:runtime:{}", runtime.runtime),
+            version: runtime.version.clone(),
+        }));
+        if let Some(manager) = &target.package_manager {
+            versions.push(ArtifactToolVersion {
+                tool: format!("{prefix}:package_manager:{}", manager.family),
+                version: manager.version.clone(),
+            });
+        }
+        versions.extend(target.signal_tools.iter().map(|tool| ArtifactToolVersion {
+            tool: format!("{prefix}:signal_tool:{}", tool.tool),
+            version: tool.version.clone(),
+        }));
+    }
+    versions.extend(lock.tools().iter().map(|tool| ArtifactToolVersion {
+        tool: format!("repository_tool:{}", tool.tool),
+        version: tool.version.clone(),
+    }));
+    versions.sort();
+    versions.dedup();
+    serde_json::to_string(&versions).map_err(|error| {
+        BackendError::environment(format!(
+            "failed to serialize managed tool provenance: {error}"
+        ))
+    })
 }
 
 fn append_managed_prepared_mounts(
@@ -479,7 +532,7 @@ fn append_managed_workspace_state_args(
             root.join(".ayni").display()
         ),
         "--tmpfs".into(),
-        format!("{WORKSPACE}/.ayni/environment:rw,nosuid,size=64m,mode=1777"),
+        format!("{WORKSPACE}/.ayni/environment:rw,exec,nosuid,size=6g,mode=1777"),
     ]);
     append_workspace_execution_settings(args, workdir, "/tmp");
 }
@@ -870,8 +923,11 @@ mod tests {
             mounts: &mounts,
             managed_environments: None,
             capabilities: EnvironmentCapabilities::default(),
+            lock_fingerprint: "sha256:test",
+            tool_versions: "[]",
         })
         .expect("launch args");
+        let workspace_init = managed_workspace_init();
         assert!(args.windows(2).any(|pair| pair == ["--network", "none"]));
         assert!(
             args.windows(2)
@@ -895,7 +951,19 @@ mod tests {
             args.windows(2)
                 .any(|pair| pair == ["--entrypoint", "/bin/sh"])
         );
-        assert!(args.iter().any(|arg| arg == MANAGED_WORKSPACE_INIT));
+        assert!(args.iter().any(|arg| arg == &workspace_init));
+        for name in GENERATED_WORKSPACE_ENTRY_NAMES {
+            assert!(workspace_init.contains(&format!("--exclude='./{name}'")));
+            assert!(workspace_init.contains(&format!("--exclude='*/{name}'")));
+        }
+        assert!(
+            args.iter()
+                .any(|arg| arg == "AYNI_MANAGED_LOCK_FINGERPRINT=sha256:test")
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "AYNI_MANAGED_TOOL_VERSIONS=[]")
+        );
         assert!(
             args.iter()
                 .any(|arg| { arg == "type=bind,source=/state/cache,target=/home/ayni/.cache" })
@@ -909,8 +977,9 @@ mod tests {
                 .any(|arg| { arg.contains("target=/workspace/packages/member/node_modules") })
         );
         assert!(
-            args.iter()
-                .any(|arg| { arg == "/workspace/.ayni/environment:rw,nosuid,size=64m,mode=1777" })
+            args.iter().any(|arg| {
+                arg == "/workspace/.ayni/environment:rw,exec,nosuid,size=6g,mode=1777"
+            })
         );
         assert!(args.iter().any(|arg| arg == "HOME=/tmp"));
         assert!(
@@ -925,7 +994,7 @@ mod tests {
         assert!(args.ends_with(&[
             "ayni-env:test".into(),
             "-c".into(),
-            MANAGED_WORKSPACE_INIT.into(),
+            workspace_init,
             "ayni-managed-workspace".into(),
             "1".into(),
             "/workspace/packages/member/node_modules".into(),

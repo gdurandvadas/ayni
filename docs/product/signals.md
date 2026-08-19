@@ -52,22 +52,24 @@ This page is the stable entry point for Ayni's canonical vocabulary. It does
 not define a single JSON run-artifact envelope: select the versioned contract
 named by an artifact's `schema_version` before reading envelope or row fields.
 
-- [Schema v3 (`0.3.0`)](/product/signals/v3) is the current emitted contract.
-- [Schema v2 (`0.2.0`)](/product/signals/v2) is a historical reference only.
-- [Schema v1 (`0.1.0`)](/product/signals/v1) is a historical reference only.
+[Schema v4 (`0.4.0`)](/product/signals/v4) is the current, self-contained
+emitted contract and the only contract in primary documentation navigation.
+Exact serialized row fields, optionality, provenance, and payload shapes live
+there.
 
-Exact serialized row fields, optionality, and payload shapes are
-version-specific; use the selected version reference.
+Schemas v1 through v3 remain archived beside v4 for consumers of old saved artifacts.
+They are not current navigation targets and carry no parsing, conversion, or
+compatibility promise.
 
 ## Version selection and compatibility
 
 `ayni check` and the explicit `ayni check --host` path both write
 `.ayni/last/signals.json`; adding `--output json` prints the same artifact.
-Current output uses schema `0.3.0`. Consumers must inspect `schema_version` and
+Current output uses schema `0.4.0`. Consumers must inspect `schema_version` and
 use the matching version page rather than assuming fields from another
 envelope.
 
-Schema v3 is a breaking replacement for v2 consumers. Explicit artifact
+Schema v4 is a breaking replacement for v3 consumers. Explicit artifact
 comparison accepts only two valid, complete artifacts whose `schema_version`
 is the current schema string. Use `ayni results compare --baseline <artifact>
 --candidate <artifact> [--output human|json]`; it reads exactly those files and
@@ -78,12 +80,12 @@ earlier schema.
 Impact planning and execution use a separate versioned envelope because impact
 evidence records Git changes, inclusion reasons, uncertainty, and selected-job
 accounting rather than repository completion. It may contain the same typed
-signal rows, but it is not a schema-v3 `RunArtifact`, cannot replace
+signal rows, but it is not a schema-v4 `RunArtifact`, cannot replace
 `.ayni/last/signals.json`, and is not accepted by `results compare`. See the
 [impact execution contract](/product/impact).
 
-V1 and v2 are retained only as historical documentation. Ayni makes no current
-parsing, conversion, migration, or compatibility promise for either schema.
+V1, v2, and v3 are retained only as historical documentation. Ayni makes no
+current parsing, conversion, migration, or compatibility promise for them.
 
 ## Vocabulary evolution
 

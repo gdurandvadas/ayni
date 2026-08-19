@@ -1,46 +1,75 @@
 name: ayni-rust
 
 on:
-  pull_request:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  workflow_call:
 
 jobs:
   repository:
     name: check Ayni repository (self)
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/gdurandvadas/ayni-rust-ci@sha256:0c0527378e390544c9c3142bcec6ad6e8f09ea2a66e46e93a49a99fa58d147a7
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
       pull-requests: write
-      packages: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ayni-rust-self
+
+      - name: Install pinned Mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.6.14
+          install: false
+          cache: false
 
       - name: Build Ayni CLI
         run: cargo build --locked -p ayni-cli
 
-      - name: Run Ayni check on the host
+      - name: Build pullable checkout-local managed environment base
+        id: base
+        uses: ./.github/actions/build-local-environment-base
+
+      - name: Verify committed lock inputs against an ephemeral checkout base
+        env:
+          BASE: ${{ steps.base.outputs.reference }}
+        run: |
+          set -euo pipefail
+          cp .ayni.lock "$RUNNER_TEMP/ayni-lock.committed.json"
+          ./target/debug/ayni env lock --config ./.ayni.toml --base "$BASE"
+          jq --sort-keys \
+            'del(.provisioning_base.reference, .provisioning_base.digest, .fingerprint)' \
+            "$RUNNER_TEMP/ayni-lock.committed.json" \
+            > "$RUNNER_TEMP/ayni-lock.committed.normalized.json"
+          jq --sort-keys \
+            'del(.provisioning_base.reference, .provisioning_base.digest, .fingerprint)' \
+            .ayni.lock \
+            > "$RUNNER_TEMP/ayni-lock.generated.normalized.json"
+          diff --unified \
+            "$RUNNER_TEMP/ayni-lock.committed.normalized.json" \
+            "$RUNNER_TEMP/ayni-lock.generated.normalized.json"
+
+      - name: Build and diagnose the committed managed environment
+        run: |
+          set -euo pipefail
+          ./target/debug/ayni env build
+          ./target/debug/ayni env doctor
+
+      - name: Run Ayni through the managed path
         id: check
         shell: bash
         run: |
           set +e
           summary_file="$RUNNER_TEMP/ayni-summary.md"
-          ./target/debug/ayni check --host --config ./.ayni.toml --output markdown | tee "$summary_file"
+          ./target/debug/ayni check --config ./.ayni.toml --output markdown | tee "$summary_file"
           code="${PIPESTATUS[0]}"
           summary="$(<"$summary_file")"
           if [[ "$code" != "0" ]]; then
@@ -56,9 +85,17 @@ jobs:
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
 
+      - name: Validate Rust mono example through managed execution
+        uses: ./.github/actions/validate-example
+        with:
+          language: rust
+          fixture: examples/rust/mono
+          expected-roots: .
+          base: ${{ steps.base.outputs.reference }}
+
       - name: Upsert Ayni PR comment
         if: always() && github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           AYNI_BRANCH: ${{ github.head_ref || github.ref_name }}
           SUMMARY: ${{ steps.check.outputs.summary }}
@@ -70,26 +107,19 @@ jobs:
             const branch = process.env.AYNI_BRANCH || "unknown";
             const marker = `<!-- ayni:md branch=${branch} -->`;
             const summary = process.env.SUMMARY?.trim() || "_No markdown summary output found._";
-
-            const body = [
-              marker,
-              summary
-            ].join("\n");
-
+            const body = [marker, summary].join("\n");
             const { data: comments } = await github.rest.issues.listComments({
               owner,
               repo,
               issue_number,
               per_page: 100
             });
-
             const existing = comments.find(
               (comment) =>
                 comment.user?.type === "Bot" &&
                 typeof comment.body === "string" &&
                 comment.body.includes(marker)
             );
-
             if (existing) {
               await github.rest.issues.updateComment({
                 owner,
@@ -98,12 +128,7 @@ jobs:
                 body
               });
             } else {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body
-              });
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
 
       - name: Evaluate Ayni command status
@@ -112,15 +137,12 @@ jobs:
         run: |
           check_code="${{ steps.check.outputs.exit_code }}"
           echo "check exit code: ${check_code:-unset}"
-
           if [[ -z "$check_code" ]]; then
             echo "Missing Ayni check exit code"
             exit 1
           fi
-
           if [[ "$check_code" != "0" ]]; then
-            echo "Ayni check failed"
+            echo "Ayni managed check failed"
             exit 1
           fi
-
-          echo "Ayni check succeeded"
+          echo "Ayni managed check succeeded"

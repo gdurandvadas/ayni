@@ -1,8 +1,7 @@
 use crate::analysis::{
     AnalyzePlanning, OutputArg, VERIFY_SIGNALS_ARTIFACT, build_analyze_targets,
-    build_artifact_metadata_for_command, emit_analyze_outputs, failed_signal_row,
-    managed_execution_active, persist_artifact_at, serialize_artifact, signal_kind_slug,
-    workspace_root_from_config_path,
+    build_artifact_metadata_for_command, emit_analyze_outputs, managed_execution_active,
+    persist_artifact_at, serialize_artifact, signal_kind_slug, workspace_root_from_config_path,
 };
 use crate::policy::load_from_path;
 use crate::{build_registry, verification_command};
@@ -78,6 +77,7 @@ fn plan_verification(
         request.file.clone(),
         Some(selected_language),
         request.debug,
+        &registry,
     )?;
     retain_selected_targets(&mut planning, &selected);
     Ok((registry, planning))
@@ -96,7 +96,7 @@ fn build_verification_artifact(
         Some(request.kind),
         rows,
     );
-    Ok(RunArtifact::new(
+    RunArtifact::new(
         build_artifact_metadata_for_command(
             &request.config_path,
             workspace_root,
@@ -106,7 +106,7 @@ fn build_verification_artifact(
         )?,
         completion,
         rows,
-    ))
+    )
 }
 
 fn persist_and_emit_verification(
@@ -473,21 +473,23 @@ fn collect_rows(
             .iter()
             .find(|adapter| adapter.language() == target.language)
             .expect("selected adapter remains registered");
-        let row = adapter
-            .collect_verification(request.kind, &target.run_context, &selection, &mut |line| {
+        match adapter.collect_verification(
+            request.kind,
+            &target.run_context,
+            &selection,
+            &mut |line| {
                 if request.debug {
                     eprintln!("[{}] {line}", target.language);
                 }
-            })
-            .unwrap_or_else(|error| {
-                failed_signal_row(
-                    target.language,
-                    request.kind,
-                    &target.run_context,
-                    error.to_string(),
-                )
-            });
-        rows.push(row);
+            },
+        ) {
+            Ok(row) => rows.push(row),
+            Err(error) => {
+                if request.debug {
+                    eprintln!("[{}] collection incomplete: {error}", target.language);
+                }
+            }
+        }
     }
     rows
 }

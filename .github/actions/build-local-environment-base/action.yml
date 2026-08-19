@@ -1,0 +1,46 @@
+name: Build checkout environment base
+description: Build the checkout base and publish it to an ephemeral local registry for digest-addressed child builds.
+
+outputs:
+  reference:
+    description: Pullable local-registry reference including its immutable manifest digest.
+    value: ${{ steps.publish.outputs.reference }}
+
+runs:
+  using: composite
+  steps:
+    - name: Start ephemeral OCI registry
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker run --detach --rm \
+          --name ayni-local-registry \
+          --publish 127.0.0.1:5000:5000 \
+          registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+        for attempt in {1..30}; do
+          if curl --fail --silent http://127.0.0.1:5000/v2/ >/dev/null; then
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "local OCI registry did not become ready" >&2
+        exit 1
+
+    - name: Build checkout-local base
+      shell: bash
+      run: scripts/build-local-environment-image.sh
+
+    - name: Publish checkout-local base
+      id: publish
+      shell: bash
+      run: |
+        set -euo pipefail
+        image="localhost:5000/ayni-env:checkout"
+        docker tag ayni-env:local "$image"
+        docker push "$image"
+        reference="$(docker image inspect "$image" --format '{{index .RepoDigests 0}}')"
+        case "$reference" in
+          localhost:5000/ayni-env@sha256:*) ;;
+          *) echo "local registry returned an invalid immutable reference: $reference" >&2; exit 1 ;;
+        esac
+        echo "reference=$reference" >> "$GITHUB_OUTPUT"

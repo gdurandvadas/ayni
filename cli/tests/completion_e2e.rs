@@ -204,6 +204,47 @@ fn completion_verify_failure_replaces_only_requested_scope_artifact() {
     );
 }
 
+#[test]
+fn adapter_configuration_error_is_incomplete_and_does_not_synthesize_a_row() {
+    let fixture = Fixture::new(&["good"], true);
+    fixture.add_rust_root("good");
+    fs::write(
+        &fixture.config,
+        r#"[checks]
+test = false
+coverage = false
+size = false
+complexity = true
+deps = false
+mutation = false
+
+[languages]
+enabled = ["rust"]
+
+[rust]
+roots = ["good"]
+"#,
+    )
+    .expect("policy");
+
+    let output = fixture.run(&["check", "--host", "--output", "json"]);
+    assert_eq!(output.status.code(), Some(4));
+
+    let artifact = fixture.artifact(".ayni/last/signals.json");
+    assert_eq!(artifact["completion"]["state"], "incomplete");
+    assert_eq!(artifact["completion"]["completed_targets"], 0);
+    assert_eq!(artifact["completion"]["skipped_targets"], 1);
+    assert_eq!(artifact["completion"]["issues"][0]["stage"], "collection");
+    assert!(
+        artifact["completion"]["issues"][0]["message"]
+            .as_str()
+            .expect("completion message")
+            .contains("missing expected complexity row")
+    );
+    assert!(artifact["rows"].as_array().expect("rows").is_empty());
+    assert_eq!(artifact["aggregate"]["status"], "fail");
+}
+
 #[cfg(unix)]
 #[test]
 fn configured_root_escape_is_rejected_by_analyze_before_artifact_writes() {

@@ -8,67 +8,65 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  checks: read
   contents: read
 
 jobs:
+  repository:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/ayni-rust.yml
+
+  quality:
+    uses: ./.github/workflows/ayni-quality.yml
+
+  go:
+    uses: ./.github/workflows/ayni-go.yml
+
+  kotlin:
+    uses: ./.github/workflows/ayni-kotlin.yml
+
+  node:
+    uses: ./.github/workflows/ayni-node.yml
+
+  python:
+    uses: ./.github/workflows/ayni-python.yml
+
   status:
     name: status
+    if: ${{ always() }}
+    needs:
+      - repository
+      - quality
+      - go
+      - kotlin
+      - node
+      - python
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    env:
+      REPOSITORY_RESULT: ${{ needs.repository.result }}
+      QUALITY_RESULT: ${{ needs.quality.result }}
+      GO_RESULT: ${{ needs.go.result }}
+      KOTLIN_RESULT: ${{ needs.kotlin.result }}
+      NODE_RESULT: ${{ needs.node.result }}
+      PYTHON_RESULT: ${{ needs.python.result }}
     steps:
-      - name: Wait for all Ayni workflows
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const expected = [
-              "check Ayni repository (self)",
-              "repository quality",
-              "validate Go mono example",
-              "validate Kotlin mono example",
-              "validate Node mono example",
-              "validate Python mono example"
-            ];
-            const deadline = Date.now() + 14 * 60 * 1000;
-
-            while (true) {
-              const { data } = await github.rest.checks.listForRef({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: context.payload.pull_request.head.sha,
-                filter: "latest",
-                per_page: 100
-              });
-              const checks = new Map(
-                data.check_runs.map((check) => [check.name, check])
-              );
-              const missing = expected.filter((name) => !checks.has(name));
-              const pending = expected.filter((name) => {
-                const check = checks.get(name);
-                return check && check.status !== "completed";
-              });
-
-              core.info(`missing checks: ${missing.join(", ") || "none"}`);
-              core.info(`pending checks: ${pending.join(", ") || "none"}`);
-
-              if (missing.length === 0 && pending.length === 0) {
-                const failed = expected.filter(
-                  (name) => checks.get(name).conclusion !== "success"
-                );
-                if (failed.length > 0) {
-                  core.setFailed(`Ayni workflows failed: ${failed.join(", ")}`);
-                } else {
-                  core.info("All Ayni workflows passed");
-                }
-                return;
-              }
-
-              if (Date.now() >= deadline) {
-                core.setFailed(
-                  `Timed out waiting for Ayni workflows; missing: ${missing.join(", ") || "none"}; pending: ${pending.join(", ") || "none"}`
-                );
-                return;
-              }
-
-              await new Promise((resolve) => setTimeout(resolve, 10_000));
-            }
+      - name: Require every Ayni validation workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          for result_name in \
+            REPOSITORY_RESULT QUALITY_RESULT GO_RESULT \
+            KOTLIN_RESULT NODE_RESULT PYTHON_RESULT
+          do
+            result="${!result_name}"
+            echo "${result_name}=${result}"
+            if [[ "$result" != "success" ]]; then
+              failed=1
+            fi
+          done
+          if [[ "$failed" != "0" ]]; then
+            echo "At least one required Ayni validation workflow did not succeed" >&2
+            exit 1
+          fi

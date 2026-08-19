@@ -1,5 +1,5 @@
 name: Validate Ayni example
-description: Run the checkout CLI against one language fixture and validate its typed artifact.
+description: Run the checkout CLI through one language fixture's managed environment and validate its typed artifact.
 
 inputs:
   language:
@@ -11,10 +11,34 @@ inputs:
   expected-roots:
     description: Newline-separated configured roots expected in the artifact.
     required: true
+  base:
+    description: Optional pullable checkout-base digest to reuse within an existing job.
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
+    - name: Build pullable checkout-local managed environment base
+      id: base
+      if: ${{ inputs.base == '' }}
+      uses: ./.github/actions/build-local-environment-base
+
+    - name: Lock and build fixture environment
+      shell: bash
+      env:
+        FIXTURE: ${{ inputs.fixture }}
+        BASE: ${{ inputs.base || steps.base.outputs.reference }}
+      run: |
+        set -euo pipefail
+        rm -rf "$FIXTURE/.ayni" "$FIXTURE/.ayni.lock"
+        ./target/debug/ayni env lock \
+          --repo-root "$FIXTURE" \
+          --config .ayni.toml \
+          --base "$BASE"
+        ./target/debug/ayni env build --repo-root "$FIXTURE"
+        ./target/debug/ayni env doctor --repo-root "$FIXTURE"
+
     - name: Check fixture and validate typed artifact
       shell: bash
       env:
@@ -22,12 +46,11 @@ runs:
         FIXTURE: ${{ inputs.fixture }}
         EXPECTED_ROOTS: ${{ inputs.expected-roots }}
       run: |
-        rm -rf "$FIXTURE/.ayni"
         set +e
-        ./target/debug/ayni check --host --config "$FIXTURE/.ayni.toml"
+        ./target/debug/ayni check --config "$FIXTURE/.ayni.toml"
         check_code=$?
         set -e
-        echo "Ayni check exit code: $check_code (policy and typed tool failures are permitted)"
+        echo "Ayni managed check exit code: $check_code"
 
         root_args=()
         while IFS= read -r root; do
@@ -39,12 +62,13 @@ runs:
         python3 scripts/ci/validate_example_artifact.py \
           --artifact "$FIXTURE/.ayni/last/signals.json" \
           --language "$LANGUAGE" \
-          --repository-root "$FIXTURE" \
+          --repository-root . \
+          --check-exit-code "$check_code" \
           "${root_args[@]}"
 
-    - name: Remove ephemeral analysis artifacts
+    - name: Remove ephemeral environment state
       if: always()
       shell: bash
       env:
         FIXTURE: ${{ inputs.fixture }}
-      run: rm -rf "$FIXTURE/.ayni"
+      run: rm -rf "$FIXTURE/.ayni" "$FIXTURE/.ayni.lock"

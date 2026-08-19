@@ -1,5 +1,6 @@
 use super::artifacts::ARTIFACTS_DIR;
 use super::*;
+use crate::build_registry;
 
 pub(crate) fn analyze(
     config_path: &str,
@@ -34,9 +35,12 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome
         .map_err(AnalyzeError::InvalidContract)?;
     ensure_analyze_directories(&workspace_root)?;
 
-    let AnalyzeOptions { output_mode, debug } = options;
+    let output_mode = options.output_mode;
+    let debug = options.debug;
 
-    let planning = build_analyze_targets(&workspace_root, &policy, None, None, None, debug)?;
+    let registry = Arc::new(build_registry());
+    let planning =
+        build_analyze_targets(&workspace_root, &policy, None, None, None, debug, &registry)?;
     let plan = build_analyze_plan(&planning.targets);
     let metadata = build_artifact_metadata(&config_path, &workspace_root, &planning, output_mode)?;
     let artifact_slot = Arc::new(Mutex::new(None));
@@ -44,10 +48,10 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome
         &workspace_root,
         &planning,
         &metadata,
-        output_mode,
-        debug,
+        &options,
         plan,
         Arc::clone(&artifact_slot),
+        Arc::clone(&registry),
     )?;
     if persist_aborted_analysis(&workspace_root, &planning, &metadata, aborted)? {
         return Err(AnalyzeError::Incomplete(String::from("check aborted")));
@@ -62,7 +66,7 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome
     artifact.metadata = metadata;
     verification_command::materialize_finding_commands(
         &mut artifact,
-        &build_registry(),
+        &registry,
         !managed_execution_active(),
     )?;
     let serialized = serialize_artifact(&artifact)?;
@@ -76,12 +80,19 @@ fn execute_analyze_plan_or_persist_failure(
     workspace_root: &Path,
     planning: &AnalyzePlanning,
     metadata: &RunArtifactMetadata,
-    output_mode: OutputArg,
-    debug: bool,
+    options: &AnalyzeOptions,
     plan: ui::runner::Plan,
     artifact_slot: Arc<Mutex<Option<RunArtifact>>>,
+    registry: Arc<AdapterRegistry>,
 ) -> Result<bool, String> {
-    match execute_analyze_plan(output_mode, debug, plan, planning.clone(), artifact_slot) {
+    match execute_analyze_plan(
+        options.output_mode,
+        options.debug,
+        plan,
+        planning.clone(),
+        artifact_slot,
+        registry,
+    ) {
         Ok(aborted) => Ok(aborted),
         Err(error) => {
             persist_incomplete_execution_artifact(
@@ -150,7 +161,7 @@ fn persist_incomplete_execution_artifact(
             planning.runnable_failure_issues(stage, message),
         ),
         Vec::new(),
-    );
+    )?;
     let serialized = serialize_artifact(&artifact)?;
     persist_artifact_at(workspace_root, SIGNALS_ARTIFACT, &serialized)
 }
@@ -166,8 +177,9 @@ fn execute_analyze_plan(
     plan: ui::runner::Plan,
     planning: AnalyzePlanning,
     artifact_slot: Arc<Mutex<Option<RunArtifact>>>,
+    registry: Arc<AdapterRegistry>,
 ) -> Result<bool, String> {
-    let execution = build_analyze_execution(planning, artifact_slot);
+    let execution = build_analyze_execution(planning, artifact_slot, registry);
     if debug {
         return ui::runner::run_plain(plan, execution, debug_progress_event)
             .map(|outcome| outcome.aborted);
@@ -210,9 +222,11 @@ fn debug_progress_event(event: ui::runner::ProgressEvent) {
 fn build_analyze_execution(
     planning: AnalyzePlanning,
     artifact_slot: Arc<Mutex<Option<RunArtifact>>>,
+    registry: Arc<AdapterRegistry>,
 ) -> impl FnOnce(ui::runner::ExecContext) -> Result<(), String> {
     move |exec_ctx: ui::runner::ExecContext| {
-        let artifact = run_collect_with_ui(&exec_ctx, &planning, CompletionScope::Repository)?;
+        let artifact =
+            run_collect_with_ui(&exec_ctx, &planning, CompletionScope::Repository, registry)?;
         let mut slot = artifact_slot
             .lock()
             .map_err(|_| String::from("artifact mutex poisoned"))?;

@@ -1,6 +1,6 @@
 use crate::analysis::{
-    build_analyze_targets, enabled_signal_kinds, failed_signal_row, managed_execution_active,
-    persist_artifact_at, signal_kind_slug, workspace_root_from_config_path,
+    build_analyze_targets, enabled_signal_kinds, managed_execution_active, persist_artifact_at,
+    signal_kind_slug, workspace_root_from_config_path,
 };
 use crate::application::{ExecutionMode, ImpactOperation, OutputFormat};
 use crate::build_registry;
@@ -29,7 +29,8 @@ use render::{effective_execution_mode, emit_artifact, emit_plan, execution_mode_
 type Error = crate::application_error::ApplicationError;
 
 pub(crate) fn show(operation: ImpactOperation) -> ExitCode {
-    match prepare_plan(&operation) {
+    let registry = build_registry();
+    match prepare_plan(&operation, &registry) {
         Ok((_, _, plan, _)) => match emit_plan(&plan, &operation) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => fail(error),
@@ -39,7 +40,8 @@ pub(crate) fn show(operation: ImpactOperation) -> ExitCode {
 }
 
 pub(crate) fn run(operation: ImpactOperation) -> ExitCode {
-    match run_inner(&operation) {
+    let registry = build_registry();
+    match run_inner(&operation, &registry) {
         Ok((_, true)) => ExitCode::from(4),
         Ok((true, false)) => ExitCode::from(1),
         Ok((false, false)) => ExitCode::SUCCESS,
@@ -53,6 +55,7 @@ fn fail(error: Error) -> ExitCode {
 
 fn prepare_plan(
     operation: &ImpactOperation,
+    registry: &AdapterRegistry,
 ) -> Result<(PathBuf, AyniPolicy, ImpactPlan, GitSnapshot), Error> {
     let workspace_root = workspace_root_from_config_path(&operation.config)
         .canonicalize()
@@ -82,6 +85,7 @@ fn prepare_plan(
         } else {
             &config_path
         },
+        registry,
     )?;
     Ok((workspace_root, policy, plan, snapshot))
 }
@@ -91,8 +95,8 @@ fn plan_changes(
     policy: &AyniPolicy,
     snapshot: &GitSnapshot,
     config_path: &str,
+    registry: &AdapterRegistry,
 ) -> Result<ImpactPlan, Error> {
-    let registry = build_registry();
     let signals = enabled_signal_kinds(policy)
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -230,12 +234,14 @@ fn ensure_impact_artifact_ignored(workspace_root: &Path) -> Result<(), Error> {
     )))
 }
 
-fn run_inner(operation: &ImpactOperation) -> Result<(bool, bool), Error> {
-    let (workspace_root, policy, plan, before) = prepare_plan(operation)?;
-    let registry = build_registry();
-    let mut collected = execute_checks(&workspace_root, &policy, &plan, &registry, operation)?;
-    let findings = materialize_findings(&collected.rows, &registry, operation)?;
-    let (_, _, recomputed_plan, after) = prepare_plan(operation)?;
+fn run_inner(
+    operation: &ImpactOperation,
+    registry: &AdapterRegistry,
+) -> Result<(bool, bool), Error> {
+    let (workspace_root, policy, plan, before) = prepare_plan(operation, registry)?;
+    let mut collected = execute_checks(&workspace_root, &policy, &plan, registry, operation)?;
+    let findings = materialize_findings(&collected.rows, registry, operation)?;
+    let (_, _, recomputed_plan, after) = prepare_plan(operation, registry)?;
     if after != before || recomputed_plan != plan {
         collected.issues.push(candidate_drift_issue());
     }
@@ -267,8 +273,16 @@ fn execute_checks(
     registry: &AdapterRegistry,
     operation: &ImpactOperation,
 ) -> Result<CollectedImpact, Error> {
-    let planning = build_analyze_targets(workspace_root, policy, None, None, None, operation.debug)
-        .map_err(Error::input)?;
+    let planning = build_analyze_targets(
+        workspace_root,
+        policy,
+        None,
+        None,
+        None,
+        operation.debug,
+        registry,
+    )
+    .map_err(Error::input)?;
     let target_by_key = planning
         .targets
         .iter()
@@ -302,18 +316,21 @@ fn execute_checks(
             name: None,
         };
         log_check(check, "running");
-        let row = adapter
-            .collect_verification(check.signal, &target.run_context, &selection, &mut |line| {
-                log_check(check, line)
-            })
-            .unwrap_or_else(|error| {
-                failed_signal_row(
-                    check.language,
-                    check.signal,
-                    &target.run_context,
-                    error.to_string(),
-                )
-            });
+        let row = match adapter.collect_verification(
+            check.signal,
+            &target.run_context,
+            &selection,
+            &mut |line| log_check(check, line),
+        ) {
+            Ok(row) => row,
+            Err(error) => {
+                collected.issues.push(ImpactExecutionIssue {
+                    check: Some(check.clone()),
+                    message: format!("collection incomplete: {error}"),
+                });
+                continue;
+            }
+        };
         if let Err(message) =
             reconcile_signal_row(check, &row, &target.run_context.scope.workspace_root)
         {
@@ -449,8 +466,11 @@ fn materialize_findings(
 mod tests {
     use super::git::{hash_untracked_path, parse_name_status};
     use super::render::effective_execution_mode_when;
-    use super::{ExecutionMode, failed_signal_row, reconcile_signal_row};
-    use ayni_core::{ChangeKind, Language, RunContext, Scope, SelectedCheck, SignalKind};
+    use super::{ExecutionMode, reconcile_signal_row};
+    use ayni_core::{
+        Budget, ChangeKind, Language, Offenders, Scope, SelectedCheck, SignalKind, SignalResult,
+        SignalRow, TestBudget, TestResult,
+    };
     use sha2::{Digest, Sha256};
 
     #[test]
@@ -527,32 +547,27 @@ mod tests {
             },
             ayni_core::ImpactConfidence::High,
         );
-        let context = RunContext {
-            repo_root: std::path::PathBuf::from("."),
-            target_root: std::path::PathBuf::from("."),
-            workdir: std::path::PathBuf::from("."),
-            policy: ayni_core::AyniPolicy::default(),
+        let row = SignalRow {
+            kind: SignalKind::Test,
+            language: Language::Node,
             scope: Scope {
                 workspace_root: String::from("."),
                 path: Some(String::from("crates/api")),
                 package: None,
-                file: None,
+                file: Some(String::from("other.rs")),
             },
-            execution: ayni_core::ExecutionResolution::direct(
-                "test",
-                std::path::PathBuf::from("."),
-                "test",
-                1,
-            ),
-            debug: false,
+            pass: true,
+            result: SignalResult::Test(TestResult {
+                total_tests: 1,
+                passed: 1,
+                failed: 0,
+                duration_ms: None,
+                runner: String::from("test"),
+                failure: None,
+            }),
+            budget: Budget::Test(TestBudget::default()),
+            offenders: Offenders::Test(Vec::new()),
         };
-        let mut row = failed_signal_row(
-            Language::Node,
-            SignalKind::Test,
-            &context,
-            String::from("faulty adapter"),
-        );
-        row.scope.file = Some(String::from("other.rs"));
 
         let error = reconcile_signal_row(&check, &row, ".").expect_err("mismatched row");
 

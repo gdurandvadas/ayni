@@ -13,7 +13,6 @@ pub static NODE_CATALOG: &[CatalogEntry] = &[
             SignalKind::Size,
             SignalKind::Complexity,
             SignalKind::Deps,
-            SignalKind::Mutation,
         ],
         opt_in: false,
     },
@@ -37,11 +36,6 @@ pub static NODE_CATALOG: &[CatalogEntry] = &[
         for_signals: &[SignalKind::Complexity],
         opt_in: false,
     },
-    CatalogEntry {
-        name: "@stryker-mutator/core",
-        for_signals: &[SignalKind::Mutation],
-        opt_in: true,
-    },
 ];
 
 #[cfg(test)]
@@ -57,5 +51,14 @@ mod tests {
             .map(|entry| entry.name)
             .collect::<Vec<_>>();
         assert_eq!(tools, ["node", "eslint", "@typescript-eslint/parser"]);
+    }
+
+    #[test]
+    fn does_not_advertise_mutation_tools() {
+        assert!(
+            NODE_CATALOG
+                .iter()
+                .all(|entry| !entry.for_signals.contains(&SignalKind::Mutation))
+        );
     }
 }

@@ -5,12 +5,11 @@ use super::util::{
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::failure::coverage_metric_failure;
 use ayni_core::{
-    Budget, ConfiguredMetricEvaluation, CoverageOffender, CoveragePolicy, CoverageResult, Language,
-    Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    evaluate_configured_metric,
+    Budget, ConfiguredMetricEvaluation, CoverageBudget, CoverageOffender, CoveragePolicy,
+    CoverageResult, Language, Level, Offenders, RunContext, Scope, SignalKind, SignalResult,
+    SignalRow, evaluate_configured_metric,
 };
 use serde::Deserialize;
-use serde_json::json;
 use std::fs;
 use std::path::Path;
 
@@ -107,16 +106,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     let branch_percent = finite_percent(raw_branch_percent);
     let percent = line_percent.or(branch_percent);
     let coverage_config = context.policy.python.coverage.as_ref();
-    let coverage_budget = coverage_config
-        .map(|config| {
-            json!({
-                "line_percent_warn": config.line_percent.map(|v| v.warn),
-                "line_percent_fail": config.line_percent.map(|v| v.fail),
-                "branch_percent_warn": config.branch_percent.map(|v| v.warn),
-                "branch_percent_fail": config.branch_percent.map(|v| v.fail),
-            })
-        })
-        .unwrap_or_else(|| json!({}));
+    let coverage_budget = applied_coverage_budget(coverage_config);
     let assessment = assess_coverage(
         raw_line_percent,
         raw_branch_percent,
@@ -184,23 +174,19 @@ fn error_row(
             status: String::from("error"),
             failure: Some(failure),
         }),
-        budget: Budget::Coverage(
-            context
-                .policy
-                .python
-                .coverage
-                .as_ref()
-                .map(|config| {
-                    json!({
-                        "line_percent_warn": config.line_percent.map(|v| v.warn),
-                        "line_percent_fail": config.line_percent.map(|v| v.fail),
-                        "branch_percent_warn": config.branch_percent.map(|v| v.warn),
-                        "branch_percent_fail": config.branch_percent.map(|v| v.fail),
-                    })
-                })
-                .unwrap_or_else(|| json!({})),
-        ),
+        budget: Budget::Coverage(applied_coverage_budget(
+            context.policy.python.coverage.as_ref(),
+        )),
         offenders: Offenders::Coverage(Vec::new()),
+    }
+}
+
+fn applied_coverage_budget(config: Option<&CoveragePolicy>) -> CoverageBudget {
+    CoverageBudget {
+        line_percent_warn: config.and_then(|value| value.line_percent.map(|v| v.warn)),
+        line_percent_fail: config.and_then(|value| value.line_percent.map(|v| v.fail)),
+        branch_percent_warn: config.and_then(|value| value.branch_percent.map(|v| v.warn)),
+        branch_percent_fail: config.and_then(|value| value.branch_percent.map(|v| v.fail)),
     }
 }
 

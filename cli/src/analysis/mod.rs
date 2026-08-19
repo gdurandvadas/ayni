@@ -1,11 +1,10 @@
-use crate::{build_registry, discovery, policy, ui, verification_command};
+use crate::{discovery, policy, ui, verification_command};
 use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
-    AYNI_SIGNAL_SCHEMA_VERSION, AyniPolicy, Budget, CommandFailure, CompletionIssue,
-    CompletionScope, CompletionStage, CompletionState, ComplexityResult, ConcurrencyPolicy,
-    CoverageResult, DepsResult, InvocationContext, Language, MutationResult, Offenders,
-    OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion, RunContext, RunOutcome, Scope,
-    SignalKind, SignalResult, SignalRow, SizeResult, TestResult,
+    AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, ArtifactToolVersion, AyniPolicy, Budget,
+    CompletionIssue, CompletionScope, CompletionStage, CompletionState, ConcurrencyPolicy,
+    ExecutionMode, InvocationContext, Language, OutputContext, RunArtifact, RunArtifactMetadata,
+    RunCompletion, RunContext, RunOutcome, Scope, SignalKind, SignalResult, SignalRow,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
@@ -24,7 +23,7 @@ pub(crate) use artifacts::{
     emit_analyze_outputs, persist_artifact_at, serialize_artifact, workspace_root_from_config_path,
 };
 pub(crate) use check::analyze;
-pub(crate) use execution::{AnalyzeOptions, failed_signal_row};
+pub(crate) use execution::AnalyzeOptions;
 use execution::{build_analyze_plan, run_collect_with_ui};
 pub(crate) use reconciliation::reconcile;
 
@@ -149,6 +148,7 @@ pub(crate) fn build_analyze_targets(
     file: Option<String>,
     language_filter: Option<Language>,
     debug: bool,
+    registry: &AdapterRegistry,
 ) -> Result<AnalyzePlanning, String> {
     let file = file.map(|value| canonicalize_relative_posix(&value));
     let enabled_languages = policy.enabled_languages()?;
@@ -159,9 +159,8 @@ pub(crate) fn build_analyze_targets(
             "requested language {language} is not enabled in the configured policy"
         ));
     }
-    let registry = build_registry();
     let configured =
-        discovery::plan_configured_targets(repo_root, policy, language_filter, &registry)?;
+        discovery::plan_configured_targets(repo_root, policy, language_filter, registry)?;
     let expected_targets = configured.len() as u64;
     let detected_targets = configured.iter().filter(|target| target.detected).count() as u64;
     let issues = configured

@@ -1,11 +1,10 @@
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_core::{
-    Budget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope, SignalKind,
-    SignalResult, SignalRow,
+    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope,
+    SignalKind, SignalResult, SignalRow,
 };
 use glob::Pattern;
-use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -39,7 +38,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         },
         pass: analysis.result.violation_count == 0,
         result: SignalResult::Deps(analysis.result),
-        budget: Budget::Deps(json!({ "forbidden": rules })),
+        budget: Budget::Deps(DepsBudget {
+            forbidden: Some(rules),
+        }),
         offenders: Offenders::Deps(analysis.offenders),
     })
 }
@@ -379,9 +380,9 @@ fn compile_rules(forbidden: &BTreeMap<String, Vec<String>>) -> Result<Vec<Compil
 
 #[cfg(test)]
 mod tests {
-    use super::{CargoMetadata, analyze_deps};
-    use ayni_core::Scope;
-    use std::collections::BTreeMap;
+    use super::{CargoMetadata, analyze_deps, compile_rules, matching_offenders};
+    use ayni_core::{AyniPolicy, Scope};
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use tempfile::TempDir;
 
@@ -465,5 +466,95 @@ mod tests {
         assert_eq!(analysis.offenders[0].from, "core");
         assert_eq!(analysis.offenders[0].to, "adapters/rust");
         assert_eq!(analysis.offenders[0].rule, "core -> adapters/*");
+    }
+
+    #[test]
+    fn repository_contract_enforces_the_documented_one_way_dependency_graph() {
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let contract = fs::read_to_string(repository.join(".ayni.toml")).expect("contract");
+        let policy = AyniPolicy::parse(&contract).expect("valid contract");
+        let forbidden = &policy
+            .rust
+            .deps
+            .as_ref()
+            .expect("Rust dependency policy")
+            .forbidden;
+        let compiled = compile_rules(forbidden).expect("valid dependency patterns");
+        let is_forbidden = |from: &str, to: &str| {
+            let edge = BTreeSet::from([(from.to_owned(), to.to_owned())]);
+            !matching_offenders(&edge, &compiled).is_empty()
+        };
+
+        let languages = [
+            "adapters/go",
+            "adapters/kotlin",
+            "adapters/node",
+            "adapters/python",
+            "adapters/rust",
+        ];
+        for destination in ["adapters/common"]
+            .into_iter()
+            .chain(languages)
+            .chain(["environment", "cli"])
+        {
+            assert!(
+                is_forbidden("core", destination),
+                "core -> {destination} must be forbidden"
+            );
+        }
+        for destination in languages.into_iter().chain(["environment", "cli"]) {
+            assert!(
+                is_forbidden("adapters/common", destination),
+                "adapters/common -> {destination} must be forbidden"
+            );
+        }
+        for source in languages {
+            for destination in languages {
+                if source != destination {
+                    assert!(
+                        is_forbidden(source, destination),
+                        "{source} -> {destination} must be forbidden"
+                    );
+                }
+            }
+            for destination in ["environment", "cli"] {
+                assert!(
+                    is_forbidden(source, destination),
+                    "{source} -> {destination} must be forbidden"
+                );
+            }
+        }
+        for destination in languages.into_iter().chain(["cli"]) {
+            assert!(
+                is_forbidden("environment", destination),
+                "environment -> {destination} must be forbidden"
+            );
+        }
+
+        assert!(!is_forbidden("adapters/common", "core"));
+        for source in languages {
+            for destination in ["core", "adapters/common"] {
+                assert!(
+                    !is_forbidden(source, destination),
+                    "{source} -> {destination} must remain allowed"
+                );
+            }
+        }
+        for destination in ["core", "adapters/common"] {
+            assert!(
+                !is_forbidden("environment", destination),
+                "environment -> {destination} must remain allowed"
+            );
+        }
+        for destination in ["core", "adapters/common"]
+            .into_iter()
+            .chain(languages)
+            .chain(["environment"])
+        {
+            assert!(
+                !is_forbidden("cli", destination),
+                "cli -> {destination} must remain allowed"
+            );
+        }
     }
 }

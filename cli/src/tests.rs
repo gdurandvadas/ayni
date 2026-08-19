@@ -1,6 +1,6 @@
 use crate::analysis::{
-    SIGNALS_ARTIFACT, VERIFY_SIGNALS_ARTIFACT, build_analyze_targets, failed_signal_row,
-    persist_artifact_at, serialize_artifact,
+    SIGNALS_ARTIFACT, VERIFY_SIGNALS_ARTIFACT, build_analyze_targets, persist_artifact_at,
+    serialize_artifact,
 };
 
 #[test]
@@ -31,9 +31,17 @@ roots = ["missing"]
     )
     .expect("policy");
 
-    let planning =
-        build_analyze_targets(dir.path(), &policy, None, None, Some(Language::Rust), false)
-            .expect("planning");
+    let registry = crate::build_registry();
+    let planning = build_analyze_targets(
+        dir.path(),
+        &policy,
+        None,
+        None,
+        Some(Language::Rust),
+        false,
+        &registry,
+    )
+    .expect("planning");
 
     assert_eq!(planning.expected_targets, 1);
     assert_eq!(planning.detected_targets, 0);
@@ -59,13 +67,11 @@ fn completion_artifact_writer_atomically_replaces_existing_evidence() {
 }
 use crate::agents::{MANAGED_BEGIN, MANAGED_END, managed_block, sync_impl, upsert_managed_block};
 use ayni_core::{
-    AYNI_SIGNAL_SCHEMA_VERSION, AyniPolicy, Budget, ExecutionResolution, InvocationContext,
-    Language, Offenders, OutputContext, RunArtifact, RunArtifactMetadata, RunContext, Scope,
-    SignalKind, SignalResult, TestResult,
+    AYNI_SIGNAL_SCHEMA_VERSION, AyniPolicy, Budget, InvocationContext, Language, Offenders,
+    OutputContext, RunArtifact, RunArtifactMetadata, Scope, SignalKind, SignalResult, TestBudget,
+    TestResult,
 };
-use serde_json::json;
 use std::fs;
-use std::path::PathBuf;
 use tempfile::TempDir;
 
 #[test]
@@ -85,9 +91,6 @@ fn agents_managed_guidance_describes_discovery_policy_and_quality_workflow() {
     let managed = managed_block();
 
     for guidance in [
-        "`ayni help`",
-        "`ayni help <command> [subcommand]`",
-        "`ayni <command> --help`",
         "`.ayni.toml` as the authoritative repository quality policy",
         "`ayni contract show`",
         "ayni verify <signal> [selectors]",
@@ -95,13 +98,26 @@ fn agents_managed_guidance_describes_discovery_policy_and_quality_workflow() {
         "`.ayni/last/signals.json`",
         "narrowest supported `ayni verify <signal>`",
         "exact verification command supplied by a finding",
-        "incomplete artifacts as failure",
-        "never loosen `.ayni.toml` merely",
-        "detailed, typed signal results",
-        "completion state and target accounting",
+        "incomplete or missing required artifacts as failure",
+        "`.ayni.toml` merely to silence a finding",
+        "never wrap them in `ayni env run`",
+        "checkout read-write",
+        "completion and target",
         "exact verification command",
     ] {
         assert!(managed.contains(guidance), "missing guidance: {guidance}");
+    }
+    for generic_advice in [
+        "Preserve clear module boundaries.",
+        "Prefer small, testable units.",
+        "Keep CLI, core logic, command execution, and reporting separate.",
+        "Avoid adding network dependencies unless explicitly required.",
+        "Update tests when behavior changes.",
+    ] {
+        assert!(
+            !managed.contains(generic_advice),
+            "generic advice must not be generated: {generic_advice}"
+        );
     }
     assert!(!managed.contains("ayni <command> help"));
     assert!(!managed.contains("schema-v2"));
@@ -149,7 +165,7 @@ fn upsert_managed_block_appends_when_missing() {
 }
 
 #[test]
-fn serialized_json_is_schema_v3_and_matches_persisted_artifact() {
+fn serialized_json_is_schema_v4_and_matches_persisted_artifact() {
     let dir = TempDir::new().expect("tempdir");
     fs::create_dir_all(dir.path().join(".ayni/last")).expect("artifact directory");
     let artifact = RunArtifact::new(
@@ -167,10 +183,12 @@ fn serialized_json_is_schema_v3_and_matches_persisted_artifact() {
             },
             config_path: String::from("./.ayni.toml"),
             repository_root: String::from("."),
+            ..RunArtifactMetadata::default()
         },
         ayni_core::RunCompletion::complete(ayni_core::CompletionScope::Repository, 1),
         vec![test_row(true, 1, 0)],
-    );
+    )
+    .expect("valid artifact");
     let serialized = serialize_artifact(&artifact).expect("serialize artifact");
     persist_artifact_at(dir.path(), SIGNALS_ARTIFACT, &serialized).expect("persist artifact");
 
@@ -212,6 +230,7 @@ roots = ["."]
     )
     .expect("policy");
 
+    let registry = crate::build_registry();
     let planning = build_analyze_targets(
         dir.path(),
         &policy,
@@ -219,6 +238,7 @@ roots = ["."]
         None,
         Some(Language::Kotlin),
         false,
+        &registry,
     )
     .expect("targets");
 
@@ -253,6 +273,7 @@ roots = ["."]
     )
     .expect("policy");
 
+    let registry = crate::build_registry();
     let planning = build_analyze_targets(
         dir.path(),
         &policy,
@@ -260,6 +281,7 @@ roots = ["."]
         None,
         Some(Language::Python),
         false,
+        &registry,
     )
     .expect("targets");
     assert_eq!(planning.targets.len(), 1);
@@ -269,64 +291,6 @@ roots = ["."]
         planning.targets[0].run_context.execution.kind,
         "direct_root"
     );
-}
-
-#[test]
-fn collector_errors_are_preserved_as_failed_rows() {
-    let policy: AyniPolicy = toml::from_str(
-        r#"
-[checks]
-test = true
-coverage = true
-size = false
-complexity = false
-deps = false
-mutation = false
-
-[languages]
-enabled = ["python"]
-"#,
-    )
-    .expect("policy");
-    let context = RunContext {
-        repo_root: PathBuf::from("/repo"),
-        target_root: PathBuf::from("/repo/packages/api"),
-        workdir: PathBuf::from("/repo/packages/api"),
-        policy,
-        scope: Scope {
-            workspace_root: String::from("/repo"),
-            path: Some(String::from("packages/api")),
-            package: None,
-            file: None,
-        },
-        execution: ExecutionResolution::direct(
-            "python",
-            PathBuf::from("/repo/packages/api"),
-            "test",
-            100,
-        ),
-        debug: false,
-    };
-
-    let row = failed_signal_row(
-        Language::Python,
-        SignalKind::Coverage,
-        &context,
-        String::from("pytest-cov missing"),
-    );
-
-    assert!(!row.pass);
-    assert_eq!(row.kind, SignalKind::Coverage);
-    assert_eq!(row.scope.path.as_deref(), Some("packages/api"));
-    match row.result {
-        SignalResult::Coverage(result) => {
-            assert_eq!(result.status, "error");
-            let failure = result.failure.expect("failure");
-            assert_eq!(failure.classification, "adapter_error");
-            assert_eq!(failure.message, "pytest-cov missing");
-        }
-        other => panic!("unexpected result: {other:?}"),
-    }
 }
 
 fn test_row(pass: bool, passed: u64, failed: u64) -> ayni_core::SignalRow {
@@ -343,7 +307,7 @@ fn test_row(pass: bool, passed: u64, failed: u64) -> ayni_core::SignalRow {
             runner: String::from("cargo-test"),
             failure: None,
         }),
-        budget: Budget::Test(json!({})),
+        budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(Vec::new()),
     }
 }

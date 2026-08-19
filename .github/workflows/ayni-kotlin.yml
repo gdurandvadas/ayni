@@ -1,11 +1,7 @@
 name: ayni-kotlin
 
 on:
-  pull_request:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  workflow_call:
 
 permissions:
   contents: read
@@ -16,23 +12,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
       - name: Build Ayni CLI
         uses: ./.github/actions/build-ayni
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - name: Install pinned Mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
-          distribution: temurin
-          java-version: '21.0.2'
+          version: 2026.6.14
+          install: false
+          cache: false
 
-      - name: Set up Gradle wrapper cache
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Validate Kotlin example
+      - name: Validate Kotlin example through managed execution
         uses: ./.github/actions/validate-example
         with:
           language: kotlin

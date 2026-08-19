@@ -1,11 +1,10 @@
 use super::util::to_repo_relative_path;
 use ayni_core::{
-    Budget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope, SignalKind,
-    SignalResult, SignalRow,
+    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope,
+    SignalKind, SignalResult, SignalRow,
 };
 use glob::Pattern;
 use regex::Regex;
-use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -70,7 +69,9 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
             violation_count: offenders.len() as u64,
             failure: None,
         }),
-        budget: Budget::Deps(json!({ "forbidden": rules })),
+        budget: Budget::Deps(DepsBudget {
+            forbidden: Some(rules),
+        }),
         offenders: Offenders::Deps(offenders),
     })
 }

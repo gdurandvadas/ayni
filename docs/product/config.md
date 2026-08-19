@@ -23,7 +23,7 @@ artifacts. Use `ayni check` for managed measured results and completion
 evidence, or `ayni check --host` for the explicit host path.
 
 For the signal vocabulary and schema selection, see [`signals.md`](signals.md);
-for current JSON artifact fields, see [schema v3](signals/v3.md).
+for current JSON artifact fields, see [schema v4](signals/v4.md).
 For runner resolution, setup validation, failure categories, and debug
 telemetry, see [`runtime.md`](runtime.md).
 
@@ -197,7 +197,16 @@ Note: Ayni uses Rust `glob` matching. Brace expansion like `*.{ts,tsx}` is not s
 
 ## Tool command overrides
 
-For high-variance tooling, each language can override command and args for `test`, `coverage`, and `mutation`.
+For high-variance tooling, adapters accept command and argument overrides only
+for signals whose native output they can parse:
+
+| Adapter | `test` | `coverage` | `mutation` |
+| --- | --- | --- | --- |
+| Rust | yes | yes | unavailable |
+| Node | yes | yes | unavailable |
+| Go | yes | yes | unavailable |
+| Python | yes | yes | yes |
+| Kotlin | yes | yes | yes |
 
 ```toml
 [rust.tooling.test]
@@ -208,9 +217,9 @@ args = ["test"]
 command = "go"
 args = ["test", "./..."]
 
-[node.tooling.mutation]
+[node.tooling.test]
 command = "pnpm"
-args = ["exec", "stryker", "run", "--logLevel", "error"]
+args = ["exec", "vitest", "run", "--reporter=json", "--passWithNoTests"]
 
 [python.tooling.test]
 command = "uv"
@@ -222,6 +231,8 @@ Notes:
 - `command` is required inside each override table.
 - `args` is optional; when omitted, Ayni uses signal-specific defaults for that language.
 - Overrides are command execution overrides only; result parsing still expects the signal collector’s native output shape.
+- Mutation is unavailable for Rust, Node, and Go. Those adapters reject the
+  signal before tool invocation even if a `tooling.mutation` table is present.
 - Managed execution accepts overrides after the adapter has contributed and
   locked its normal runtime and signal-tool requirements. Add any extra override
   executable under `[environment.tools]` or `[environment.debian]`; Ayni does
@@ -259,7 +270,7 @@ Rules:
   ways: policy spelling must be lexically repository-relative, existing paths
   must canonically remain below the canonical repository, and a symlink may not
   resolve outside it. Lexically safe missing roots remain valid; they are not
-  dereferenced during validation, so adapter detection and schema-v3 completion
+  dereferenced during validation, so adapter detection and schema-v4 completion
   can report the missing target instead of silently broadening its scope.
 - `.` means workspace root and maps to `scope.path = null` in artifacts.
 
@@ -387,20 +398,22 @@ branch coverage. Python's default coverage command requests branch collection
 every configured metric.
 
 The effective typed budgets applied to each analyzed row are preserved in the
-current artifact's `applied_thresholds` field; see [schema v3](signals/v3.md).
+current artifact's `applied_thresholds` field; see [schema v4](signals/v4.md).
 
 ## Output and report safety
 
-`ayni check --output markdown` renders typed findings under **Offenders** and adds a
-**Failures** section only when a collector command failed. Failure entries can
-include the command, working directory, exit code, and tool message. Markdown
-and the schema-v3 JSON artifact can consequently expose repository paths and raw
-tool output; do not publish them without reviewing that diagnostic data.
+`ayni check --output markdown` renders typed findings under **Offenders** and a
+**Failures** section only when a collector command failed. Human and Markdown
+reports omit finding verification commands; those remain structured in the
+schema-v4 JSON artifact and are available explicitly through `ayni verify list`.
+Failure entries can include the collector command, working directory, exit code,
+and tool message. Reports and artifacts can consequently expose repository paths
+and raw tool output; do not publish them without reviewing that diagnostic data.
 
 For machine consumers, `ayni check --output json` and
-`ayni check --host --output json` select the same schema-v3 artifact shape.
+`ayni check --host --output json` select the same schema-v4 artifact shape.
 The supported output values are `human`, `json`, and `markdown`; choose exactly
-one `--output` value. See [schema v3](signals/v3.md) for the current schema and
+one `--output` value. See [schema v4](signals/v4.md) for the current schema and
 migration posture.
 
 ---
@@ -429,6 +442,6 @@ selected language and is validated before adapter-owned selectors. `--file`,
 `--package`, and test-only `--name` are adapter- and
 signal-owned capabilities, not generic filters; unsupported, conflicting, or
 ambiguous selections are rejected before a collector invokes a tool. Requested
-schema-v3 evidence is persisted at `.ayni/verify/last/signals.json`. It has
+schema-v4 evidence is persisted at `.ayni/verify/last/signals.json`. It has
 `completion.scope = "requested"`, cannot establish repository completion, and
 does not overwrite the full completion artifact under `.ayni/last/`.

@@ -4,11 +4,10 @@ use ayni_adapters_common::exec::{format_command, run_command_for_context_structu
 use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
 use ayni_adapters_common::xml::{attr_string, decode_xml};
 use ayni_core::{
-    Budget, Language, Level, MutationOffender, MutationResult, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    Budget, Language, Level, MutationBudget, MutationOffender, MutationResult, Offenders,
+    RunContext, Scope, SignalKind, SignalResult, SignalRow,
 };
 use regex::Regex;
-use serde_json::json;
 use std::fs;
 use std::path::Path;
 
@@ -32,7 +31,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
                 score: None,
                 failure: None,
             }),
-            budget: Budget::Mutation(json!({"enabled": false})),
+            budget: Budget::Mutation(MutationBudget {
+                enabled: Some(false),
+            }),
             offenders: Offenders::Mutation(Vec::new()),
         });
     }
@@ -76,7 +77,18 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     let survived = report.survived;
     let timeout = report.timeout;
     let total = killed + survived + timeout;
-    let score = (total > 0).then_some((killed as f64 / total as f64) * 100.0);
+    if total == 0 {
+        return Ok(error_row(
+            context,
+            engine,
+            setup_failure(
+                context,
+                String::from("pitest"),
+                "pitest evaluated zero mutants",
+            ),
+        ));
+    }
+    let score = Some((killed as f64 / total as f64) * 100.0);
 
     Ok(SignalRow {
         kind: SignalKind::Mutation,
@@ -87,7 +99,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             package: context.scope.package.clone(),
             file: context.scope.file.clone(),
         },
-        pass: survived == 0,
+        pass: survived == 0 && timeout == 0,
         result: SignalResult::Mutation(MutationResult {
             engine,
             killed,
@@ -96,7 +108,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             score,
             failure: None,
         }),
-        budget: Budget::Mutation(json!({"enabled": true})),
+        budget: Budget::Mutation(MutationBudget {
+            enabled: Some(true),
+        }),
         offenders: Offenders::Mutation(report.offenders),
     })
 }
@@ -124,7 +138,9 @@ fn error_row(
             score: None,
             failure: Some(failure),
         }),
-        budget: Budget::Mutation(json!({"enabled": true})),
+        budget: Budget::Mutation(MutationBudget {
+            enabled: Some(true),
+        }),
         offenders: Offenders::Mutation(Vec::new()),
     }
 }
@@ -165,7 +181,21 @@ fn parse_pitest_content(content: &str) -> Result<PitestReport, String> {
             .collect::<std::collections::BTreeMap<_, _>>();
         match status.as_str() {
             "KILLED" => report.killed += 1,
-            "TIMED_OUT" => report.timeout += 1,
+            "TIMED_OUT" => {
+                report.timeout += 1;
+                report.offenders.push(MutationOffender {
+                    file: fields.get("sourceFile").cloned(),
+                    line: fields
+                        .get("lineNumber")
+                        .and_then(|value| value.parse::<u64>().ok()),
+                    mutation_kind: fields
+                        .get("mutator")
+                        .cloned()
+                        .unwrap_or_else(|| String::from("timeout")),
+                    message: String::from("mutation timed out before the test suite killed it"),
+                    level: Level::Fail,
+                });
+            }
             _ if detected == "true" => report.killed += 1,
             _ => {
                 report.survived += 1;
@@ -200,12 +230,15 @@ mod tests {
             r#"<mutations>
 <mutation detected="true" status="KILLED"><sourceFile>A.kt</sourceFile><lineNumber>1</lineNumber><mutator>x</mutator></mutation>
 <mutation detected="false" status="SURVIVED"><sourceFile>B.kt</sourceFile><lineNumber>2</lineNumber><mutator>y</mutator><description>survived</description></mutation>
+<mutation detected="false" status="TIMED_OUT"><sourceFile>C.kt</sourceFile><lineNumber>3</lineNumber><mutator>z</mutator></mutation>
 </mutations>"#,
         )
         .expect("pitest");
 
         assert_eq!(report.killed, 1);
         assert_eq!(report.survived, 1);
+        assert_eq!(report.timeout, 1);
         assert_eq!(report.offenders[0].file.as_deref(), Some("B.kt"));
+        assert_eq!(report.offenders[1].file.as_deref(), Some("C.kt"));
     }
 }

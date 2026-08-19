@@ -26,7 +26,7 @@ That separation gives reviewers three explicit questions instead of one opaque s
 - optional tool-command overrides; and
 - optional runtime capabilities such as network or Docker-socket access.
 
-The contract is deterministic and versioned with the code. `ayni contract validate` checks its shape; `ayni contract show` renders the effective policy.
+The contract is deterministic and versioned with the code. `ayni contract show` validates its shape while rendering the effective policy.
 
 ## Signals: what is measured?
 
@@ -41,7 +41,7 @@ A signal turns repository state into normalized evidence. Ayni currently models:
 | Dependencies | Do source dependencies respect architectural rules? |
 | Mutation | Do tests detect injected behavioral changes? |
 
-Adapters own language-specific command selection and evidence parsing. The contract remains language-neutral at the signal level: a test signal means the same kind of evidence whether its adapter invokes Cargo, npm, Go, uv, or Gradle.
+Adapters own language-specific command selection and evidence parsing. The contract remains language-neutral at the signal level, while [capability tiers](/product/capabilities) state where a signal is supported, experimental, or unavailable. Ayni refuses unavailable signals rather than substituting a proxy measurement.
 
 Signals have `pass`, `warn`, or `fail` status. A warning threshold provides feedback without failing the gate. Failure-level findings, tool failures, or missing expected results fail the complete contract.
 
@@ -89,25 +89,9 @@ At launch, Ayni validates the current lock and image, selects the language targe
 
 Use the explicit `--host` option on these commands only when managed execution is not yet available for the repository. Host execution preserves the contract and evidence model but relies on user-installed tools.
 
-## Why `env run` is different
+## Advanced development access is different
 
-`ayni env run` and `ayni env shell` expose the managed environment for arbitrary development work:
-
-```sh
-ayni env run -- cargo test parser::tests
-ayni env shell
-```
-
-They do not add signal semantics, normalize evidence, or apply quality thresholds. Their checkout is intentionally read-write so development commands can generate files.
-
-By contrast, this is redundant:
-
-```sh
-# Do not wrap Ayni's quality commands.
-ayni env run -- ayni check
-```
-
-Run `ayni check` directly. Managed launch is already part of the command.
+`ayni env run` and `ayni env shell` are optional development tools, not part of setup or the quality loop. They add no signal semantics and intentionally expose the checkout read-write. Run `ayni check`, `verify`, and `impact run` directly; each already owns its managed launch.
 
 ## The reviewable repository boundary
 
@@ -128,7 +112,8 @@ The CLI installation itself is machine-level tooling. Installing or upgrading `a
 
 ```sh
 # Policy work
-ayni contract validate
+ayni init --dry-run
+ayni contract show
 ayni env show
 
 # Rebuild only when environment inputs change

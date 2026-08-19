@@ -1,8 +1,8 @@
 use crate::paths::to_repo_relative_path;
 use ayni_core::signal::{Level, SizeOffender, SizeResult};
+use ayni_core::{SizeBudget, SizeBudgetRule};
 use ayni_core::{SizeThreshold, classify_maximum};
 use glob::Pattern;
-use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -18,7 +18,7 @@ struct CompiledRule<'a> {
 pub struct SizeCollection {
     pub result: SizeResult,
     pub offenders: Vec<SizeOffender>,
-    pub budget: Value,
+    pub budget: SizeBudget,
 }
 
 pub fn collect_size(
@@ -132,9 +132,13 @@ fn collect_size_inner(
         }
     }
 
-    let budget_rules: Vec<_> = size_map
+    let budget_rules = size_map
         .iter()
-        .map(|(glob, t)| json!({ "glob": glob, "warn": t.warn, "fail": t.fail }))
+        .map(|(glob, threshold)| SizeBudgetRule {
+            glob: glob.clone(),
+            warn: threshold.warn,
+            fail: threshold.fail,
+        })
         .collect();
 
     Ok(SizeCollection {
@@ -146,7 +150,10 @@ fn collect_size_inner(
             failure: None,
         },
         offenders,
-        budget: json!({ "rules": budget_rules }),
+        budget: SizeBudget {
+            rules: budget_rules,
+            ..SizeBudget::default()
+        },
     })
 }
 
@@ -339,11 +346,11 @@ mod tests {
             &[],
         )
         .expect("collect");
-        let rules = collection.budget["rules"].as_array().expect("rules array");
+        let rules = &collection.budget.rules;
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0]["glob"], "*.rs");
-        assert_eq!(rules[0]["warn"], 5);
-        assert_eq!(rules[0]["fail"], 9);
+        assert_eq!(rules[0].glob, "*.rs");
+        assert_eq!(rules[0].warn, 5);
+        assert_eq!(rules[0].fail, 9);
     }
 
     #[test]

@@ -123,12 +123,12 @@ fn metric_value(value: &ayni_core::MetricValue) -> String {
 #[cfg(test)]
 mod tests {
     use ayni_core::{
-        ARTIFACT_COMPARISON_SCHEMA_VERSION, ArtifactComparisonError, Budget, CompletionIssue,
-        CompletionScope, CompletionStage, CompletionState, Finding, FindingIdChanges,
-        FindingMetadata, Findings, InvocationContext, Language, MetricValue, Offenders,
-        OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion, Scope, SignalKind,
-        SignalResult, SignalRow, TestFailure, TestResult, ValueChange, VerificationMetadata,
-        compare_artifacts,
+        ARTIFACT_COMPARISON_SCHEMA_VERSION, ArtifactComparisonError, ArtifactToolVersion, Budget,
+        CompletionIssue, CompletionScope, CompletionStage, CompletionState, ExecutionMode, Finding,
+        FindingIdChanges, FindingMetadata, Findings, InvocationContext, Language, MetricValue,
+        Offenders, OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion, Scope,
+        SignalKind, SignalResult, SignalRow, TestBudget, TestFailure, TestResult, ValueChange,
+        VerificationMetadata, compare_artifacts,
     };
 
     #[test]
@@ -141,7 +141,7 @@ mod tests {
         let after = artifact(
             "/different/checkout",
             row(true, 10, 0, "/different/checkout"),
-            finding('b'),
+            empty_findings(),
         );
 
         let comparison = compare_artifacts(&before, &after).expect("comparison");
@@ -171,7 +171,7 @@ mod tests {
         assert_eq!(
             matched.changes.finding_ids,
             Some(FindingIdChanges {
-                added: vec![id('b')],
+                added: Vec::new(),
                 removed: vec![id('a')],
             })
         );
@@ -179,8 +179,8 @@ mod tests {
 
     #[test]
     fn artifact_compare_is_deterministic_and_preserves_ids_after_loading() {
-        let before = artifact("/a", row(true, 10, 0, "/a"), finding('a'));
-        let after = artifact("/b", row(true, 10, 0, "/b"), finding('a'));
+        let before = artifact("/a", row(false, 9, 1, "/a"), finding('a'));
+        let after = artifact("/b", row(false, 9, 1, "/b"), finding('a'));
         let before_json = serde_json::to_string(&before).expect("before JSON");
         let after_json = serde_json::to_string(&after).expect("after JSON");
         let loaded_before: RunArtifact = serde_json::from_str(&before_json).expect("before load");
@@ -195,8 +195,8 @@ mod tests {
 
     #[test]
     fn artifact_compare_classifies_added_and_removed_rows() {
-        let before = artifact(".", row(true, 10, 0, "."), finding('a'));
-        let mut after = artifact(".", row(true, 10, 0, "."), finding('a'));
+        let before = artifact(".", row(true, 10, 0, "."), empty_findings());
+        let mut after = artifact(".", row(true, 10, 0, "."), empty_findings());
         after.rows[0].scope.file = Some(String::from("tests/replacement.rs"));
 
         let comparison = compare_artifacts(&before, &after).expect("comparison");
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn artifact_compare_rejects_incomplete_and_incompatible_artifacts() {
-        let complete = artifact(".", row(true, 1, 0, "."), finding('a'));
+        let complete = artifact(".", row(true, 1, 0, "."), empty_findings());
         let mut incomplete = complete.clone();
         incomplete.completion = RunCompletion {
             scope: CompletionScope::Repository,
@@ -241,6 +241,52 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn artifact_compare_rejects_incompatible_execution_provenance() {
+        let before = artifact(".", row(true, 1, 0, "."), empty_findings());
+        let mut after = before.clone();
+        after.metadata.execution_mode = ExecutionMode::Host;
+        after.metadata.environment_lock_fingerprint = None;
+        after.metadata.tool_versions.clear();
+
+        assert!(matches!(
+            compare_artifacts(&before, &after),
+            Err(ArtifactComparisonError::IncompatibleProvenance {
+                field: "execution_mode",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn artifact_compare_rejects_host_evidence_even_when_both_sides_match() {
+        let mut before = artifact(".", row(true, 1, 0, "."), empty_findings());
+        before.metadata.execution_mode = ExecutionMode::Host;
+        before.metadata.environment_lock_fingerprint = None;
+        before.metadata.tool_versions.clear();
+        let after = before.clone();
+
+        assert!(matches!(
+            compare_artifacts(&before, &after),
+            Err(ArtifactComparisonError::UncomparableProvenance { side: "before", .. })
+        ));
+    }
+
+    #[test]
+    fn artifact_compare_rejects_ayni_version_drift() {
+        let before = artifact(".", row(true, 1, 0, "."), empty_findings());
+        let mut after = before.clone();
+        after.metadata.ayni_version = String::from("different");
+
+        assert!(matches!(
+            compare_artifacts(&before, &after),
+            Err(ArtifactComparisonError::IncompatibleProvenance {
+                field: "ayni_version",
+                ..
+            })
+        ));
+    }
+
     fn artifact(root: &str, row: SignalRow, findings: Findings) -> RunArtifact {
         RunArtifact {
             schema_version: String::from(ayni_core::AYNI_SIGNAL_SCHEMA_VERSION),
@@ -258,6 +304,13 @@ mod tests {
                 },
                 config_path: format!("{root}/.ayni.toml"),
                 repository_root: root.to_string(),
+                execution_mode: ExecutionMode::Managed,
+                environment_lock_fingerprint: Some(format!("sha256:{}", "1".repeat(64))),
+                tool_versions: vec![ArtifactToolVersion {
+                    tool: String::from("rust"),
+                    version: String::from("1.93.0"),
+                }],
+                ..RunArtifactMetadata::default()
             },
             completion: RunCompletion::complete(CompletionScope::Repository, 1),
             rows: vec![row],
@@ -284,9 +337,13 @@ mod tests {
                 runner: String::from("cargo test"),
                 failure: None,
             }),
-            budget: Budget::Test(serde_json::json!({})),
-            offenders: Offenders::Test(vec![offender()]),
+            budget: Budget::Test(TestBudget::default()),
+            offenders: Offenders::Test(if pass { Vec::new() } else { vec![offender()] }),
         }
+    }
+
+    fn empty_findings() -> Findings {
+        Findings::Test(Vec::new())
     }
 
     fn finding(character: char) -> Findings {

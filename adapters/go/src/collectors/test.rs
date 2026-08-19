@@ -4,10 +4,9 @@ use ayni_adapters_common::exec::format_command;
 use ayni_adapters_common::failure::{command_failure_from_output, test_execution_incomplete};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult, VerificationSelection,
+    TestBudget, TestFailure, TestResult, VerificationSelection,
 };
 use serde::Deserialize;
-use serde_json::json;
 
 #[derive(Debug, Deserialize)]
 struct GoTestEvent {
@@ -98,7 +97,7 @@ fn collect_with_command(
                 command_failure_from_output(context, SignalKind::Test, &program, &args, &output)
             }),
         }),
-        budget: Budget::Test(json!({})),
+        budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(summary.offenders),
     })
 }

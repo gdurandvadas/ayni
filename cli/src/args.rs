@@ -1,7 +1,7 @@
 use crate::application::{
     CheckOperation, ContractOperation, EnvLockOperation, EnvRunOperation, EnvShellOperation,
-    EnvShowOperation, ExecutionMode, ImpactOperation, Operation, OutputFormat, RepositoryOperation,
-    ResultsCompareOperation, VerifyListOperation, VerifyOperation,
+    EnvShowOperation, ExecutionMode, ImpactOperation, InitOperation, Operation, OutputFormat,
+    RepositoryOperation, ResultsCompareOperation, VerifyListOperation, VerifyOperation,
 };
 use ayni_core::{Language, SignalKind};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -14,7 +14,7 @@ const DEFAULT_RESULTS_ARTIFACT: &str = "./.ayni/last/signals.json";
 #[command(name = "ayni")]
 #[command(
     version,
-    about = "Correct environments, focused feedback, one definitive quality gate"
+    about = "Reproducible environments, focused feedback, explicit completion evidence"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -29,12 +29,14 @@ impl Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Preview or write a minimal policy from adapter-owned project discovery.
+    Init(InitOptions),
     /// Inspect and manage the repository code environment.
     Env {
         #[command(subcommand)]
         command: EnvCommands,
     },
-    /// Inspect and validate the repository quality contract.
+    /// Inspect the repository quality contract.
     Contract {
         #[command(subcommand)]
         command: ContractCommands,
@@ -68,6 +70,7 @@ enum Commands {
 impl Commands {
     fn into_operation(self) -> Operation {
         match self {
+            Self::Init(options) => Operation::Init(options.into_operation()),
             Self::Env { command } => command.into_operation(),
             Self::Contract { command } => command.into_operation(),
             Self::Verify { command } => command.into_operation(),
@@ -122,24 +125,21 @@ impl EnvCommands {
 
 #[derive(Subcommand, Debug)]
 enum ContractCommands {
-    /// Render the effective quality contract.
+    /// Render and validate the effective quality contract.
     Show(ContractOptions),
-    /// Validate the contract without discovery or tool execution.
-    Validate(ContractOptions),
 }
 
 impl ContractCommands {
     fn into_operation(self) -> Operation {
         match self {
             Self::Show(options) => Operation::ContractShow(options.into_operation()),
-            Self::Validate(options) => Operation::ContractValidate(options.into_operation()),
         }
     }
 }
 
 #[derive(Subcommand, Debug)]
 enum VerifyCommands {
-    /// List exact verification commands from a saved result artifact.
+    /// List exact verification commands from a saved current-schema artifact.
     List(VerifyListOptions),
     /// Run only the test signal.
     Test {
@@ -249,6 +249,28 @@ impl ResultsCommands {
                 candidate: options.candidate,
                 output: options.output.into(),
             }),
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct InitOptions {
+    /// Repository root to inspect and where `.ayni.toml` will be written.
+    #[arg(long, default_value = ".")]
+    repo_root: PathBuf,
+    /// Print the proposed policy without writing it (the default behavior).
+    #[arg(long, conflicts_with = "write")]
+    dry_run: bool,
+    /// Create `.ayni.toml`; refuses to overwrite an existing policy.
+    #[arg(long, conflicts_with = "dry_run")]
+    write: bool,
+}
+
+impl InitOptions {
+    fn into_operation(self) -> InitOperation {
+        InitOperation {
+            repo_root: self.repo_root,
+            write: self.write && !self.dry_run,
         }
     }
 }
@@ -385,7 +407,7 @@ impl CheckOptions {
 
 #[derive(Args, Debug)]
 struct VerifyListOptions {
-    /// Saved schema-v3 result artifact to inspect.
+    /// Saved schema-v4 result artifact to inspect.
     #[arg(long, default_value = DEFAULT_RESULTS_ARTIFACT)]
     artifact: PathBuf,
 }
@@ -570,7 +592,7 @@ mod tests {
         assert_eq!(
             names,
             [
-                "env", "contract", "verify", "impact", "check", "agents", "results"
+                "init", "env", "contract", "verify", "impact", "check", "agents", "results"
             ]
         );
     }
@@ -578,6 +600,7 @@ mod tests {
     #[test]
     fn every_public_command_maps_to_one_typed_operation() {
         let cases = [
+            (vec!["ayni", "init", "--dry-run"], "Init"),
             (vec!["ayni", "env", "show"], "EnvShow"),
             (vec!["ayni", "env", "doctor"], "EnvDoctor"),
             (vec!["ayni", "env", "lock"], "EnvLock"),
@@ -585,7 +608,6 @@ mod tests {
             (vec!["ayni", "env", "shell"], "EnvShell"),
             (vec!["ayni", "env", "run", "--", "cargo", "test"], "EnvRun"),
             (vec!["ayni", "contract", "show"], "ContractShow"),
-            (vec!["ayni", "contract", "validate"], "ContractValidate"),
             (vec!["ayni", "verify", "list"], "VerifyList"),
             (vec!["ayni", "verify", "test"], "Verify"),
             (

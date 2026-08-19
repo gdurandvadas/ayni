@@ -2,11 +2,11 @@ use ayni_adapters_common::collector::CollectorResult;
 use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{concise_failure_message, coverage_metric_failure};
 use ayni_core::{
-    Budget, CommandFailure, ConfiguredMetricEvaluation, CoverageOffender, CoveragePolicy,
-    CoverageResult, Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    evaluate_configured_metric,
+    Budget, CommandFailure, ConfiguredMetricEvaluation, CoverageBudget, CoverageOffender,
+    CoveragePolicy, CoverageResult, Level, Offenders, RunContext, Scope, SignalKind, SignalResult,
+    SignalRow, evaluate_configured_metric,
 };
-use serde_json::{Value as JsonValue, json};
+use serde_json::Value as JsonValue;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
     let (program, args, engine_label) = coverage_command(context);
@@ -41,16 +41,14 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     let percent = line_percent.or(branch_percent);
 
     let coverage_config = context.policy.rust.coverage.as_ref();
-    let coverage_budget = coverage_config
-        .map(|config| {
-            json!({
-                "line_percent_warn": config.line_percent.map(|v| v.warn),
-                "line_percent_fail": config.line_percent.map(|v| v.fail),
-                "branch_percent_warn": config.branch_percent.map(|v| v.warn),
-                "branch_percent_fail": config.branch_percent.map(|v| v.fail),
-            })
-        })
-        .unwrap_or_else(|| json!({}));
+    let coverage_budget = CoverageBudget {
+        line_percent_warn: coverage_config.and_then(|config| config.line_percent.map(|v| v.warn)),
+        line_percent_fail: coverage_config.and_then(|config| config.line_percent.map(|v| v.fail)),
+        branch_percent_warn: coverage_config
+            .and_then(|config| config.branch_percent.map(|v| v.warn)),
+        branch_percent_fail: coverage_config
+            .and_then(|config| config.branch_percent.map(|v| v.fail)),
+    };
 
     let assessment = assess_coverage(raw_line_percent, raw_branch_percent, coverage_config);
     let metric_failure = coverage_metric_failure(

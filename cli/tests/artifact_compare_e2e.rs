@@ -1,6 +1,7 @@
 use ayni_core::{
-    Budget, CompletionScope, Offenders, RunArtifact, RunCompletion, Scope, SignalKind,
-    SignalResult, SignalRow, TestResult,
+    ArtifactToolVersion, Budget, CompletionScope, ExecutionMode, Offenders, RunArtifact,
+    RunArtifactMetadata, RunCompletion, Scope, SignalKind, SignalResult, SignalRow, TestBudget,
+    TestResult,
 };
 use std::fs;
 use std::process::Command;
@@ -27,9 +28,18 @@ fn artifact(pass: bool, passed: u64, failed: u64) -> String {
                 runner: String::from("fixture"),
                 failure: None,
             }),
-            budget: Budget::Test(serde_json::json!({})),
+            budget: Budget::Test(TestBudget::default()),
             offenders: Offenders::Test(Vec::new()),
         }],
+        metadata: RunArtifactMetadata {
+            execution_mode: ExecutionMode::Managed,
+            environment_lock_fingerprint: Some(format!("sha256:{}", "1".repeat(64))),
+            tool_versions: vec![ArtifactToolVersion {
+                tool: String::from("rust"),
+                version: String::from("1.93.0"),
+            }],
+            ..RunArtifactMetadata::default()
+        },
         ..RunArtifact::default()
     };
     serde_json::to_string(&artifact).expect("serialize artifact")

@@ -4,11 +4,11 @@ use ayni_adapters_common::exec::{format_command, run_command_for_context_structu
 use ayni_adapters_common::failure::coverage_metric_failure;
 use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
-    Budget, ConfiguredMetricEvaluation, CoverageOffender, CoveragePolicy, CoverageResult, Level,
-    Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, evaluate_configured_metric,
+    Budget, ConfiguredMetricEvaluation, CoverageBudget, CoverageOffender, CoveragePolicy,
+    CoverageResult, Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
+    evaluate_configured_metric,
 };
 use serde_json::Value as JsonValue;
-use serde_json::json;
 use std::fs;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
@@ -85,15 +85,13 @@ pub fn collect(context: &RunContext) -> CollectorResult {
 
     let coverage_config = context.policy.node.coverage.as_ref();
     let coverage_budget = coverage_config
-        .map(|config| {
-            json!({
-                "line_percent_warn": config.line_percent.map(|v| v.warn),
-                "line_percent_fail": config.line_percent.map(|v| v.fail),
-                "branch_percent_warn": config.branch_percent.map(|v| v.warn),
-                "branch_percent_fail": config.branch_percent.map(|v| v.fail),
-            })
+        .map(|config| CoverageBudget {
+            line_percent_warn: config.line_percent.map(|value| value.warn),
+            line_percent_fail: config.line_percent.map(|value| value.fail),
+            branch_percent_warn: config.branch_percent.map(|value| value.warn),
+            branch_percent_fail: config.branch_percent.map(|value| value.fail),
         })
-        .unwrap_or_else(|| json!({}));
+        .unwrap_or_default();
 
     let assessment = assess_coverage(
         raw_line_percent,

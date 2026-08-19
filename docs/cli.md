@@ -5,6 +5,7 @@ This document contains the help content for the `ayni` command-line program.
 **Command Overview:**
 
 * [`ayni`↴](#ayni)
+* [`ayni init`↴](#ayni-init)
 * [`ayni env`↴](#ayni-env)
 * [`ayni env show`↴](#ayni-env-show)
 * [`ayni env doctor`↴](#ayni-env-doctor)
@@ -14,7 +15,6 @@ This document contains the help content for the `ayni` command-line program.
 * [`ayni env run`↴](#ayni-env-run)
 * [`ayni contract`↴](#ayni-contract)
 * [`ayni contract show`↴](#ayni-contract-show)
-* [`ayni contract validate`↴](#ayni-contract-validate)
 * [`ayni verify`↴](#ayni-verify)
 * [`ayni verify list`↴](#ayni-verify-list)
 * [`ayni verify test`↴](#ayni-verify-test)
@@ -34,19 +34,36 @@ This document contains the help content for the `ayni` command-line program.
 
 ## `ayni`
 
-Correct environments, focused feedback, one definitive quality gate
+Reproducible environments, focused feedback, explicit completion evidence
 
 **Usage:** `ayni <COMMAND>`
 
 ###### **Subcommands:**
 
+* `init` — Preview or write a minimal policy from adapter-owned project discovery
 * `env` — Inspect and manage the repository code environment
-* `contract` — Inspect and validate the repository quality contract
+* `contract` — Inspect the repository quality contract
 * `verify` — Run focused signals or list exact commands from saved evidence
 * `impact` — Explain or run the checks affected by an explicit change
 * `check` — Run the complete repository quality contract
 * `agents` — Manage Ayni's agent instructions
 * `results` — Inspect and compare explicit local result files
+
+
+
+## `ayni init`
+
+Preview or write a minimal policy from adapter-owned project discovery
+
+**Usage:** `ayni init [OPTIONS]`
+
+###### **Options:**
+
+* `--repo-root <REPO_ROOT>` — Repository root to inspect and where `.ayni.toml` will be written
+
+  Default value: `.`
+* `--dry-run` — Print the proposed policy without writing it (the default behavior)
+* `--write` — Create `.ayni.toml`; refuses to overwrite an existing policy
 
 
 
@@ -184,46 +201,21 @@ Run an arbitrary command inside the managed environment
 
 ## `ayni contract`
 
-Inspect and validate the repository quality contract
+Inspect the repository quality contract
 
 **Usage:** `ayni contract <COMMAND>`
 
 ###### **Subcommands:**
 
-* `show` — Render the effective quality contract
-* `validate` — Validate the contract without discovery or tool execution
+* `show` — Render and validate the effective quality contract
 
 
 
 ## `ayni contract show`
 
-Render the effective quality contract
+Render and validate the effective quality contract
 
 **Usage:** `ayni contract show [OPTIONS]`
-
-###### **Options:**
-
-* `--config <CONFIG>`
-
-  Default value: `./.ayni.toml`
-* `--output <OUTPUT>`
-
-  Default value: `human`
-
-  Possible values:
-  - `human`:
-    Human-readable terminal output
-  - `json`:
-    One deterministic JSON document on stdout
-
-
-
-
-## `ayni contract validate`
-
-Validate the contract without discovery or tool execution
-
-**Usage:** `ayni contract validate [OPTIONS]`
 
 ###### **Options:**
 
@@ -251,7 +243,7 @@ Run focused signals or list exact commands from saved evidence
 
 ###### **Subcommands:**
 
-* `list` — List exact verification commands from a saved result artifact
+* `list` — List exact verification commands from a saved current-schema artifact
 * `test` — Run only the test signal
 * `coverage` — Run only the coverage signal
 * `size` — Run only the size signal
@@ -263,13 +255,13 @@ Run focused signals or list exact commands from saved evidence
 
 ## `ayni verify list`
 
-List exact verification commands from a saved result artifact
+List exact verification commands from a saved current-schema artifact
 
 **Usage:** `ayni verify list [OPTIONS]`
 
 ###### **Options:**
 
-* `--artifact <ARTIFACT>` — Saved schema-v3 result artifact to inspect
+* `--artifact <ARTIFACT>` — Saved schema-v4 result artifact to inspect
 
   Default value: `./.ayni/last/signals.json`
 

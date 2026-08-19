@@ -3,12 +3,11 @@ use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_adapters_common::paths::{resolve_repo_path, to_repo_relative_path};
 use ayni_core::{
-    Budget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope, SignalKind,
-    SignalResult, SignalRow,
+    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope,
+    SignalKind, SignalResult, SignalRow,
 };
 use glob::Pattern;
 use serde::Deserialize;
-use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -131,7 +130,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             violation_count: offenders.len() as u64,
             failure: None,
         }),
-        budget: Budget::Deps(json!({ "forbidden": rules })),
+        budget: Budget::Deps(DepsBudget {
+            forbidden: Some(rules),
+        }),
         offenders: Offenders::Deps(offenders),
     })
 }
@@ -153,9 +154,14 @@ fn error_row(context: &RunContext, failure: ayni_core::CommandFailure) -> Signal
             violation_count: 0,
             failure: Some(failure),
         }),
-        budget: Budget::Deps(
-            json!({ "forbidden": context.policy.go.deps.as_ref().map(|value| &value.forbidden) }),
-        ),
+        budget: Budget::Deps(DepsBudget {
+            forbidden: context
+                .policy
+                .go
+                .deps
+                .as_ref()
+                .map(|value| value.forbidden.clone()),
+        }),
         offenders: Offenders::Deps(Vec::new()),
     }
 }

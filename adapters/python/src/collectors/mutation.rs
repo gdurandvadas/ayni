@@ -5,11 +5,10 @@ use super::util::{
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::xml;
 use ayni_core::{
-    Budget, Language, Level, MutationOffender, MutationResult, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    Budget, Language, Level, MutationBudget, MutationOffender, MutationResult, Offenders,
+    RunContext, Scope, SignalKind, SignalResult, SignalRow,
 };
 use regex::Regex;
-use serde_json::json;
 use std::fs;
 use std::path::Path;
 
@@ -33,7 +32,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
                 score: None,
                 failure: None,
             }),
-            budget: Budget::Mutation(json!({"enabled": false})),
+            budget: Budget::Mutation(MutationBudget {
+                enabled: Some(false),
+            }),
             offenders: Offenders::Mutation(Vec::new()),
         });
     }
@@ -79,16 +80,23 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         CollectorError::Adapter(format!("failed to write {}: {error}", junit_path.display()))
     })?;
     let report = parse_junit_report(&junit_path).map_err(CollectorError::Adapter)?;
+    if report.tests == 0 {
+        return Ok(error_row(
+            context,
+            String::from("mutmut"),
+            ayni_adapters_common::failure::setup_failure(
+                context,
+                format_command(&junit_program, &junit_args),
+                "mutmut evaluated zero mutants",
+            ),
+        ));
+    }
     let survived = report.failures + report.errors;
     let killed = report
         .tests
         .saturating_sub(survived)
         .saturating_sub(report.skipped);
-    let score = if report.tests == 0 {
-        None
-    } else {
-        Some((killed as f64 / report.tests as f64) * 100.0)
-    };
+    let score = Some((killed as f64 / report.tests as f64) * 100.0);
 
     Ok(SignalRow {
         kind: SignalKind::Mutation,
@@ -108,7 +116,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             score,
             failure: None,
         }),
-        budget: Budget::Mutation(json!({"enabled": true})),
+        budget: Budget::Mutation(MutationBudget {
+            enabled: Some(true),
+        }),
         offenders: Offenders::Mutation(report.offenders),
     })
 }
@@ -136,7 +146,9 @@ fn error_row(
             score: None,
             failure: Some(failure),
         }),
-        budget: Budget::Mutation(json!({"enabled": true})),
+        budget: Budget::Mutation(MutationBudget {
+            enabled: Some(true),
+        }),
         offenders: Offenders::Mutation(Vec::new()),
     }
 }
@@ -167,7 +179,9 @@ fn parse_junit_xml(content: &str) -> Result<JunitReport, String> {
         .map_err(|error| format!("failed to compile skipped regex: {error}"))?;
 
     let mut report = JunitReport::default();
+    let mut saw_testsuite = false;
     for caps in testsuite_re.captures_iter(content) {
+        saw_testsuite = true;
         if let Some(attrs) = caps.get(1).map(|value| value.as_str()) {
             report.tests += xml::attr_u64(attrs, "tests").unwrap_or(0);
             report.failures += xml::attr_u64(attrs, "failures").unwrap_or(0);
@@ -206,7 +220,7 @@ fn parse_junit_xml(content: &str) -> Result<JunitReport, String> {
                 level: Level::Fail,
             });
         }
-        if skipped_re.is_match(body) {
+        if !saw_testsuite && skipped_re.is_match(body) {
             report.skipped += 1;
         }
     }
@@ -236,5 +250,18 @@ mod tests {
         assert_eq!(report.tests, 2);
         assert_eq!(report.failures, 1);
         assert_eq!(report.offenders.len(), 1);
+    }
+
+    #[test]
+    fn suite_skipped_count_is_not_double_counted_from_testcases() {
+        let report = parse_junit_xml(
+            r#"<testsuite tests="2" failures="0" errors="0" skipped="1">
+<testcase name="mutant 1"><skipped/></testcase>
+<testcase name="mutant 2"></testcase>
+</testsuite>"#,
+        )
+        .expect("report");
+        assert_eq!(report.tests, 2);
+        assert_eq!(report.skipped, 1);
     }
 }

@@ -9,12 +9,11 @@ use ayni_adapters_common::failure::{
 use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_adapters_common::xml::{attr_string, attr_u64};
 use ayni_core::{
-    Budget, ConfiguredMetricEvaluation, CoverageOffender, CoveragePolicy, CoverageResult, Language,
-    Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    evaluate_configured_metric,
+    Budget, ConfiguredMetricEvaluation, CoverageBudget, CoverageOffender, CoveragePolicy,
+    CoverageResult, Language, Level, Offenders, RunContext, Scope, SignalKind, SignalResult,
+    SignalRow, evaluate_configured_metric,
 };
 use regex::Regex;
-use serde_json::json;
 use std::fs;
 use std::path::Path;
 
@@ -49,16 +48,14 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     }
     let report = totals.finish();
     let coverage_config = context.policy.kotlin.coverage.as_ref();
-    let budget = coverage_config
-        .map(|config| {
-            json!({
-                "line_percent_warn": config.line_percent.map(|v| v.warn),
-                "line_percent_fail": config.line_percent.map(|v| v.fail),
-                "branch_percent_warn": config.branch_percent.map(|v| v.warn),
-                "branch_percent_fail": config.branch_percent.map(|v| v.fail),
-            })
-        })
-        .unwrap_or_else(|| json!({}));
+    let budget = CoverageBudget {
+        line_percent_warn: coverage_config.and_then(|config| config.line_percent.map(|v| v.warn)),
+        line_percent_fail: coverage_config.and_then(|config| config.line_percent.map(|v| v.fail)),
+        branch_percent_warn: coverage_config
+            .and_then(|config| config.branch_percent.map(|v| v.warn)),
+        branch_percent_fail: coverage_config
+            .and_then(|config| config.branch_percent.map(|v| v.fail)),
+    };
     let assessment = assess_coverage(
         report.raw_line_percent,
         report.raw_branch_percent,
@@ -156,7 +153,7 @@ fn error_row(
             status: String::from("error"),
             failure: Some(failure),
         }),
-        budget: Budget::Coverage(json!({})),
+        budget: Budget::Coverage(CoverageBudget::default()),
         offenders: Offenders::Coverage(Vec::new()),
     }
 }

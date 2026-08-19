@@ -3,11 +3,14 @@ layout: home
 
 hero:
   name: Ayni
-  text: Reproducible quality signals for every repository
-  tagline: Define what healthy means once, run it in a locked environment, and give humans and agents the same focused feedback.
+  text: Reproducible quality evidence for AI-edited repositories
+  tagline: Commit policy, run repository tools in a locked environment, and give humans and agents the same scoped evidence.
   actions:
     - theme: brand
       text: Get started
+      link: /getting-started/quickstart
+    - theme: alt
+      text: Installation
       link: /getting-started/installation
     - theme: alt
       text: How Ayni works
@@ -18,7 +21,7 @@ hero:
 
 features:
   - title: One quality contract
-    details: Version tests, coverage, size, complexity, dependency, and mutation policy in .ayni.toml.
+    details: Version a closed signal vocabulary in .ayni.toml, with truthful adapter-specific capability tiers.
     link: /product/config
   - title: Managed execution
     details: Resolve exact tools and dependencies into a committed lock and a local OCI image.
@@ -26,9 +29,9 @@ features:
   - title: Focused feedback
     details: Verify one signal or run only the quality work affected by an explicit change.
     link: /product/runtime
-  - title: Polyglot by design
-    details: Use the same quality model across Rust, Node, Go, Python, and Kotlin roots.
-    link: /getting-started/quickstart
+  - title: Truthful adapter tiers
+    details: Use one artifact vocabulary while seeing exactly which capabilities are supported, experimental, or unavailable.
+    link: /product/capabilities
 ---
 
 ## The core model
@@ -47,17 +50,20 @@ Ayni keeps these responsibilities separate and reviewable:
 
 Installing the CLI is separate from provisioning a repository environment. Ayni never silently creates a lock or rebuilds an image during a quality run.
 
-## Start in five commands
+## Start with a reviewable proposal
 
-After [installing Ayni](/getting-started/installation) and adding `.ayni.toml`:
+After [installing Ayni](/getting-started/installation):
 
 ```sh
-ayni contract validate
+ayni init --dry-run
+ayni init --write
 ayni env show
 ayni env lock
 ayni env build
 ayni check
 ```
+
+`init` proposes a minimal test-only policy from adapter-owned project discovery; it never guesses thresholds and `--write` refuses to overwrite existing policy.
 
 Commit `.ayni.toml`, `.ayni.lock`, and your native dependency/tool locks. Keep `.ayni/` and the generated OCI image local.
 
@@ -78,7 +84,7 @@ Then run the complete repository contract before integration:
 ayni check
 ```
 
-These commands use the managed environment directly. `ayni env run` and `ayni env shell` remain available for arbitrary development commands; they are not wrappers required by Ayni's quality commands.
+These commands use the managed environment directly. Optional, read-write `env run` and `env shell` access is documented only under [advanced development access](/product/environments#advanced-development-access).
 
 ## Supported language adapters
 
@@ -90,4 +96,4 @@ These commands use the managed environment directly. `ayni env run` and `ayni en
 | Python | uv projects and workspaces | [Python](/adapters/python) |
 | Kotlin | Supported Gradle projects and workspaces | [Kotlin](/adapters/kotlin) |
 
-Unsupported project variants fail explicitly instead of silently falling back to host tools. The `--host` option is an intentional escape hatch.
+Unsupported project variants fail explicitly instead of silently falling back to host tools. Signal depth also varies: consult the [adapter capability matrix](/product/capabilities). The `--host` option is labeled as an evaluation path and is not provenance-equivalent to managed evidence.

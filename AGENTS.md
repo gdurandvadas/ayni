@@ -23,7 +23,9 @@ decisions that are not visible in the code.
 - `docs/product/config.md` — `.ayni.toml` reference
 - `docs/product/environments.md` — managed environment lifecycle, lock, build, and execution contract
 - `docs/product/signals.md` — canonical signal vocabulary, schema selection, and compatibility posture
-- `docs/product/signals/v3.md` — current `0.3.0` serialized signal-artifact contract
+- `docs/product/capabilities.md` — adapter capability tiers and truthful signal availability
+- `docs/product/signals/v4.md` — current `0.4.0` serialized signal-artifact contract
+- `docs/product/signals/v3.md` — historical `0.3.0` serialized signal-artifact reference only
 - `docs/product/signals/v2.md` — historical `0.2.0` serialized signal-artifact reference only
 - `docs/product/signals/v1.md` — historical `0.1.0` serialized signal-artifact reference only
 - `docs/adapters/rust.md` — Rust adapter installation, signal coverage, and policy contract
@@ -96,23 +98,9 @@ cargo doc-cli > docs/cli.md
 <!-- AYNI:BEGIN -->
 ## Code quality guidance for AI agents
 
-When modifying this repository:
-
-- Preserve clear module boundaries.
-- Prefer small, testable units.
-- Keep CLI, core logic, command execution, and reporting separate.
-- Avoid adding network dependencies unless explicitly required.
-- Update tests when behavior changes.
-
-Discover Ayni commands using standard CLI help:
-
-- Run `ayni help` to list top-level commands.
-- Run `ayni help <command> [subcommand]` to explore nested commands.
-- Run `ayni <command> --help` for command-specific options.
-
 Treat `.ayni.toml` as the authoritative repository quality policy. Run
-`ayni contract show` for a concise view of its effective configured signal
-contract instead of reading the full policy file.
+`ayni contract show` for its validated effective summary, and inspect the
+policy itself before proposing a policy change.
 
 During an edit, use the narrowest supported `ayni verify <signal>`:
 
@@ -126,8 +114,12 @@ loop, run `ayni impact show --base <revision>` and then `ayni impact run`,
 copying the same explicit base. Impact success is not repository completion;
 run one unscoped `ayni check` at the caller's completion boundary.
 
-Treat incomplete artifacts as failure, and never loosen `.ayni.toml` merely
-to silence a finding.
+Run quality commands directly; never wrap them in `ayni env run`. Treat `env
+shell` and `env run` as intentional advanced access because they mount the
+checkout read-write and do not produce normalized quality evidence.
+
+Treat incomplete or missing required artifacts as failure, and never loosen
+`.ayni.toml` merely to silence a finding.
 
 Use the full repository analysis as the completion gate:
 
@@ -135,8 +127,9 @@ Use the full repository analysis as the completion gate:
 ayni check
 ```
 
-A non-zero exit code means at least one signal failed. Read
-`.ayni/last/signals.json` for detailed, typed signal results, including
-completion state and target accounting. For each finding, rerun its exact
-verification command and repair the listed offenders.
+A non-zero exit code means the quality contract was not satisfied: a signal
+may have failed, expected work may be incomplete, or setup may be invalid.
+Read `.ayni/last/signals.json` when present for typed completion and target
+accounting. For each finding, rerun its exact verification command and repair
+the listed offenders.
 <!-- AYNI:END -->

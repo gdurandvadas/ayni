@@ -1,12 +1,11 @@
 mod complexity;
 mod coverage;
 mod deps;
-mod mutation;
 mod size;
 mod test;
 mod util;
 
-use ayni_adapters_common::collector::{CollectorError, finish_collection};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult, finish_collection};
 use ayni_core::{
     AdapterError, Language, RunContext, SignalCollector, SignalKind, SignalRow,
     VerificationSelection,
@@ -34,19 +33,17 @@ impl SignalCollector for NodeCollector {
         }
     }
     fn collect(&self, kind: SignalKind, context: &RunContext) -> Result<SignalRow, AdapterError> {
-        finish_collection(
-            Language::Node,
-            kind,
-            context,
-            match kind {
-                SignalKind::Test => test::collect(context),
-                SignalKind::Coverage => coverage::collect(context),
-                SignalKind::Size => size::collect(context).map_err(CollectorError::Adapter),
-                SignalKind::Complexity => complexity::collect(context),
-                SignalKind::Deps => deps::collect(context).map_err(CollectorError::Adapter),
-                SignalKind::Mutation => mutation::collect(context),
-            },
-        )
+        let result: CollectorResult = match kind {
+            SignalKind::Test => test::collect(context),
+            SignalKind::Coverage => coverage::collect(context),
+            SignalKind::Size => size::collect(context).map_err(CollectorError::Adapter),
+            SignalKind::Complexity => complexity::collect(context),
+            SignalKind::Deps => deps::collect(context).map_err(CollectorError::Adapter),
+            SignalKind::Mutation => Err(CollectorError::Adapter(String::from(
+                "mutation is not supported for Node targets",
+            ))),
+        };
+        finish_collection(Language::Node, kind, context, result)
     }
 }
 
@@ -61,6 +58,39 @@ mod tests {
     #[test]
     fn controlled_timeout_child() {
         std::thread::sleep(Duration::from_secs(2));
+    }
+
+    #[test]
+    fn mutation_is_rejected_without_invoking_an_override() {
+        let policy: AyniPolicy = toml::from_str(
+            r#"
+[checks]
+mutation = true
+
+[languages]
+enabled = ["node"]
+
+[node.tooling.mutation]
+command = "this-command-must-not-run"
+"#,
+        )
+        .expect("policy");
+        let cwd = std::env::current_dir().expect("working directory");
+        let context = RunContext {
+            repo_root: cwd.clone(),
+            target_root: cwd.clone(),
+            workdir: cwd.clone(),
+            policy,
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("node", cwd, "test", 100),
+            debug: false,
+        };
+
+        let error = NodeCollector
+            .collect(SignalKind::Mutation, &context)
+            .expect_err("Node mutation must be rejected");
+        assert_eq!(error.language, Language::Node);
+        assert_eq!(error.message, "mutation is not supported for Node targets");
     }
 
     #[test]

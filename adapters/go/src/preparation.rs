@@ -54,13 +54,14 @@ impl DependencyPreparationCapability for GoDependencyPreparationCapability {
         let cache_environment = BTreeMap::from([
             ("GOMODCACHE".into(), "/home/ayni/.cache/go/pkg/mod".into()),
             ("GOCACHE".into(), "/home/ayni/.cache/go/build".into()),
+            ("GOFLAGS".into(), "-modcacherw".into()),
             ("GOPATH".into(), "/home/ayni/.cache/go".into()),
             ("GOTOOLCHAIN".into(), "local".into()),
             ("GOWORK".into(), "off".into()),
         ]);
         let mut execution_environment = cache_environment.clone();
         execution_environment.insert("GOPROXY".into(), "off".into());
-        execution_environment.insert("GOFLAGS".into(), "-mod=readonly".into());
+        execution_environment.insert("GOFLAGS".into(), "-mod=readonly -modcacherw".into());
         if target.workspace.is_some() {
             execution_environment.remove("GOWORK");
         }
@@ -151,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn plans_readonly_module_download_into_external_caches() {
+    fn plans_readonly_modules_in_removable_external_caches() {
         let repo = TempDir::new().expect("repo");
         fs::write(repo.path().join("go.mod"), "module example.com/fixture\n").expect("mod");
         fs::write(repo.path().join("go.sum"), "example v1 h1:x\n").expect("sum");
@@ -163,8 +164,16 @@ mod tests {
         .expect("plan");
         assert_eq!(plan.commands[0].args, ["mod", "download", "all"]);
         assert_eq!(
+            plan.commands[0].environment.get("GOFLAGS"),
+            Some(&"-modcacherw".into())
+        );
+        assert_eq!(
             plan.execution_environment.get("GOMODCACHE"),
             Some(&"/home/ayni/.cache/go/pkg/mod".into())
+        );
+        assert_eq!(
+            plan.execution_environment.get("GOFLAGS"),
+            Some(&"-mod=readonly -modcacherw".into())
         );
         assert!(plan.outputs.is_empty());
     }

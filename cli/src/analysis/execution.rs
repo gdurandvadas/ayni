@@ -37,13 +37,14 @@ pub(super) fn run_collect_with_ui(
     ctx: &ui::runner::ExecContext,
     planning: &AnalyzePlanning,
     scope: CompletionScope,
+    registry: Arc<AdapterRegistry>,
 ) -> Result<RunArtifact, String> {
     let concurrency = planning
         .targets
         .first()
         .map(|target| target.run_context.policy.concurrency.clone())
         .unwrap_or_default();
-    let rows = collect_targets_with_ui(ctx, &planning.targets, &concurrency)?;
+    let rows = collect_targets_with_ui(ctx, &planning.targets, &concurrency, registry)?;
     let (completion, rows) = reconcile(planning, scope, None, rows);
     Ok(RunArtifact {
         schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
@@ -58,12 +59,13 @@ fn collect_targets_with_ui(
     ctx: &ui::runner::ExecContext,
     targets: &[AnalyzeTarget],
     concurrency: &ConcurrencyPolicy,
+    registry: Arc<AdapterRegistry>,
 ) -> Result<Vec<SignalRow>, String> {
     if targets.is_empty() {
         return Ok(Vec::new());
     }
     if targets.len() == 1 || concurrency.amount <= 1 {
-        return collect_targets_serial(ctx, targets);
+        return collect_targets_serial(ctx, targets, &registry);
     }
 
     let indexed_targets = targets
@@ -83,7 +85,6 @@ fn collect_targets_with_ui(
                 .or_default()
                 .push((index, target));
         }
-        let registry = build_registry();
         let mut group_handles = Vec::new();
         for (language, jobs) in by_language {
             let ctx = ctx.clone();
@@ -96,8 +97,9 @@ fn collect_targets_with_ui(
             let worker_limit = adapter_cap.map_or(concurrency.amount, |cap| {
                 cap.clamp(1, concurrency.amount.max(1))
             });
+            let registry = Arc::clone(&registry);
             group_handles.push(thread::spawn(move || {
-                run_target_jobs(&ctx, jobs, worker_limit, result_slots)
+                run_target_jobs(&ctx, jobs, worker_limit, result_slots, registry)
             }));
         }
         for handle in group_handles {
@@ -111,6 +113,7 @@ fn collect_targets_with_ui(
             indexed_targets,
             concurrency.amount,
             Arc::clone(&result_slots),
+            registry,
         )?;
     }
 
@@ -120,10 +123,11 @@ fn collect_targets_with_ui(
 fn collect_targets_serial(
     ctx: &ui::runner::ExecContext,
     targets: &[AnalyzeTarget],
+    registry: &AdapterRegistry,
 ) -> Result<Vec<SignalRow>, String> {
     let mut rows = Vec::new();
     for target in targets {
-        rows.extend(collect_target_with_ui(ctx, target)?);
+        rows.extend(collect_target_with_ui(ctx, target, registry)?);
     }
     Ok(rows)
 }
@@ -131,8 +135,8 @@ fn collect_targets_serial(
 fn collect_target_with_ui(
     ctx: &ui::runner::ExecContext,
     target: &AnalyzeTarget,
+    registry: &AdapterRegistry,
 ) -> Result<Vec<SignalRow>, String> {
-    let registry = build_registry();
     let Some(adapter) = registry
         .adapters()
         .iter()
@@ -164,126 +168,15 @@ fn collect_target_with_ui(
                 rows.push(row);
             }
             Err(error) => {
-                tool.line(error.clone());
-                let row = failed_signal_row(target.language, kind, &target.run_context, error);
+                // Adapter, configuration, and parsing failures are not tool
+                // outcomes. Leave their planned row absent so reconciliation
+                // records incomplete collection evidence for this target.
+                tool.line(error.to_string());
                 tool.finished(ui::runner::ToolState::Failed);
-                rows.push(row);
             }
         }
     }
     Ok(rows)
-}
-
-pub(crate) fn failed_signal_row(
-    language: Language,
-    kind: SignalKind,
-    context: &RunContext,
-    message: String,
-) -> SignalRow {
-    let failure = CommandFailure {
-        category: failure_category_for_signal(kind).to_string(),
-        classification: String::from("adapter_error"),
-        command: signal_kind_slug(kind).to_string(),
-        cwd: context.execution.exec_cwd.display().to_string(),
-        exit_code: None,
-        message,
-    };
-    let scope = Scope {
-        workspace_root: context.scope.workspace_root.clone(),
-        path: context.scope.path.clone(),
-        package: context.scope.package.clone(),
-        file: context.scope.file.clone(),
-    };
-    let (result, budget, offenders) = match kind {
-        SignalKind::Test => (
-            SignalResult::Test(TestResult {
-                total_tests: 0,
-                passed: 0,
-                failed: 1,
-                duration_ms: None,
-                runner: String::from("test"),
-                failure: Some(failure),
-            }),
-            Budget::Test(serde_json::json!({})),
-            Offenders::Test(Vec::new()),
-        ),
-        SignalKind::Coverage => (
-            SignalResult::Coverage(CoverageResult {
-                percent: None,
-                line_percent: None,
-                branch_percent: None,
-                engine: String::from("coverage"),
-                status: String::from("error"),
-                failure: Some(failure),
-            }),
-            Budget::Coverage(serde_json::json!({})),
-            Offenders::Coverage(Vec::new()),
-        ),
-        SignalKind::Size => (
-            SignalResult::Size(SizeResult {
-                max_lines: 0,
-                total_files: 0,
-                warn_count: 0,
-                fail_count: 1,
-                failure: Some(failure),
-            }),
-            Budget::Size(serde_json::json!({})),
-            Offenders::Size(Vec::new()),
-        ),
-        SignalKind::Complexity => (
-            SignalResult::Complexity(ComplexityResult {
-                engine: String::from("complexity"),
-                method: String::from("unknown"),
-                measured_functions: 0,
-                max_fn_cyclomatic: 0.0,
-                max_fn_cognitive: None,
-                warn_count: 0,
-                fail_count: 1,
-                failure: Some(failure),
-            }),
-            Budget::Complexity(serde_json::json!({})),
-            Offenders::Complexity(Vec::new()),
-        ),
-        SignalKind::Deps => (
-            SignalResult::Deps(DepsResult {
-                crate_count: 0,
-                edge_count: 0,
-                violation_count: 1,
-                failure: Some(failure),
-            }),
-            Budget::Deps(serde_json::json!({})),
-            Offenders::Deps(Vec::new()),
-        ),
-        SignalKind::Mutation => (
-            SignalResult::Mutation(MutationResult {
-                engine: String::from("mutation"),
-                killed: 0,
-                survived: 0,
-                timeout: 0,
-                score: None,
-                failure: Some(failure),
-            }),
-            Budget::Mutation(serde_json::json!({})),
-            Offenders::Mutation(Vec::new()),
-        ),
-    };
-    SignalRow {
-        kind,
-        language,
-        scope,
-        pass: false,
-        result,
-        budget,
-        offenders,
-    }
-}
-
-fn failure_category_for_signal(kind: SignalKind) -> &'static str {
-    match kind {
-        SignalKind::Test | SignalKind::Coverage | SignalKind::Mutation => "repo_code_issue",
-        SignalKind::Complexity => "repo_setup_issue",
-        SignalKind::Size | SignalKind::Deps => "ayni_internal_issue",
-    }
 }
 
 fn signal_outcome_line(kind: SignalKind, row: &SignalRow) -> String {
@@ -308,12 +201,8 @@ fn signal_metrics(row: &SignalRow) -> String {
                 _ => None,
             };
             let measured = value.headline_percent();
-            let warn = budget
-                .and_then(|value| value.get("line_percent_warn"))
-                .and_then(|value| value.as_f64());
-            let fail = budget
-                .and_then(|value| value.get("line_percent_fail"))
-                .and_then(|value| value.as_f64());
+            let warn = budget.and_then(|value| value.line_percent_warn);
+            let fail = budget.and_then(|value| value.line_percent_fail);
             let delta_warn = measured.zip(warn).map(|(m, w)| m - w);
             let delta_fail = measured.zip(fail).map(|(m, f)| m - f);
             format!(
@@ -334,10 +223,12 @@ fn signal_metrics(row: &SignalRow) -> String {
                 Budget::Complexity(value) => Some(value),
                 _ => None,
             };
-            let cyclo_warn =
-                budget.and_then(|value| nested_budget_number(value, "fn_cyclomatic", "warn"));
-            let cyclo_fail =
-                budget.and_then(|value| nested_budget_number(value, "fn_cyclomatic", "fail"));
+            let cyclo_warn = budget
+                .and_then(|value| value.fn_cyclomatic.as_ref())
+                .map(|value| value.warn);
+            let cyclo_fail = budget
+                .and_then(|value| value.fn_cyclomatic.as_ref())
+                .map(|value| value.fail);
             format!(
                 "(max_cyclo:{}, warn:{}, fail:{}, funcs:{})",
                 fmt_number(value.max_fn_cyclomatic),
@@ -357,13 +248,6 @@ fn signal_metrics(row: &SignalRow) -> String {
             value.killed
         ),
     }
-}
-
-fn nested_budget_number(value: &serde_json::Value, key: &str, nested: &str) -> Option<f64> {
-    value
-        .get(key)
-        .and_then(|value| value.get(nested))
-        .and_then(|value| value.as_f64())
 }
 
 fn fmt_number(value: f64) -> String {
@@ -391,6 +275,7 @@ fn run_target_jobs(
     jobs: Vec<(usize, AnalyzeTarget)>,
     worker_limit: usize,
     result_slots: TargetResultSlots,
+    registry: Arc<AdapterRegistry>,
 ) -> Result<(), String> {
     if jobs.is_empty() {
         return Ok(());
@@ -407,6 +292,7 @@ fn run_target_jobs(
         let ctx = ctx.clone();
         let queue = Arc::clone(&queue);
         let result_slots = Arc::clone(&result_slots);
+        let registry = Arc::clone(&registry);
         handles.push(thread::spawn(move || -> Result<(), String> {
             loop {
                 if ctx.is_aborted() {
@@ -421,7 +307,7 @@ fn run_target_jobs(
                 let Some((index, target)) = next_job else {
                     break;
                 };
-                let result = collect_target_with_ui(&ctx, &target);
+                let result = collect_target_with_ui(&ctx, &target, &registry);
                 if result.is_err() {
                     ctx.abort();
                 }

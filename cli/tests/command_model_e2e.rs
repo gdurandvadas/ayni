@@ -32,7 +32,7 @@ fn managed_check_and_verify_require_a_lock_without_implicit_provisioning() {
 
 #[test]
 fn invalid_and_superseded_commands_use_cli_input_exit() {
-    for command in ["analyze", "install", "artifact", "init"] {
+    for command in ["analyze", "install", "artifact"] {
         let output = ayni().arg(command).output().expect("launch ayni");
         assert_eq!(output.status.code(), Some(2), "{command}");
         assert!(output.stdout.is_empty(), "{command}");
@@ -42,6 +42,18 @@ fn invalid_and_superseded_commands_use_cli_input_exit() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[test]
+fn contract_validate_is_not_publicly_available() {
+    let output = ayni()
+        .args(["contract", "validate"])
+        .output()
+        .expect("launch ayni");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
 }
 
 #[test]
