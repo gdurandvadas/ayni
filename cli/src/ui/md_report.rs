@@ -8,6 +8,13 @@ use crate::ui::report_view::{
     completion_state_label, signal_kind_label,
 };
 
+const PASS_IMAGE_URL: &str =
+    "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg";
+const WARN_IMAGE_URL: &str =
+    "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/warn.svg";
+const FAIL_IMAGE_URL: &str =
+    "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/fail.svg";
+
 fn push_heading(out: &mut String, scope: CompletionScope) {
     match scope {
         CompletionScope::Repository => out.push_str("# ayni check\n\n"),
@@ -151,8 +158,17 @@ fn longest_backtick_run(value: &str) -> usize {
 }
 
 fn row_status_badge(row: &SignalRow) -> String {
-    let label = ReportStatus::for_row(row).label().to_ascii_uppercase();
-    format!("**{label}**")
+    status_badge(ReportStatus::for_row(row))
+}
+
+fn status_badge(status: ReportStatus) -> String {
+    let label = status.label();
+    let image_url = match status {
+        ReportStatus::Pass => PASS_IMAGE_URL,
+        ReportStatus::Warn => WARN_IMAGE_URL,
+        ReportStatus::Fail => FAIL_IMAGE_URL,
+    };
+    format!(r#"<img src="{image_url}" alt="{label}" width="20" height="20"> {label}"#)
 }
 
 fn summarize_row(row: &SignalRow) -> String {
@@ -301,7 +317,8 @@ fn level_label(level: Level) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::build_markdown;
+    use super::{build_markdown, status_badge};
+    use crate::ui::report_view::ReportStatus;
     use ayni_core::{
         AYNI_SIGNAL_SCHEMA_VERSION, Budget, CommandFailure, CompletionIssue, CompletionScope,
         CompletionStage, CompletionState, CoverageBudget, CoverageOffender, CoverageResult,
@@ -347,8 +364,9 @@ mod tests {
         assert!(text.contains("# ayni check"));
         assert!(text.contains("## rust (workspace)"));
         assert!(text.contains("| # | Signal | Summary | Status |"));
-        assert!(text.contains("| **1** | **coverage** | `percent=41.0% status=ok` | **FAIL** |"));
-        assert!(!text.contains("raw.githubusercontent.com"));
+        assert!(text.contains(
+            r#"| **1** | **coverage** | `percent=41.0% status=ok` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/fail.svg" alt="fail" width="20" height="20"> fail |"#
+        ));
         assert!(text.contains("<details>\n<summary>Offenders</summary>\n\n"));
         assert!(text.contains("\ncoverage\n- "));
         assert!(text.contains("**FAIL** `src/lib.rs` 41.0%"));
@@ -421,7 +439,20 @@ mod tests {
 
         assert!(!text.contains("## Verification commands"));
         assert!(!text.contains(command));
-        assert!(!text.contains("raw.githubusercontent.com"));
+    }
+
+    #[test]
+    fn status_badges_use_the_matching_accessible_icon() {
+        for (status, asset, label) in [
+            (ReportStatus::Pass, "pass.svg", "pass"),
+            (ReportStatus::Warn, "warn.svg", "warn"),
+            (ReportStatus::Fail, "fail.svg", "fail"),
+        ] {
+            let badge = status_badge(status);
+            assert!(badge.contains(&format!("/assets/{asset}")));
+            assert!(badge.contains(&format!(r#"alt="{label}""#)));
+            assert!(badge.ends_with(label));
+        }
     }
 
     #[test]
