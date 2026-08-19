@@ -1,5 +1,6 @@
 use crate::image::image_plan_with_preparation;
 use crate::{BackendError, read_lock};
+use ayni_adapters_common::workspace::GENERATED_WORKSPACE_ENTRY_NAMES;
 use ayni_core::{
     ArtifactToolVersion, DependencyPreparationPlan, DockerAccess, EnvironmentCapabilities,
     EnvironmentLock, LockedTargetEnvironment, NetworkAccess, TargetIdentity,
@@ -12,54 +13,60 @@ use std::process::{Command, Stdio};
 
 pub const WORKSPACE: &str = "/workspace";
 const CHECKOUT_SOURCE: &str = "/opt/ayni/checkout";
-const MANAGED_WORKSPACE_INIT: &str = concat!(
-    "set -eu\n",
-    "archive_dir=$(mktemp -d /tmp/ayni-workspace.XXXXXX)\n",
-    "archive_fifo=$archive_dir/archive\n",
-    "mkfifo \"$archive_fifo\"\n",
-    "trap 'rm -rf \"$archive_dir\"' EXIT HUP INT TERM\n",
-    "(cd /opt/ayni/checkout; set --; ",
-    "for entry in ./* ./.[!.]* ./..?*; do ",
-    "if [ -e \"$entry\" ] || [ -L \"$entry\" ]; then set -- \"$@\" \"$entry\"; fi; ",
-    "done; ",
-    "if [ \"$#\" -eq 0 ]; then tar -cf - --files-from /dev/null; ",
-    "else tar --exclude='./.ayni' --exclude='./.git' ",
-    "--exclude='./node_modules' --exclude='*/node_modules' ",
-    "--exclude='./target' --exclude='*/target' ",
-    "--exclude='./.venv' --exclude='*/.venv' ",
-    "--exclude='./build' --exclude='*/build' ",
-    "--exclude='./coverage' --exclude='*/coverage' ",
-    "--exclude='./.gradle' --exclude='*/.gradle' ",
-    "--exclude='./.svelte-kit' --exclude='*/.svelte-kit' ",
-    "--exclude='./__pycache__' --exclude='*/__pycache__' -cf - \"$@\"; fi) ",
-    "> \"$archive_fifo\" &\n",
-    "producer=$!\n",
-    "consumer_status=0\n",
-    "(cd /workspace && tar -xf - --no-same-owner --no-same-permissions --no-overwrite-dir ",
-    "< \"$archive_fifo\") || consumer_status=$?\n",
-    "producer_status=0\n",
-    "wait \"$producer\" || producer_status=$?\n",
-    "rm -rf \"$archive_dir\"\n",
-    "trap - EXIT HUP INT TERM\n",
-    "[ \"$producer_status\" -eq 0 ]\n",
-    "[ \"$consumer_status\" -eq 0 ]\n",
-    "mount_count=$1\n",
-    "shift\n",
-    "mount_index=0\n",
-    "while [ \"$mount_index\" -lt \"$mount_count\" ]; do\n",
-    "destination=$1\n",
-    "shift\n",
-    "case \"$destination\" in /workspace/*) ;; *) exit 64;; esac\n",
-    "if [ -e \"$destination\" ] || [ -L \"$destination\" ]; then exit 64; fi\n",
-    "mkdir -p \"$(dirname \"$destination\")\"\n",
-    "source=/opt/ayni/prepared-$mount_index/${destination#/workspace/}\n",
-    "ln -s \"$source\" \"$destination\"\n",
-    "mount_index=$((mount_index + 1))\n",
-    "done\n",
-    "[ \"$1\" = -- ]\n",
-    "shift\n",
-    "exec /usr/local/bin/ayni \"$@\"",
-);
+
+fn managed_workspace_init() -> String {
+    let mut script = String::from(concat!(
+        "set -eu\n",
+        "archive_dir=$(mktemp -d /tmp/ayni-workspace.XXXXXX)\n",
+        "archive_fifo=$archive_dir/archive\n",
+        "mkfifo \"$archive_fifo\"\n",
+        "trap 'rm -rf \"$archive_dir\"' EXIT HUP INT TERM\n",
+        "(cd /opt/ayni/checkout; set --; ",
+        "for entry in ./* ./.[!.]* ./..?*; do ",
+        "if [ -e \"$entry\" ] || [ -L \"$entry\" ]; then set -- \"$@\" \"$entry\"; fi; ",
+        "done; ",
+        "if [ \"$#\" -eq 0 ]; then tar -cf - --files-from /dev/null; ",
+        "else tar "
+    ));
+    for name in GENERATED_WORKSPACE_ENTRY_NAMES {
+        script.push_str("--exclude='./");
+        script.push_str(name);
+        script.push_str("' --exclude='*/");
+        script.push_str(name);
+        script.push_str("' ");
+    }
+    script.push_str(concat!(
+        "-cf - \"$@\"; fi) ",
+        "> \"$archive_fifo\" &\n",
+        "producer=$!\n",
+        "consumer_status=0\n",
+        "(cd /workspace && tar -xf - --no-same-owner --no-same-permissions --no-overwrite-dir ",
+        "< \"$archive_fifo\") || consumer_status=$?\n",
+        "producer_status=0\n",
+        "wait \"$producer\" || producer_status=$?\n",
+        "rm -rf \"$archive_dir\"\n",
+        "trap - EXIT HUP INT TERM\n",
+        "[ \"$producer_status\" -eq 0 ]\n",
+        "[ \"$consumer_status\" -eq 0 ]\n",
+        "mount_count=$1\n",
+        "shift\n",
+        "mount_index=0\n",
+        "while [ \"$mount_index\" -lt \"$mount_count\" ]; do\n",
+        "destination=$1\n",
+        "shift\n",
+        "case \"$destination\" in /workspace/*) ;; *) exit 64;; esac\n",
+        "if [ -e \"$destination\" ] || [ -L \"$destination\" ]; then exit 64; fi\n",
+        "mkdir -p \"$(dirname \"$destination\")\"\n",
+        "source=/opt/ayni/prepared-$mount_index/${destination#/workspace/}\n",
+        "ln -s \"$source\" \"$destination\"\n",
+        "mount_index=$((mount_index + 1))\n",
+        "done\n",
+        "[ \"$1\" = -- ]\n",
+        "shift\n",
+        "exec /usr/local/bin/ayni \"$@\""
+    ));
+    script
+}
 
 mod engine;
 pub use engine::{
@@ -226,7 +233,7 @@ fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, 
         "/bin/sh".into(),
         request.image_tag.to_owned(),
         "-c".into(),
-        MANAGED_WORKSPACE_INIT.into(),
+        managed_workspace_init(),
         "ayni-managed-workspace".into(),
         workspace_mounts.len().to_string(),
     ]);
@@ -920,6 +927,7 @@ mod tests {
             tool_versions: "[]",
         })
         .expect("launch args");
+        let workspace_init = managed_workspace_init();
         assert!(args.windows(2).any(|pair| pair == ["--network", "none"]));
         assert!(
             args.windows(2)
@@ -943,7 +951,11 @@ mod tests {
             args.windows(2)
                 .any(|pair| pair == ["--entrypoint", "/bin/sh"])
         );
-        assert!(args.iter().any(|arg| arg == MANAGED_WORKSPACE_INIT));
+        assert!(args.iter().any(|arg| arg == &workspace_init));
+        for name in GENERATED_WORKSPACE_ENTRY_NAMES {
+            assert!(workspace_init.contains(&format!("--exclude='./{name}'")));
+            assert!(workspace_init.contains(&format!("--exclude='*/{name}'")));
+        }
         assert!(
             args.iter()
                 .any(|arg| arg == "AYNI_MANAGED_LOCK_FINGERPRINT=sha256:test")
@@ -982,7 +994,7 @@ mod tests {
         assert!(args.ends_with(&[
             "ayni-env:test".into(),
             "-c".into(),
-            MANAGED_WORKSPACE_INIT.into(),
+            workspace_init,
             "ayni-managed-workspace".into(),
             "1".into(),
             "/workspace/packages/member/node_modules".into(),

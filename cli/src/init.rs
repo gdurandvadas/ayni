@@ -44,12 +44,7 @@ fn init(repo_root: &Path, write: bool, registry: &AdapterRegistry) -> Result<Str
             } else {
                 discovery.analyzable_roots()
             };
-            let roots = minimal_roots(
-                candidate_roots
-                    .into_iter()
-                    .filter(|path| is_reviewable_source_root(path))
-                    .collect(),
-            );
+            let roots = minimal_roots(candidate_roots);
             let test_tools = adapter
                 .catalog()
                 .iter()
@@ -94,27 +89,6 @@ fn init(repo_root: &Path, write: bool, registry: &AdapterRegistry) -> Result<Str
         destination.display(),
         policy.trim_end()
     ))
-}
-
-fn is_reviewable_source_root(root: &str) -> bool {
-    root == "."
-        || !root.split('/').any(|component| {
-            matches!(
-                component,
-                ".ayni"
-                    | ".git"
-                    | "target"
-                    | "node_modules"
-                    | ".venv"
-                    | "venv"
-                    | ".gradle"
-                    | ".vitepress"
-                    | "build"
-                    | "dist"
-                    | "coverage"
-                    | "__pycache__"
-            )
-        })
 }
 
 fn minimal_roots(mut roots: Vec<String>) -> Vec<String> {
@@ -180,21 +154,13 @@ fn toml_string(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{init, is_reviewable_source_root, minimal_roots};
+    use super::{init, minimal_roots};
     use crate::registry::build_registry;
     use std::fs;
     use tempfile::TempDir;
 
     #[test]
-    fn generated_and_dependency_roots_are_never_proposed() {
-        assert!(is_reviewable_source_root("."));
-        assert!(is_reviewable_source_root("examples/rust/mono"));
-        assert!(!is_reviewable_source_root(
-            ".ayni/environment/cache/project"
-        ));
-        assert!(!is_reviewable_source_root("apps/web/node_modules/pkg"));
-        assert!(!is_reviewable_source_root("target/fixture"));
-        assert!(!is_reviewable_source_root("docs/.vitepress/cache/deps"));
+    fn nested_adapter_roots_are_minimized_without_cli_ecosystem_policy() {
         assert_eq!(
             minimal_roots(vec![
                 String::from("workspace/member"),

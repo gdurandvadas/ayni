@@ -6,11 +6,10 @@ use ayni_adapters_common::exec::{
 };
 use ayni_adapters_common::failure::{setup_failure, test_execution_incomplete};
 use ayni_core::{
-    Budget, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, TestFailure,
-    TestResult, VerificationSelection,
+    Budget, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, TestBudget,
+    TestFailure, TestResult, VerificationSelection,
 };
 use serde_json::Value as JsonValue;
-use serde_json::json;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
     let (output, runner) = if let Some((program, args, runner)) = test_override_command(context) {
@@ -126,7 +125,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             runner,
             failure,
         }),
-        budget: Budget::Test(json!({})),
+        budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(offenders),
     })
 }
@@ -253,7 +252,7 @@ fn build_row_from_output(
             runner,
             failure,
         }),
-        budget: Budget::Test(json!({})),
+        budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(offenders),
     })
 }

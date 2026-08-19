@@ -6,6 +6,7 @@ pub mod layout;
 pub mod md_report;
 pub mod progress_log;
 pub mod report;
+pub(crate) mod report_view;
 pub mod runner;
 
 pub const PASS_RGB: (u8, u8, u8) = (0x06, 0xd6, 0xa0);

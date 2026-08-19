@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Semantic version of the JSON `RunArtifact` contract (`schema_version` field).
-pub const AYNI_SIGNAL_SCHEMA_VERSION: &str = "0.3.0";
+pub const AYNI_SIGNAL_SCHEMA_VERSION: &str = "0.4.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -246,7 +246,7 @@ impl Default for RunCompletion {
     }
 }
 
-/// Schema-v3 artifact. Rows are canonical analysis results; completion separately
+/// Schema-v4 artifact. Rows are canonical analysis results; completion separately
 /// records whether every target emitted its complete requested row set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunArtifact {
@@ -272,19 +272,23 @@ impl Default for RunArtifact {
 }
 
 impl RunArtifact {
-    #[must_use]
+    /// Construct a staged artifact after validating provenance, completion, and
+    /// every row's closed signal payload. Finding commands are materialized by
+    /// the CLI before the artifact crosses a serialization boundary.
     pub fn new(
         metadata: RunArtifactMetadata,
         completion: RunCompletion,
         rows: Vec<SignalRow>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, String> {
+        let artifact = Self {
             schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
             metadata,
             completion,
             rows,
             findings: Vec::new(),
-        }
+        };
+        validate_staged_artifact(&artifact)?;
+        Ok(artifact)
     }
 
     #[must_use]
@@ -375,17 +379,7 @@ impl Serialize for RunArtifact {
     where
         S: serde::Serializer,
     {
-        if self.schema_version != AYNI_SIGNAL_SCHEMA_VERSION {
-            return Err(serde::ser::Error::custom(format!(
-                "unsupported artifact schema_version {}; expected {}",
-                self.schema_version, AYNI_SIGNAL_SCHEMA_VERSION
-            )));
-        }
-        validate_artifact_provenance(&self.metadata).map_err(serde::ser::Error::custom)?;
-        self.completion
-            .validate()
-            .map_err(serde::ser::Error::custom)?;
-        validate_row_completion_structure(self).map_err(serde::ser::Error::custom)?;
+        validate_serializable_artifact(self).map_err(serde::ser::Error::custom)?;
         RunArtifactSerialization::from(self).serialize(serializer)
     }
 }
@@ -519,12 +513,6 @@ struct RunArtifactWire {
     failure_summaries: Option<Vec<FailureSummary>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OffenderWireEncoding {
-    Legacy,
-    Finding,
-}
-
 struct ParsedArtifactRows {
     rows: Vec<SignalRow>,
     findings: Vec<Findings>,
@@ -534,19 +522,17 @@ impl ParsedArtifactRows {
     fn parse(row_values: Vec<serde_json::Value>) -> Result<Self, String> {
         let mut rows = Vec::with_capacity(row_values.len());
         let mut parsed_findings = Vec::with_capacity(row_values.len());
-        let mut encoding = None;
 
         for row_value in row_values {
-            let parsed = ParsedArtifactRow::parse(row_value, &mut encoding)?;
+            let parsed = ParsedArtifactRow::parse(row_value)?;
             rows.push(parsed.row);
-            if let Some(findings) = parsed.findings {
-                parsed_findings.push(findings);
-            }
+            parsed_findings.push(parsed.findings);
         }
 
-        let findings = match encoding {
-            Some(OffenderWireEncoding::Finding) => parsed_findings,
-            Some(OffenderWireEncoding::Legacy) | None => Vec::new(),
+        let findings = if parsed_findings.iter().all(Findings::is_empty) {
+            Vec::new()
+        } else {
+            parsed_findings
         };
         Ok(Self { rows, findings })
     }
@@ -554,50 +540,20 @@ impl ParsedArtifactRows {
 
 struct ParsedArtifactRow {
     row: SignalRow,
-    findings: Option<Findings>,
+    findings: Findings,
 }
 
 impl ParsedArtifactRow {
-    fn parse(
-        row_value: serde_json::Value,
-        observed_encoding: &mut Option<OffenderWireEncoding>,
-    ) -> Result<Self, String> {
+    fn parse(row_value: serde_json::Value) -> Result<Self, String> {
         let offenders = row_value
             .get("offenders")
             .ok_or_else(|| String::from("artifact row is missing offenders"))?;
-        let items = offenders
+        offenders
             .get("items")
             .and_then(serde_json::Value::as_array)
             .ok_or_else(|| String::from("artifact row offenders are invalid"))?;
-        let encoding = if items
-            .iter()
-            .any(|item| item.get("id").is_some() || item.get("verification").is_some())
-        {
-            OffenderWireEncoding::Finding
-        } else {
-            OffenderWireEncoding::Legacy
-        };
-
-        if !items.is_empty() {
-            match observed_encoding {
-                Some(observed) if *observed != encoding => {
-                    return Err(String::from(
-                        "artifact rows mix finding and legacy offender encodings",
-                    ));
-                }
-                Some(_) => {}
-                None => *observed_encoding = Some(encoding),
-            }
-        }
-
-        let findings = if encoding == OffenderWireEncoding::Finding || items.is_empty() {
-            Some(
-                serde_json::from_value::<Findings>(offenders.clone())
-                    .map_err(|error| error.to_string())?,
-            )
-        } else {
-            None
-        };
+        let findings = serde_json::from_value::<Findings>(offenders.clone())
+            .map_err(|error| format!("artifact offenders must be schema-v4 findings: {error}"))?;
         let row =
             serde_json::from_value::<SignalRow>(row_value).map_err(|error| error.to_string())?;
         Ok(Self { row, findings })
@@ -644,15 +600,7 @@ fn validate_deserialized_artifact(
     offender_summaries: Vec<OffenderSummary>,
     failure_summaries: Option<Vec<FailureSummary>>,
 ) -> Result<(), String> {
-    if artifact.schema_version != AYNI_SIGNAL_SCHEMA_VERSION {
-        return Err(format!(
-            "unsupported artifact schema_version {}; expected {}",
-            artifact.schema_version, AYNI_SIGNAL_SCHEMA_VERSION
-        ));
-    }
-    validate_artifact_provenance(&artifact.metadata)?;
-    artifact.completion.validate().map_err(String::from)?;
-    validate_row_completion_structure(artifact)?;
+    validate_serializable_artifact(artifact)?;
     if artifact.aggregate() != aggregate
         || artifact.applied_thresholds() != applied_thresholds
         || artifact.offender_summaries() != offender_summaries
@@ -661,6 +609,71 @@ fn validate_deserialized_artifact(
         return Err(String::from("artifact summaries must match canonical rows"));
     }
     Ok(())
+}
+
+fn validate_staged_artifact(artifact: &RunArtifact) -> Result<(), String> {
+    validate_artifact_schema(artifact)?;
+    validate_artifact_provenance(&artifact.metadata)?;
+    artifact.completion.validate().map_err(String::from)?;
+    validate_row_completion_structure(artifact)
+}
+
+fn validate_serializable_artifact(artifact: &RunArtifact) -> Result<(), String> {
+    validate_staged_artifact(artifact)?;
+    validate_artifact_findings(artifact)
+}
+
+fn validate_artifact_schema(artifact: &RunArtifact) -> Result<(), String> {
+    if artifact.schema_version != AYNI_SIGNAL_SCHEMA_VERSION {
+        Err(format!(
+            "unsupported artifact schema_version {}; expected {}",
+            artifact.schema_version, AYNI_SIGNAL_SCHEMA_VERSION
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_artifact_findings(artifact: &RunArtifact) -> Result<(), String> {
+    if artifact.findings.is_empty() {
+        if artifact
+            .rows
+            .iter()
+            .all(|row| offenders_are_empty(&row.offenders))
+        {
+            return Ok(());
+        }
+        return Err(String::from(
+            "artifact rows with offenders require one finding collection per row",
+        ));
+    }
+    if artifact.findings.len() != artifact.rows.len() {
+        return Err(String::from(
+            "artifact finding collections must align one-for-one with rows",
+        ));
+    }
+    for (row, findings) in artifact.rows.iter().zip(&artifact.findings) {
+        if findings.kind() != row.kind || !findings.matches_offenders(&row.offenders) {
+            return Err(String::from(
+                "artifact finding collection does not match its signal row",
+            ));
+        }
+        findings
+            .validate_wire()
+            .map_err(|error| format!("artifact finding metadata is invalid: {error}"))?;
+    }
+    Ok(())
+}
+
+fn offenders_are_empty(offenders: &Offenders) -> bool {
+    match offenders {
+        Offenders::Test(items) => items.is_empty(),
+        Offenders::Coverage(items) => items.is_empty(),
+        Offenders::Size(items) => items.is_empty(),
+        Offenders::Complexity(items) => items.is_empty(),
+        Offenders::Deps(items) => items.is_empty(),
+        Offenders::Mutation(items) => items.is_empty(),
+    }
 }
 
 fn validate_artifact_provenance(metadata: &RunArtifactMetadata) -> Result<(), String> {
@@ -685,6 +698,11 @@ fn validate_artifact_provenance(metadata: &RunArtifactMetadata) -> Result<(), St
             if !is_sha256_fingerprint(fingerprint) {
                 return Err(String::from(
                     "artifact environment_lock_fingerprint must be a SHA-256 fingerprint",
+                ));
+            }
+            if metadata.tool_versions.is_empty() {
+                return Err(String::from(
+                    "managed artifact must include locked tool versions",
                 ));
             }
         }
@@ -903,12 +921,78 @@ pub struct CommandFailure {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Budget {
-    Test(serde_json::Value),
-    Coverage(serde_json::Value),
-    Size(serde_json::Value),
-    Complexity(serde_json::Value),
-    Deps(serde_json::Value),
-    Mutation(serde_json::Value),
+    Test(TestBudget),
+    Coverage(CoverageBudget),
+    Size(SizeBudget),
+    Complexity(ComplexityBudget),
+    Deps(DepsBudget),
+    Mutation(MutationBudget),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct TestBudget {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageBudget {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_percent_warn: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_percent_fail: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_percent_warn: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_percent_fail: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SizeBudget {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<SizeBudgetRule>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warn: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fail: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SizeBudgetRule {
+    pub glob: String,
+    pub warn: u64,
+    pub fail: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ComplexityBudget {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fn_cyclomatic: Option<FloatThresholdBudget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fn_cognitive: Option<FloatThresholdBudget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FloatThresholdBudget {
+    pub warn: f64,
+    pub fail: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct DepsBudget {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forbidden: Option<BTreeMap<String, Vec<String>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct MutationBudget {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

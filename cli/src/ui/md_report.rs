@@ -1,16 +1,12 @@
-use std::collections::BTreeMap;
-
 use ayni_core::{
-    AggregateStatus, CommandFailure, CompletionScope, CompletionStage, CompletionState,
-    FailureSummary, Level, Offenders, RunArtifact, SignalResult, SignalRow,
+    AggregateStatus, CommandFailure, CompletionScope, FailureSummary, Level, Offenders,
+    RunArtifact, SignalResult, SignalRow,
 };
 
-const PASS_IMAGE_URL: &str =
-    "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/pass.svg";
-const WARN_IMAGE_URL: &str =
-    "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/warn.svg";
-const FAIL_IMAGE_URL: &str =
-    "https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/fail.svg";
+use crate::ui::report_view::{
+    ReportStatus, ReportView, completion_scope_label, completion_stage_label,
+    completion_state_label, signal_kind_label,
+};
 
 fn push_heading(out: &mut String, scope: CompletionScope) {
     match scope {
@@ -22,9 +18,8 @@ fn push_heading(out: &mut String, scope: CompletionScope) {
 }
 
 pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String {
+    let view = ReportView::new(artifact);
     let mut out = String::new();
-    let total = artifact.rows.len();
-    let passing = artifact.rows.iter().filter(|row| row.pass).count();
     let aggregate = match artifact.aggregate().status {
         AggregateStatus::Pass => "pass",
         AggregateStatus::Fail => "fail",
@@ -32,7 +27,7 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
     push_heading(&mut out, artifact.completion.scope);
     out.push_str(&format!(
         "**{}** / **{}** checks passing · aggregate **{}** · schema `{}`\n\n",
-        passing, total, aggregate, artifact.schema_version
+        view.passing, view.total, aggregate, artifact.schema_version
     ));
     out.push_str(&format!(
         "**Completion:** scope `{}` · state **{}** · targets **{}** / **{}** completed · **{}** detected · **{}** skipped\n\n",
@@ -57,43 +52,35 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
         out.push('\n');
     }
 
-    let mut grouped = BTreeMap::<String, Vec<&SignalRow>>::new();
-    for row in &artifact.rows {
-        let root = row.scope.path.as_deref().unwrap_or(".");
-        grouped
-            .entry(format!("{}:{}", row.language.as_str(), root))
-            .or_default()
-            .push(row);
-    }
-
-    for (group, rows) in grouped {
-        let mut parts = group.splitn(2, ':');
-        let language = parts.next().unwrap_or("unknown");
-        let root = parts.next().unwrap_or(".");
-        let root_label = if root == "." { "workspace" } else { root };
-        let group_pass = rows.iter().filter(|row| row.pass).count();
+    for group in &view.groups {
+        let root_label = if group.root == "." {
+            "workspace"
+        } else {
+            group.root.as_str()
+        };
         out.push_str(&format!(
             "## {} ({}) — {}/{} passing\n\n",
-            language,
+            group.language.as_str(),
             root_label,
-            group_pass,
-            rows.len()
+            group.passing,
+            group.rows.len()
         ));
 
         out.push_str("| # | Signal | Summary | Status |\n");
         out.push_str("|---|--------|---------|--------|\n");
-        for (index, row) in rows.iter().enumerate() {
+        for (index, row) in group.rows.iter().enumerate() {
             out.push_str(&format!(
                 "| **{}** | **{}** | `{}` | {} |\n",
                 index + 1,
-                signal_kind_label(row),
+                signal_kind_label(row.kind),
                 summarize_row(row),
                 row_status_badge(row),
             ));
         }
         out.push('\n');
 
-        let offenders: Vec<(&SignalRow, Vec<String>)> = rows
+        let offenders: Vec<(&SignalRow, Vec<String>)> = group
+            .rows
             .iter()
             .map(|row| (*row, offender_lines(row, offenders_limit)))
             .filter(|(_, lines)| !lines.is_empty())
@@ -101,7 +88,7 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
         if !offenders.is_empty() {
             out.push_str("<details>\n<summary>Offenders</summary>\n\n");
             for (row, lines) in offenders {
-                out.push_str(&format!("{}\n", signal_kind_label(row)));
+                out.push_str(&format!("{}\n", signal_kind_label(row.kind)));
                 for line in lines {
                     out.push_str(&format!("- {line}\n"));
                 }
@@ -110,32 +97,16 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
             out.push_str("</details>\n\n");
         }
     }
+    if !view.commands.is_empty() {
+        out.push_str("## Verification commands\n\n");
+        out.push_str("Run the exact command supplied by each finding:\n\n");
+        for command in view.commands {
+            out.push_str(&markdown_code_block_with_language(command, "sh"));
+            out.push_str("\n\n");
+        }
+    }
     render_failures(&mut out, artifact.failure_summaries());
     out
-}
-
-fn completion_scope_label(scope: CompletionScope) -> &'static str {
-    match scope {
-        CompletionScope::Repository => "repository",
-        CompletionScope::Requested => "requested",
-    }
-}
-
-fn completion_state_label(state: CompletionState) -> &'static str {
-    match state {
-        CompletionState::Complete => "complete",
-        CompletionState::Incomplete => "incomplete",
-    }
-}
-
-fn completion_stage_label(stage: CompletionStage) -> &'static str {
-    match stage {
-        CompletionStage::Detection => "detection",
-        CompletionStage::Resolution => "resolution",
-        CompletionStage::Selection => "selection",
-        CompletionStage::Scheduling => "scheduling",
-        CompletionStage::Collection => "collection",
-    }
 }
 
 fn render_failures(out: &mut String, failures: Option<Vec<FailureSummary>>) {
@@ -147,7 +118,7 @@ fn render_failures(out: &mut String, failures: Option<Vec<FailureSummary>>) {
     for failure in failures {
         out.push_str(&format!(
             "### {} ({})\n\n",
-            signal_kind_label_from_summary(&failure),
+            signal_kind_label(failure.kind),
             failure.language.as_str(),
         ));
         markdown_failure_field(out, "Category", &failure.category);
@@ -161,17 +132,6 @@ fn render_failures(out: &mut String, failures: Option<Vec<FailureSummary>>) {
     }
 }
 
-fn signal_kind_label_from_summary(failure: &FailureSummary) -> &'static str {
-    match failure.kind {
-        ayni_core::SignalKind::Test => "test",
-        ayni_core::SignalKind::Coverage => "coverage",
-        ayni_core::SignalKind::Size => "size",
-        ayni_core::SignalKind::Complexity => "complexity",
-        ayni_core::SignalKind::Deps => "deps",
-        ayni_core::SignalKind::Mutation => "mutation",
-    }
-}
-
 fn markdown_failure_field(out: &mut String, label: &str, value: &str) {
     out.push_str(&format!(
         "**{label}:**\n\n{}\n\n",
@@ -180,10 +140,14 @@ fn markdown_failure_field(out: &mut String, label: &str, value: &str) {
 }
 
 fn markdown_code_block(value: &str) -> String {
+    markdown_code_block_with_language(value, "text")
+}
+
+fn markdown_code_block_with_language(value: &str, language: &str) -> String {
     let fence = "`"
         .repeat(longest_backtick_run(value) + 1)
         .max("```".to_string());
-    format!("{fence}text\n{value}\n{fence}")
+    format!("{fence}{language}\n{value}\n{fence}")
 }
 
 fn longest_backtick_run(value: &str) -> usize {
@@ -194,36 +158,9 @@ fn longest_backtick_run(value: &str) -> usize {
         .unwrap_or(0)
 }
 
-fn row_status_label(row: &SignalRow) -> &'static str {
-    if !row.pass {
-        "fail"
-    } else if has_warn_offenders(&row.offenders) {
-        "warn"
-    } else {
-        "pass"
-    }
-}
-
 fn row_status_badge(row: &SignalRow) -> String {
-    let label = row_status_label(row);
-    let image_url = match label {
-        "pass" => PASS_IMAGE_URL,
-        "warn" => WARN_IMAGE_URL,
-        "fail" => FAIL_IMAGE_URL,
-        _ => unreachable!("row_status_label returns a closed set"),
-    };
-    format!(r#"<img src="{image_url}" alt="{label}" width="20" height="20"> {label}"#)
-}
-
-fn signal_kind_label(row: &SignalRow) -> &'static str {
-    match row.result {
-        SignalResult::Test(_) => "test",
-        SignalResult::Coverage(_) => "coverage",
-        SignalResult::Size(_) => "size",
-        SignalResult::Complexity(_) => "complexity",
-        SignalResult::Deps(_) => "deps",
-        SignalResult::Mutation(_) => "mutation",
-    }
+    let label = ReportStatus::for_row(row).label().to_ascii_uppercase();
+    format!("**{label}**")
 }
 
 fn summarize_row(row: &SignalRow) -> String {
@@ -370,27 +307,16 @@ fn level_label(level: Level) -> &'static str {
     }
 }
 
-fn has_warn_offenders(offenders: &Offenders) -> bool {
-    match offenders {
-        Offenders::Coverage(items) => items.iter().any(|item| item.level == Level::Warn),
-        Offenders::Size(items) => items.iter().any(|item| item.level == Level::Warn),
-        Offenders::Complexity(items) => items.iter().any(|item| item.level == Level::Warn),
-        Offenders::Deps(items) => items.iter().any(|item| item.level == Level::Warn),
-        Offenders::Mutation(items) => items.iter().any(|item| item.level == Level::Warn),
-        Offenders::Test(_) => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::build_markdown;
     use ayni_core::{
         AYNI_SIGNAL_SCHEMA_VERSION, Budget, CommandFailure, CompletionIssue, CompletionScope,
-        CompletionStage, CompletionState, CoverageOffender, CoverageResult, DepsResult, Language,
-        Level, Offenders, RunArtifact, RunCompletion, Scope, SignalKind, SignalResult, SignalRow,
-        SizeResult, TestFailure, TestResult,
+        CompletionStage, CompletionState, CoverageBudget, CoverageOffender, CoverageResult,
+        DepsBudget, DepsResult, Finding, FindingMetadata, Findings, Language, Level, Offenders,
+        RunArtifact, RunCompletion, Scope, SignalKind, SignalResult, SignalRow, SizeBudget,
+        SizeOffender, SizeResult, TestBudget, TestFailure, TestResult, VerificationMetadata,
     };
-    use serde_json::json;
 
     #[test]
     fn build_markdown_renders_grouped_table() {
@@ -412,7 +338,10 @@ mod tests {
                     status: String::from("ok"),
                     failure: None,
                 }),
-                budget: Budget::Coverage(json!({"line_percent_fail": 50.0})),
+                budget: Budget::Coverage(CoverageBudget {
+                    line_percent_fail: Some(50.0),
+                    ..CoverageBudget::default()
+                }),
                 offenders: Offenders::Coverage(vec![CoverageOffender {
                     file: String::from("src/lib.rs"),
                     line: Some(10),
@@ -426,9 +355,8 @@ mod tests {
         assert!(text.contains("# ayni check"));
         assert!(text.contains("## rust (workspace)"));
         assert!(text.contains("| # | Signal | Summary | Status |"));
-        assert!(text.contains(
-            r#"| **1** | **coverage** | `percent=41.0% status=ok` | <img src="https://raw.githubusercontent.com/gdurandvadas/ayni/refs/heads/main/assets/fail.svg" alt="fail" width="20" height="20"> fail |"#
-        ));
+        assert!(text.contains("| **1** | **coverage** | `percent=41.0% status=ok` | **FAIL** |"));
+        assert!(!text.contains("raw.githubusercontent.com"));
         assert!(text.contains("<details>\n<summary>Offenders</summary>\n\n"));
         assert!(text.contains("\ncoverage\n- "));
         assert!(text.contains("**FAIL** `src/lib.rs` 41.0%"));
@@ -468,6 +396,44 @@ mod tests {
     }
 
     #[test]
+    fn build_markdown_surfaces_stable_deduplicated_verification_commands() {
+        let finding = |id_character: char, command: &str| Finding {
+            metadata: FindingMetadata {
+                id: format!(
+                    "ayni:finding:v1:sha256:{}",
+                    id_character.to_string().repeat(64)
+                ),
+                verification: VerificationMetadata {
+                    target: None,
+                    command: Some(command.to_string()),
+                },
+            },
+            offender: SizeOffender {
+                file: String::from("src/lib.rs"),
+                value: 10,
+                warn: 5,
+                fail: 9,
+                level: Level::Fail,
+            },
+        };
+        let command = "ayni verify size --file 'src/lib.rs'";
+        let artifact = RunArtifact {
+            findings: vec![Findings::Size(vec![
+                finding('a', command),
+                finding('b', command),
+            ])],
+            ..RunArtifact::default()
+        };
+
+        let text = build_markdown(&artifact, 2);
+
+        assert!(text.contains("## Verification commands\n\n"));
+        assert!(text.contains(&format!("```sh\n{command}\n```")));
+        assert_eq!(text.matches(command).count(), 1);
+        assert!(!text.contains("raw.githubusercontent.com"));
+    }
+
+    #[test]
     fn build_markdown_renders_all_failures_without_truncating_them() {
         let artifact = RunArtifact {
             schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
@@ -495,7 +461,7 @@ mod tests {
                             message: String::from("failed *badly*\n```"),
                         }),
                     }),
-                    budget: Budget::Test(json!({})),
+                    budget: Budget::Test(TestBudget::default()),
                     offenders: Offenders::Test(vec![
                         TestFailure {
                             file: None,
@@ -531,7 +497,7 @@ mod tests {
                             message: String::from("timed out"),
                         }),
                     }),
-                    budget: Budget::Coverage(json!({})),
+                    budget: Budget::Coverage(CoverageBudget::default()),
                     offenders: Offenders::Coverage(Vec::new()),
                 },
             ],
@@ -588,7 +554,7 @@ mod tests {
                         fail_count: 1,
                         failure: Some(failure("size", Some(17))),
                     }),
-                    budget: Budget::Size(json!({})),
+                    budget: Budget::Size(SizeBudget::default()),
                     offenders: Offenders::Size(Vec::new()),
                 },
                 SignalRow {
@@ -602,7 +568,7 @@ mod tests {
                         violation_count: 1,
                         failure: Some(failure("deps", None)),
                     }),
-                    budget: Budget::Deps(json!({})),
+                    budget: Budget::Deps(DepsBudget::default()),
                     offenders: Offenders::Deps(Vec::new()),
                 },
             ],

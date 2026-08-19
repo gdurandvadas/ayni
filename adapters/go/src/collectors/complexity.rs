@@ -3,11 +3,10 @@ use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_adapters_common::paths::{resolve_repo_path, to_repo_relative_path};
 use ayni_core::{
-    Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow, classify_maximum,
+    Budget, ComplexityBudget, ComplexityOffender, ComplexityResult, FloatThresholdBudget, Language,
+    Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use regex::Regex;
-use serde_json::json;
 use std::path::Path;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
@@ -95,17 +94,16 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             .then_with(|| left.line.cmp(&right.line))
     });
 
-    let mut budget = json!({
-        "fn_cyclomatic": {"warn": cyclomatic.warn, "fail": cyclomatic.fail}
-    });
-    if let Some(cognitive) = config.fn_cognitive
-        && let Some(map) = budget.as_object_mut()
-    {
-        map.insert(
-            String::from("fn_cognitive"),
-            json!({"warn": cognitive.warn, "fail": cognitive.fail}),
-        );
-    }
+    let budget = ComplexityBudget {
+        fn_cyclomatic: Some(FloatThresholdBudget {
+            warn: cyclomatic.warn,
+            fail: cyclomatic.fail,
+        }),
+        fn_cognitive: config.fn_cognitive.map(|threshold| FloatThresholdBudget {
+            warn: threshold.warn,
+            fail: threshold.fail,
+        }),
+    };
 
     Ok(SignalRow {
         kind: SignalKind::Complexity,

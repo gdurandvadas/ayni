@@ -159,9 +159,81 @@ impl Findings {
             Self::Mutation(items) => commands!(items),
         }
     }
+
+    pub(crate) fn validate_wire(&self) -> Result<(), FindingError> {
+        let mut ids = HashSet::new();
+        macro_rules! validate_items {
+            ($items:expr) => {
+                for finding in $items {
+                    finding.metadata.validate()?;
+                    if finding.metadata.verification.target.is_some()
+                        || finding.metadata.verification.command.is_none()
+                    {
+                        return Err(FindingError::InvalidVerificationTarget(
+                            "serialized findings must contain a rendered verification command",
+                        ));
+                    }
+                    if !ids.insert(finding.metadata.id.as_str()) {
+                        return Err(FindingError::InvalidIdentity(finding.metadata.id.clone()));
+                    }
+                }
+            };
+        }
+        match self {
+            Self::Test(items) => validate_items!(items),
+            Self::Coverage(items) => validate_items!(items),
+            Self::Size(items) => validate_items!(items),
+            Self::Complexity(items) => validate_items!(items),
+            Self::Deps(items) => validate_items!(items),
+            Self::Mutation(items) => validate_items!(items),
+        }
+        Ok(())
+    }
+
+    pub(crate) fn matches_offenders(&self, offenders: &Offenders) -> bool {
+        match (self, offenders) {
+            (Self::Test(findings), Offenders::Test(offenders)) => findings
+                .iter()
+                .map(|finding| &finding.offender)
+                .eq(offenders),
+            (Self::Coverage(findings), Offenders::Coverage(offenders)) => findings
+                .iter()
+                .map(|finding| &finding.offender)
+                .eq(offenders),
+            (Self::Size(findings), Offenders::Size(offenders)) => findings
+                .iter()
+                .map(|finding| &finding.offender)
+                .eq(offenders),
+            (Self::Complexity(findings), Offenders::Complexity(offenders)) => findings
+                .iter()
+                .map(|finding| &finding.offender)
+                .eq(offenders),
+            (Self::Deps(findings), Offenders::Deps(offenders)) => findings
+                .iter()
+                .map(|finding| &finding.offender)
+                .eq(offenders),
+            (Self::Mutation(findings), Offenders::Mutation(offenders)) => findings
+                .iter()
+                .map(|finding| &finding.offender)
+                .eq(offenders),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        match self {
+            Self::Test(items) => items.is_empty(),
+            Self::Coverage(items) => items.is_empty(),
+            Self::Size(items) => items.is_empty(),
+            Self::Complexity(items) => items.is_empty(),
+            Self::Deps(items) => items.is_empty(),
+            Self::Mutation(items) => items.is_empty(),
+        }
+    }
+
     /// Replace staged adapter targets with final CLI-rendered commands before
     /// writing an artifact. The target is consumed so it cannot leak onto the
-    /// public schema-v3 wire shape.
+    /// public artifact wire shape.
     pub fn render_commands<F>(&mut self, mut render: F) -> Result<(), FindingError>
     where
         F: FnMut(&VerificationTarget) -> Result<String, FindingError>,

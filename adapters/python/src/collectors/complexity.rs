@@ -4,10 +4,10 @@ use super::util::{
 };
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_core::{
-    Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow, classify_maximum,
+    Budget, ComplexityBudget, ComplexityOffender, ComplexityResult, FloatThresholdBudget, Language,
+    Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, classify_maximum,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -119,9 +119,13 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             warn_count,
             fail_count,
         }),
-        budget: Budget::Complexity(json!({
-            "fn_cognitive": {"warn": cognitive.warn, "fail": cognitive.fail}
-        })),
+        budget: Budget::Complexity(ComplexityBudget {
+            fn_cyclomatic: None,
+            fn_cognitive: Some(FloatThresholdBudget {
+                warn: cognitive.warn,
+                fail: cognitive.fail,
+            }),
+        }),
         offenders: Offenders::Complexity(offenders),
     })
 }
@@ -179,7 +183,7 @@ fn error_row(
             fail_count: 1,
             failure: Some(failure),
         }),
-        budget: Budget::Complexity(json!({})),
+        budget: Budget::Complexity(ComplexityBudget::default()),
         offenders: Offenders::Complexity(Vec::new()),
     }
 }

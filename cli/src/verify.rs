@@ -77,6 +77,7 @@ fn plan_verification(
         request.file.clone(),
         Some(selected_language),
         request.debug,
+        &registry,
     )?;
     retain_selected_targets(&mut planning, &selected);
     Ok((registry, planning))
@@ -95,7 +96,7 @@ fn build_verification_artifact(
         Some(request.kind),
         rows,
     );
-    Ok(RunArtifact::new(
+    RunArtifact::new(
         build_artifact_metadata_for_command(
             &request.config_path,
             workspace_root,
@@ -105,7 +106,7 @@ fn build_verification_artifact(
         )?,
         completion,
         rows,
-    ))
+    )
 }
 
 fn persist_and_emit_verification(

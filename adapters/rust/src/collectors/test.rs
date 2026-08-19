@@ -3,9 +3,8 @@ use ayni_adapters_common::exec::{format_command, run_command_for_context_streami
 use ayni_adapters_common::failure::test_execution_incomplete;
 use ayni_core::{
     Budget, CommandFailure, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult, VerificationSelection,
+    TestBudget, TestFailure, TestResult, VerificationSelection,
 };
-use serde_json::json;
 
 const STDERR_TAIL_LINES: usize = 20;
 
@@ -133,7 +132,7 @@ fn build_test_row(
                 message: stderr_tail(stderr, STDERR_TAIL_LINES),
             }),
         }),
-        budget: Budget::Test(json!({})),
+        budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(offenders),
     }
 }

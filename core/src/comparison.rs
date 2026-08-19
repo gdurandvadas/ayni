@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Version of the deterministic two-artifact comparison document.
 pub const ARTIFACT_COMPARISON_SCHEMA_VERSION: &str = "0.1.0";
 
-/// The stable row identity used when comparing complete schema-v3 artifacts.
+/// The stable row identity used when comparing complete schema-v4 artifacts.
 /// Checkout-specific workspace roots are deliberately excluded.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SignalRowKey {
@@ -113,6 +113,10 @@ pub enum ArtifactComparisonError {
         before: String,
         after: String,
     },
+    UncomparableProvenance {
+        side: &'static str,
+        reason: String,
+    },
     InvalidArtifact {
         side: &'static str,
         reason: String,
@@ -137,6 +141,9 @@ impl std::fmt::Display for ArtifactComparisonError {
                 formatter,
                 "artifact provenance is incompatible for {field}: before={before}, after={after}"
             ),
+            Self::UncomparableProvenance { side, reason } => {
+                write!(formatter, "{side} artifact cannot be compared: {reason}")
+            }
             Self::InvalidArtifact { side, reason } => {
                 write!(formatter, "{side} artifact is invalid: {reason}")
             }
@@ -146,7 +153,7 @@ impl std::fmt::Display for ArtifactComparisonError {
 
 impl std::error::Error for ArtifactComparisonError {}
 
-/// Compare two validated, complete schema-v3 artifacts. Metadata outside row
+/// Compare two validated, complete schema-v4 artifacts. Metadata outside row
 /// identity and row measurements (including roots, timestamps, output mode and
 /// any repository state) cannot affect this result.
 pub fn compare_artifacts(
@@ -196,11 +203,28 @@ fn validate_compatible_provenance(
     before: &RunArtifact,
     after: &RunArtifact,
 ) -> Result<(), ArtifactComparisonError> {
+    if before.metadata.execution_mode != after.metadata.execution_mode {
+        return Err(ArtifactComparisonError::IncompatibleProvenance {
+            field: "execution_mode",
+            before: format!("{:?}", before.metadata.execution_mode),
+            after: format!("{:?}", after.metadata.execution_mode),
+        });
+    }
+    for (side, artifact) in [("before", before), ("after", after)] {
+        if artifact.metadata.execution_mode == crate::ExecutionMode::Host {
+            return Err(ArtifactComparisonError::UncomparableProvenance {
+                side,
+                reason: String::from(
+                    "host execution does not lock tool versions; compare managed artifacts",
+                ),
+            });
+        }
+    }
     let pairs = [
         (
-            "execution_mode",
-            format!("{:?}", before.metadata.execution_mode),
-            format!("{:?}", after.metadata.execution_mode),
+            "ayni_version",
+            before.metadata.ayni_version.clone(),
+            after.metadata.ayni_version.clone(),
         ),
         (
             "contract_digest",
@@ -332,7 +356,7 @@ fn validate_row(
     if let Some(findings) = artifact.findings.get(index) {
         if findings.kind() != row.kind
             || findings.ids().len() != offender_count
-            || !findings_match_offenders(findings, &row.offenders)
+            || !findings.matches_offenders(&row.offenders)
         {
             return invalid(side, "finding collection does not match its row");
         }
@@ -490,36 +514,6 @@ fn offender_count(offenders: &Offenders) -> usize {
         Offenders::Complexity(items) => items.len(),
         Offenders::Deps(items) => items.len(),
         Offenders::Mutation(items) => items.len(),
-    }
-}
-
-fn findings_match_offenders(findings: &crate::Findings, offenders: &Offenders) -> bool {
-    match (findings, offenders) {
-        (crate::Findings::Test(findings), Offenders::Test(offenders)) => findings
-            .iter()
-            .map(|finding| &finding.offender)
-            .eq(offenders),
-        (crate::Findings::Coverage(findings), Offenders::Coverage(offenders)) => findings
-            .iter()
-            .map(|finding| &finding.offender)
-            .eq(offenders),
-        (crate::Findings::Size(findings), Offenders::Size(offenders)) => findings
-            .iter()
-            .map(|finding| &finding.offender)
-            .eq(offenders),
-        (crate::Findings::Complexity(findings), Offenders::Complexity(offenders)) => findings
-            .iter()
-            .map(|finding| &finding.offender)
-            .eq(offenders),
-        (crate::Findings::Deps(findings), Offenders::Deps(offenders)) => findings
-            .iter()
-            .map(|finding| &finding.offender)
-            .eq(offenders),
-        (crate::Findings::Mutation(findings), Offenders::Mutation(offenders)) => findings
-            .iter()
-            .map(|finding| &finding.offender)
-            .eq(offenders),
-        _ => false,
     }
 }
 

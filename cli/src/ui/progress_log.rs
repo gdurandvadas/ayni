@@ -90,8 +90,8 @@ mod tests {
     use crate::ui::runner::{ProgressEvent, ToolState};
     use ayni_core::{
         Budget, CommandFailure, CompletionIssue, CompletionScope, CompletionStage, CompletionState,
-        DepsResult, Language, Offenders, RunArtifact, RunCompletion, Scope, SignalKind,
-        SignalResult, SignalRow, SizeResult, TestResult,
+        DepsBudget, DepsResult, Language, Offenders, RunArtifact, RunCompletion, Scope, SignalKind,
+        SignalResult, SignalRow, SizeBudget, SizeResult, TestBudget, TestResult,
     };
     use std::time::Duration;
 
@@ -164,7 +164,7 @@ mod tests {
                         message: String::from("test command failed"),
                     }),
                 }),
-                budget: Budget::Test(serde_json::json!({})),
+                budget: Budget::Test(TestBudget::default()),
                 offenders: Offenders::Test(Vec::new()),
             }],
         };
@@ -205,7 +205,7 @@ mod tests {
                         fail_count: 1,
                         failure: Some(failure("size", Some(17))),
                     }),
-                    budget: Budget::Size(serde_json::json!({})),
+                    budget: Budget::Size(SizeBudget::default()),
                     offenders: Offenders::Size(Vec::new()),
                 },
                 SignalRow {
@@ -219,7 +219,7 @@ mod tests {
                         violation_count: 1,
                         failure: Some(failure("deps", None)),
                     }),
-                    budget: Budget::Deps(serde_json::json!({})),
+                    budget: Budget::Deps(DepsBudget::default()),
                     offenders: Offenders::Deps(Vec::new()),
                 },
             ],

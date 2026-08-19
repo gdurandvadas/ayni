@@ -11,24 +11,24 @@ inputs:
   expected-roots:
     description: Newline-separated configured roots expected in the artifact.
     required: true
+  base:
+    description: Optional pullable checkout-base digest to reuse within an existing job.
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
-    - name: Build checkout-local managed environment base
+    - name: Build pullable checkout-local managed environment base
       id: base
-      shell: bash
-      run: |
-        set -euo pipefail
-        scripts/build-local-environment-image.sh
-        base_id="$(docker image inspect ayni-env:local --format '{{.Id}}')"
-        echo "reference=ayni-env:local@${base_id}" >> "$GITHUB_OUTPUT"
+      if: ${{ inputs.base == '' }}
+      uses: ./.github/actions/build-local-environment-base
 
     - name: Lock and build fixture environment
       shell: bash
       env:
         FIXTURE: ${{ inputs.fixture }}
-        BASE: ${{ steps.base.outputs.reference }}
+        BASE: ${{ inputs.base || steps.base.outputs.reference }}
       run: |
         set -euo pipefail
         rm -rf "$FIXTURE/.ayni" "$FIXTURE/.ayni.lock"
@@ -50,7 +50,7 @@ runs:
         ./target/debug/ayni check --config "$FIXTURE/.ayni.toml"
         check_code=$?
         set -e
-        echo "Ayni managed check exit code: $check_code (policy and typed tool failures are permitted)"
+        echo "Ayni managed check exit code: $check_code"
 
         root_args=()
         while IFS= read -r root; do
@@ -63,6 +63,7 @@ runs:
           --artifact "$FIXTURE/.ayni/last/signals.json" \
           --language "$LANGUAGE" \
           --repository-root . \
+          --check-exit-code "$check_code" \
           "${root_args[@]}"
 
     - name: Remove ephemeral environment state

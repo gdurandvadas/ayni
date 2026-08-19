@@ -207,7 +207,7 @@ fn conflicts_include_values_and_absent_tools_require_checkout_change() {
     )
     .expect("manifest");
     let contribution = NodeEnvironmentCapability
-        .discover(&request(fixture.path(), ".", vec![SignalKind::Mutation]))
+        .discover(&request(fixture.path(), ".", vec![SignalKind::Test]))
         .expect("discovery");
     assert_eq!(contribution.conflicts().len(), 2);
     assert!(
@@ -217,6 +217,23 @@ fn conflicts_include_values_and_absent_tools_require_checkout_change() {
             .all(|source| source.detail.is_some())
     );
     assert!(contribution.target().signal_tools[0].modifies_checkout);
+}
+
+#[test]
+fn unavailable_mutation_does_not_contribute_signal_tools() {
+    let fixture = TempDir::new().expect("fixture");
+    fs::write(
+        fixture.path().join("package.json"),
+        r#"{"engines":{"node":">=20"}}"#,
+    )
+    .expect("manifest");
+    fs::write(fixture.path().join("package-lock.json"), "{}").expect("lock");
+
+    let contribution = NodeEnvironmentCapability
+        .discover(&request(fixture.path(), ".", vec![SignalKind::Mutation]))
+        .expect("discovery");
+
+    assert!(contribution.target().signal_tools.is_empty());
 }
 
 #[test]

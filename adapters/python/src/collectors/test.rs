@@ -7,10 +7,9 @@ use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::failure::test_execution_incomplete;
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult, VerificationSelection,
+    TestBudget, TestFailure, TestResult, VerificationSelection,
 };
 use serde::Deserialize;
-use serde_json::json;
 use std::fs;
 
 #[derive(Debug, Deserialize)]
@@ -165,7 +164,7 @@ fn collect_with_command(
             runner,
             failure,
         }),
-        budget: Budget::Test(json!({})),
+        budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(offenders),
     })
 }

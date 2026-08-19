@@ -24,7 +24,8 @@ decisions that are not visible in the code.
 - `docs/product/environments.md` — managed environment lifecycle, lock, build, and execution contract
 - `docs/product/signals.md` — canonical signal vocabulary, schema selection, and compatibility posture
 - `docs/product/capabilities.md` — adapter capability tiers and truthful signal availability
-- `docs/product/signals/v3.md` — current `0.3.0` serialized signal-artifact contract
+- `docs/product/signals/v4.md` — current `0.4.0` serialized signal-artifact contract
+- `docs/product/signals/v3.md` — historical `0.3.0` serialized signal-artifact reference only
 - `docs/product/signals/v2.md` — historical `0.2.0` serialized signal-artifact reference only
 - `docs/product/signals/v1.md` — historical `0.1.0` serialized signal-artifact reference only
 - `docs/adapters/rust.md` — Rust adapter installation, signal coverage, and policy contract

@@ -1,40 +1,66 @@
 import copy
-import copy
 import unittest
 from pathlib import Path
 
-from validate_example_artifact import EXPECTED_KINDS, ValidationError, validate_artifact
+from validate_example_artifact import (
+    EXPECTED_KINDS,
+    EXPECTED_OUTCOMES,
+    ValidationError,
+    validate_artifact,
+)
 
 
 ROOT = "fixture"
 LEXICAL_ROOT = ROOT
 
 
-def artifact(*, policy_fail=False):
+def finding(level):
+    return {
+        "id": "ayni:finding:v1:sha256:" + "4" * 64,
+        "verification": {"command": "ayni verify coverage --language python"},
+        "file": "src/example.py",
+        "level": level,
+    }
+
+
+def artifact(*, language="python"):
+    outcome = EXPECTED_OUTCOMES[language]
     rows = []
     for kind in sorted(EXPECTED_KINDS):
-        fails = policy_fail and kind == "coverage"
-        item = {"file": "src/example.py", "level": "fail"} if fails else None
+        fails = kind in outcome.failing_kinds
+        warns = kind in outcome.warning_kinds
+        item = (
+            finding("fail")
+            if fails
+            else finding("warn")
+            if warns
+            else None
+        )
+        result = {"kind": kind}
+        if kind == "coverage":
+            result["percent"] = sum(outcome.coverage_range) / 2
         rows.append(
             {
                 "kind": kind,
-                "language": "python",
+                "language": language,
                 "scope": {"workspace_root": LEXICAL_ROOT},
                 "pass": not fails,
-                "result": {"kind": kind},
+                "result": result,
                 "budget": {"kind": kind},
                 "offenders": {"kind": kind, "items": [item] if item else []},
             }
         )
     return {
-        "schema_version": "0.3.0",
+        "schema_version": "0.4.0",
         "execution_mode": "managed",
         "contract_digest": "sha256:" + "1" * 64,
         "environment_lock_fingerprint": "sha256:" + "2" * 64,
         "source_fingerprint": "sha256:" + "3" * 64,
-        "tool_versions": [{"tool": "python:.:runtime:python", "version": "3.12.11"}],
+        "tool_versions": [
+            {"tool": f"{language}:.:runtime:{language}", "version": "1.0.0"}
+        ],
         "repository_root": LEXICAL_ROOT,
-        "invocation": {"command": "check", "languages": ["python"]},
+        "invocation": {"command": "check", "languages": [language]},
         "completion": {
             "scope": "repository",
             "state": "complete",
@@ -45,38 +71,62 @@ def artifact(*, policy_fail=False):
             "issues": [],
         },
         "aggregate": {
-            "status": "fail" if policy_fail else "pass",
+            "status": outcome.aggregate_status,
             "total_rows": 5,
-            "passing_rows": 4 if policy_fail else 5,
-            "failing_rows": 1 if policy_fail else 0,
-            "warning_offenders": 0,
-            "failing_offenders": 1 if policy_fail else 0,
+            "passing_rows": 5 - len(outcome.failing_kinds),
+            "failing_rows": len(outcome.failing_kinds),
+            "warning_offenders": outcome.warning_offenders,
+            "failing_offenders": outcome.failing_offenders,
         },
         "rows": rows,
     }
 
 
-def validate(value):
+def validate(value, *, language="python", check_exit_code=None):
+    if check_exit_code is None:
+        check_exit_code = EXPECTED_OUTCOMES[language].check_exit_code
     validate_artifact(
-        value, language="python", expected_roots=["."], repository_root=ROOT
+        value,
+        language=language,
+        expected_roots=["."],
+        repository_root=ROOT,
+        check_exit_code=check_exit_code,
     )
 
 
 class ArtifactValidatorTests(unittest.TestCase):
-    def assert_invalid(self, value, text):
+    def assert_invalid(self, value, text, **kwargs):
         with self.assertRaisesRegex(ValidationError, text):
-            validate(value)
+            validate(value, **kwargs)
 
-    def test_valid_pass(self):
-        validate(artifact())
+    def test_expected_fixture_outcomes(self):
+        for language in EXPECTED_OUTCOMES:
+            with self.subTest(language=language):
+                validate(artifact(language=language), language=language)
 
     def test_relative_fixture_root_is_compared_lexically(self):
         value = artifact()
         self.assertFalse(Path(value["repository_root"]).is_absolute())
         validate(value)
 
-    def test_valid_policy_fail(self):
-        validate(artifact(policy_fail=True))
+    def test_wrong_check_exit_code(self):
+        self.assert_invalid(artifact(), "check exit code", check_exit_code=1)
+
+    def test_unexpected_python_policy_failure(self):
+        value = artifact()
+        coverage = next(row for row in value["rows"] if row["kind"] == "coverage")
+        coverage["pass"] = False
+        coverage["offenders"]["items"] = [finding("fail")]
+        value["aggregate"].update(
+            status="fail", passing_rows=4, failing_rows=1, failing_offenders=1
+        )
+        self.assert_invalid(value, "aggregate.status", language="python")
+
+    def test_coverage_drift_is_rejected(self):
+        value = artifact(language="go")
+        coverage = next(row for row in value["rows"] if row["kind"] == "coverage")
+        coverage["result"]["percent"] = 90.0
+        self.assert_invalid(value, "coverage percent", language="go")
 
     def test_missing_row(self):
         value = artifact()
@@ -147,6 +197,11 @@ class ArtifactValidatorTests(unittest.TestCase):
         value = artifact()
         value["rows"][0]["pass"] = False
         self.assert_invalid(value, "without a typed policy finding")
+
+    def test_finding_requires_schema_v4_identity(self):
+        value = artifact(language="kotlin")
+        del value["rows"][1]["offenders"]["items"][0]["id"]
+        self.assert_invalid(value, "schema-v4 finding ID", language="kotlin")
 
 
 if __name__ == "__main__":

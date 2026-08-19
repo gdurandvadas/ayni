@@ -14,7 +14,7 @@ const DEFAULT_RESULTS_ARTIFACT: &str = "./.ayni/last/signals.json";
 #[command(name = "ayni")]
 #[command(
     version,
-    about = "Correct environments, focused feedback, one definitive quality gate"
+    about = "Reproducible environments, focused feedback, explicit completion evidence"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -139,7 +139,7 @@ impl ContractCommands {
 
 #[derive(Subcommand, Debug)]
 enum VerifyCommands {
-    /// List exact verification commands from a saved result artifact.
+    /// List exact verification commands from a saved current-schema artifact.
     List(VerifyListOptions),
     /// Run only the test signal.
     Test {
@@ -407,7 +407,7 @@ impl CheckOptions {
 
 #[derive(Args, Debug)]
 struct VerifyListOptions {
-    /// Saved schema-v3 result artifact to inspect.
+    /// Saved schema-v4 result artifact to inspect.
     #[arg(long, default_value = DEFAULT_RESULTS_ARTIFACT)]
     artifact: PathBuf,
 }

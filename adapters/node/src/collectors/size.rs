@@ -1,6 +1,7 @@
 use ayni_adapters_common::size::{collect_size, collect_size_file};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
+    SizeBudget, SizeBudgetRule,
 };
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
@@ -34,7 +35,18 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
         },
         pass: collected.result.fail_count == 0,
         result: SignalResult::Size(collected.result),
-        budget: Budget::Size(collected.budget),
+        budget: Budget::Size(SizeBudget {
+            rules: size_map
+                .iter()
+                .map(|(glob, threshold)| SizeBudgetRule {
+                    glob: glob.clone(),
+                    warn: threshold.warn,
+                    fail: threshold.fail,
+                })
+                .collect(),
+            warn: None,
+            fail: None,
+        }),
         offenders: Offenders::Size(collected.offenders),
     })
 }

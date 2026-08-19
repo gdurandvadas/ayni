@@ -1,11 +1,7 @@
 name: ayni-rust
 
 on:
-  pull_request:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  workflow_call:
 
 jobs:
   repository:
@@ -16,20 +12,20 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.97.1
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ayni-rust-self
 
       - name: Install pinned Mise
-        uses: jdx/mise-action@v3
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           version: 2026.6.14
           install: false
@@ -38,22 +34,28 @@ jobs:
       - name: Build Ayni CLI
         run: cargo build --locked -p ayni-cli
 
-      - name: Build checkout-local managed environment base
+      - name: Build pullable checkout-local managed environment base
         id: base
-        shell: bash
-        run: |
-          set -euo pipefail
-          scripts/build-local-environment-image.sh
-          base_id="$(docker image inspect ayni-env:local --format '{{.Id}}')"
-          echo "reference=ayni-env:local@${base_id}" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/build-local-environment-base
 
-      - name: Verify the committed environment lock is current
+      - name: Verify committed lock inputs against an ephemeral checkout base
         env:
           BASE: ${{ steps.base.outputs.reference }}
         run: |
           set -euo pipefail
+          cp .ayni.lock "$RUNNER_TEMP/ayni-lock.committed.json"
           ./target/debug/ayni env lock --config ./.ayni.toml --base "$BASE"
-          git diff --exit-code -- .ayni.lock
+          jq --sort-keys \
+            'del(.provisioning_base.reference, .provisioning_base.digest, .fingerprint)' \
+            "$RUNNER_TEMP/ayni-lock.committed.json" \
+            > "$RUNNER_TEMP/ayni-lock.committed.normalized.json"
+          jq --sort-keys \
+            'del(.provisioning_base.reference, .provisioning_base.digest, .fingerprint)' \
+            .ayni.lock \
+            > "$RUNNER_TEMP/ayni-lock.generated.normalized.json"
+          diff --unified \
+            "$RUNNER_TEMP/ayni-lock.committed.normalized.json" \
+            "$RUNNER_TEMP/ayni-lock.generated.normalized.json"
 
       - name: Build and diagnose the committed managed environment
         run: |
@@ -83,9 +85,17 @@ jobs:
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
 
+      - name: Validate Rust mono example through managed execution
+        uses: ./.github/actions/validate-example
+        with:
+          language: rust
+          fixture: examples/rust/mono
+          expected-roots: .
+          base: ${{ steps.base.outputs.reference }}
+
       - name: Upsert Ayni PR comment
         if: always() && github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           AYNI_BRANCH: ${{ github.head_ref || github.ref_name }}
           SUMMARY: ${{ steps.check.outputs.summary }}

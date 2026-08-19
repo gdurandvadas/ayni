@@ -7,11 +7,10 @@ use ayni_adapters_common::paths::{
 };
 use ayni_adapters_common::xml::{attr_string, attr_u64};
 use ayni_core::{
-    Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow, classify_maximum,
+    Budget, ComplexityBudget, ComplexityOffender, ComplexityResult, FloatThresholdBudget, Language,
+    Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use regex::Regex;
-use serde_json::json;
 use std::fs;
 use std::path::Path;
 
@@ -101,9 +100,13 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             fail_count,
             failure: None,
         }),
-        budget: Budget::Complexity(json!({
-            "fn_cyclomatic": {"warn": cyclomatic.warn, "fail": cyclomatic.fail}
-        })),
+        budget: Budget::Complexity(ComplexityBudget {
+            fn_cyclomatic: Some(FloatThresholdBudget {
+                warn: cyclomatic.warn,
+                fail: cyclomatic.fail,
+            }),
+            fn_cognitive: None,
+        }),
         offenders: Offenders::Complexity(offenders),
     })
 }
@@ -149,7 +152,7 @@ fn error_row(
             fail_count: 1,
             failure: Some(failure),
         }),
-        budget: Budget::Complexity(json!({})),
+        budget: Budget::Complexity(ComplexityBudget::default()),
         offenders: Offenders::Complexity(Vec::new()),
     }
 }

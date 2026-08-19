@@ -3,12 +3,11 @@ use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::failure::setup_failure;
 use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
-    Budget, ComplexityOffender, ComplexityResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow, classify_maximum,
+    Budget, ComplexityBudget, ComplexityOffender, ComplexityResult, FloatThresholdBudget, Language,
+    Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use regex::Regex;
 use serde_json::Value as JsonValue;
-use serde_json::json;
 use std::path::Path;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
@@ -129,17 +128,16 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             .then_with(|| left.file.cmp(&right.file))
     });
 
-    let mut budget = json!({
-        "fn_cyclomatic": {"warn": cyclomatic.warn, "fail": cyclomatic.fail}
-    });
-    if let Some(cognitive) = config.fn_cognitive
-        && let Some(map) = budget.as_object_mut()
-    {
-        map.insert(
-            String::from("fn_cognitive"),
-            json!({"warn": cognitive.warn, "fail": cognitive.fail}),
-        );
-    }
+    let budget = ComplexityBudget {
+        fn_cyclomatic: Some(FloatThresholdBudget {
+            warn: cyclomatic.warn,
+            fail: cyclomatic.fail,
+        }),
+        fn_cognitive: config.fn_cognitive.map(|cognitive| FloatThresholdBudget {
+            warn: cognitive.warn,
+            fail: cognitive.fail,
+        }),
+    };
 
     // ESLint exits non-zero for the injected warn-boundary rule, so its exit
     // status is not the policy verdict. It remains authoritative for output

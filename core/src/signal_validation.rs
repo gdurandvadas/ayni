@@ -2,8 +2,6 @@ use crate::{
     Budget, ComplexityResult, CoverageResult, DepsResult, Level, MutationResult, Offenders,
     SignalResult, SignalRow, SizeResult, TestResult,
 };
-use serde::Deserialize;
-use std::collections::BTreeMap;
 
 pub(crate) fn validate_signal_row(row: &SignalRow) -> Result<(), String> {
     validate_variant_alignment(row)?;
@@ -181,91 +179,113 @@ fn count_failures(levels: impl Iterator<Item = Level>) -> u64 {
 
 fn validate_budget_shape(budget: &Budget) -> Result<(), String> {
     match budget {
-        Budget::Test(value) => parse_budget::<EmptyBudget>("test", value),
-        Budget::Coverage(value) => parse_budget::<CoverageBudget>("coverage", value),
-        Budget::Size(value) => parse_budget::<SizeBudget>("size", value),
-        Budget::Complexity(value) => parse_budget::<ComplexityBudget>("complexity", value),
-        Budget::Deps(value) => parse_budget::<DepsBudget>("deps", value),
-        Budget::Mutation(value) => parse_budget::<MutationBudget>("mutation", value),
+        Budget::Test(_) | Budget::Mutation(_) => Ok(()),
+        Budget::Coverage(value) => validate_coverage_budget(value),
+        Budget::Size(value) => validate_size_budget(value),
+        Budget::Complexity(value) => validate_complexity_budget(value),
+        Budget::Deps(value) => validate_deps_budget(value),
     }
 }
 
-fn parse_budget<T: serde::de::DeserializeOwned>(
-    kind: &str,
-    value: &serde_json::Value,
+fn validate_coverage_budget(value: &crate::CoverageBudget) -> Result<(), String> {
+    validate_minimum_threshold(
+        "coverage line_percent",
+        value.line_percent_warn,
+        value.line_percent_fail,
+        Some(100.0),
+    )?;
+    validate_minimum_threshold(
+        "coverage branch_percent",
+        value.branch_percent_warn,
+        value.branch_percent_fail,
+        Some(100.0),
+    )
+}
+
+fn validate_size_budget(value: &crate::SizeBudget) -> Result<(), String> {
+    if !value.rules.is_empty() && (value.warn.is_some() || value.fail.is_some()) {
+        return Err(String::from(
+            "size budget cannot combine rules with focused warn/fail thresholds",
+        ));
+    }
+    match (value.warn, value.fail) {
+        (Some(warn), Some(fail)) if warn <= fail => {}
+        (None, None) => {}
+        (Some(_), Some(_)) => {
+            return Err(String::from("size budget warn must not exceed fail"));
+        }
+        _ => {
+            return Err(String::from(
+                "size budget focused warn and fail must be supplied together",
+            ));
+        }
+    }
+    for rule in &value.rules {
+        if rule.glob.trim().is_empty() {
+            return Err(String::from("size budget rule glob cannot be empty"));
+        }
+        if rule.warn > rule.fail {
+            return Err(String::from("size budget rule warn must not exceed fail"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_complexity_budget(value: &crate::ComplexityBudget) -> Result<(), String> {
+    if let Some(threshold) = value.fn_cyclomatic {
+        validate_maximum_threshold("complexity fn_cyclomatic", threshold.warn, threshold.fail)?;
+    }
+    if let Some(threshold) = value.fn_cognitive {
+        validate_maximum_threshold("complexity fn_cognitive", threshold.warn, threshold.fail)?;
+    }
+    Ok(())
+}
+
+fn validate_deps_budget(value: &crate::DepsBudget) -> Result<(), String> {
+    if value.forbidden.as_ref().is_some_and(|rules| {
+        rules.iter().any(|(source, targets)| {
+            source.trim().is_empty() || targets.iter().any(|target| target.trim().is_empty())
+        })
+    }) {
+        Err(String::from("dependency budget patterns cannot be empty"))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_minimum_threshold(
+    name: &str,
+    warn: Option<f64>,
+    fail: Option<f64>,
+    maximum: Option<f64>,
 ) -> Result<(), String> {
-    serde_json::from_value::<T>(value.clone())
-        .map(|_| ())
-        .map_err(|error| format!("{kind} budget is invalid: {error}"))
+    match (warn, fail) {
+        (None, None) => Ok(()),
+        (Some(warn), Some(fail))
+            if warn.is_finite()
+                && fail.is_finite()
+                && warn >= 0.0
+                && fail >= 0.0
+                && maximum.is_none_or(|maximum| warn <= maximum && fail <= maximum)
+                && warn >= fail =>
+        {
+            Ok(())
+        }
+        (Some(_), Some(_)) => Err(format!(
+            "{name} budget must be finite, in range, and have warn >= fail"
+        )),
+        _ => Err(format!(
+            "{name} budget warn and fail must be supplied together"
+        )),
+    }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EmptyBudget {}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CoverageBudget {
-    #[allow(dead_code)]
-    line_percent_warn: Option<f64>,
-    #[allow(dead_code)]
-    line_percent_fail: Option<f64>,
-    #[allow(dead_code)]
-    branch_percent_warn: Option<f64>,
-    #[allow(dead_code)]
-    branch_percent_fail: Option<f64>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SizeBudget {
-    #[allow(dead_code)]
-    rules: Option<Vec<SizeBudgetRule>>,
-    #[allow(dead_code)]
-    warn: Option<u64>,
-    #[allow(dead_code)]
-    fail: Option<u64>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SizeBudgetRule {
-    #[allow(dead_code)]
-    glob: String,
-    #[allow(dead_code)]
-    warn: u64,
-    #[allow(dead_code)]
-    fail: u64,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ComplexityBudget {
-    #[allow(dead_code)]
-    fn_cyclomatic: Option<FloatThresholdBudget>,
-    #[allow(dead_code)]
-    fn_cognitive: Option<FloatThresholdBudget>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FloatThresholdBudget {
-    #[allow(dead_code)]
-    warn: f64,
-    #[allow(dead_code)]
-    fail: f64,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DepsBudget {
-    #[allow(dead_code)]
-    forbidden: Option<BTreeMap<String, Vec<String>>>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MutationBudget {
-    #[allow(dead_code)]
-    enabled: Option<bool>,
+fn validate_maximum_threshold(name: &str, warn: f64, fail: f64) -> Result<(), String> {
+    if warn.is_finite() && fail.is_finite() && warn >= 0.0 && warn <= fail {
+        Ok(())
+    } else {
+        Err(format!(
+            "{name} budget must be finite, non-negative, and have warn <= fail"
+        ))
+    }
 }

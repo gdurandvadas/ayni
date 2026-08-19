@@ -76,12 +76,13 @@ pub use runtime::{AdapterError, AdapterErrorKind, ExecutionResolution, RunContex
 pub use signal::{
     AYNI_SIGNAL_SCHEMA_VERSION, AggregateStatus, AggregateSummary, AppliedThreshold,
     ArtifactToolVersion, Budget, CommandFailure, CompletionIssue, CompletionScope, CompletionStage,
-    CompletionState, ComplexityOffender, ComplexityResult, CoverageOffender, CoverageResult,
-    DepsOffender, DepsResult, ExecutionMode, FailureSummary, Finding, FindingError,
-    FindingMetadata, Findings, InvocationContext, Level, MutationOffender, MutationResult,
-    OffenderIdentity, OffenderSummary, Offenders, OutputContext, RunArtifact, RunArtifactMetadata,
-    RunCompletion, SignalKind, SignalResult, SignalRow, SizeOffender, SizeResult, TestFailure,
-    TestResult, VerificationMetadata, VerificationTarget,
+    CompletionState, ComplexityBudget, ComplexityOffender, ComplexityResult, CoverageBudget,
+    CoverageOffender, CoverageResult, DepsBudget, DepsOffender, DepsResult, ExecutionMode,
+    FailureSummary, Finding, FindingError, FindingMetadata, Findings, FloatThresholdBudget,
+    InvocationContext, Level, MutationBudget, MutationOffender, MutationResult, OffenderIdentity,
+    OffenderSummary, Offenders, OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion,
+    SignalKind, SignalResult, SignalRow, SizeBudget, SizeBudgetRule, SizeOffender, SizeResult,
+    TestBudget, TestFailure, TestResult, VerificationMetadata, VerificationTarget,
 };
 pub use threshold::{
     ConfiguredMetricEvaluation, classify_maximum, classify_minimum, evaluate_configured_metric,

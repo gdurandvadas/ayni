@@ -13,7 +13,7 @@ Ayni does not imply identical measurement depth merely because an adapter can de
 | Adapter | Test | Coverage | Size | Complexity | Dependencies | Mutation |
 | --- | --- | --- | --- | --- | --- | --- |
 | Rust | Supported | Supported | Supported | Supported | Supported | Unavailable |
-| Node | Supported | Supported | Supported | Supported | Supported | Experimental |
+| Node | Supported | Supported | Supported | Supported | Supported | Unavailable |
 | Go | Supported | Supported | Supported | Supported | Supported | Unavailable |
 | Python | Supported | Supported | Supported | Supported | Supported | Supported |
 | Kotlin | Supported | Supported | Supported | Supported | Supported | Supported |

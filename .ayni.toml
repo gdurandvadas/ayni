@@ -40,5 +40,12 @@ fn_cognitive   = { warn = 20, fail = 29 }
 line_percent = { warn = 80, fail = 77 }
 
 [rust.deps.forbidden]
-"core"          = ["adapters/*", "cli"]
-"adapters/*"    = ["cli"]
+"core"            = ["adapters/*", "environment", "cli"]
+"adapters/*"      = ["environment", "cli"]
+"adapters/common" = ["adapters/go", "adapters/kotlin", "adapters/node", "adapters/python", "adapters/rust"]
+"adapters/go"     = ["adapters/kotlin", "adapters/node", "adapters/python", "adapters/rust"]
+"adapters/kotlin" = ["adapters/go", "adapters/node", "adapters/python", "adapters/rust"]
+"adapters/node"   = ["adapters/go", "adapters/kotlin", "adapters/python", "adapters/rust"]
+"adapters/python" = ["adapters/go", "adapters/kotlin", "adapters/node", "adapters/rust"]
+"adapters/rust"   = ["adapters/go", "adapters/kotlin", "adapters/node", "adapters/python"]
+"environment"     = ["adapters/go", "adapters/kotlin", "adapters/node", "adapters/python", "adapters/rust", "cli"]

@@ -45,7 +45,7 @@ pub(crate) fn build_plan(
         discover_targets(&repo_root, &policy, &platforms, registry)?;
     let tools = repository_tools(&repo_root, &config, &policy)?;
     let debian_packages = repository_debian_packages(&repo_root, &config, &policy)?;
-    conflicts.extend(generic_tool_conflicts(&tools, &targets));
+    conflicts.extend(generic_tool_conflicts(&tools, &targets)?);
     EnvironmentPlan::new(
         repository_identity(&repo_root, &config_bytes)?,
         platforms,
@@ -141,27 +141,27 @@ fn repository_debian_packages(
         .map_err(|_| ShowError::input("environment contract escapes repository root"))?
         .to_string_lossy()
         .replace('\\', "/");
-    let mut requested = policy.environment_debian_packages().to_vec();
-    if policy.environment_capabilities().docker == DockerAccess::Socket
-        && !requested
-            .iter()
-            .any(|package| package == "docker.io" || package.starts_with("docker.io="))
-    {
-        requested.push(String::from("docker.io"));
-    }
+    let configured = policy.environment_debian_packages();
+    let requested =
+        ayni_environment::resolve_debian_packages(configured, policy.environment_capabilities());
     requested
         .into_iter()
         .map(|package| {
+            let declared = configured.contains(&package);
             Ok(DebianPackageRequirement {
                 package: package.clone(),
                 source: RequirementSource::new(
-                    if package == "docker.io" {
-                        "environment_docker_socket"
-                    } else {
+                    if declared {
                         "environment_debian_package"
+                    } else {
+                        "environment_capability"
                     },
                     &path,
-                    Some(format!("environment.debian.packages:{package}")),
+                    Some(if declared {
+                        format!("environment.debian.packages:{package}")
+                    } else {
+                        format!("environment.capabilities:{package}")
+                    }),
                     RequirementConfidence::Declared,
                 )
                 .map_err(|error| ShowError::input(error.to_string()))?,
@@ -173,8 +173,8 @@ fn repository_debian_packages(
 fn generic_tool_conflicts(
     tools: &[MiseToolRequirement],
     targets: &[ayni_core::TargetEnvironment],
-) -> Vec<EnvironmentConflict> {
-    let adapter_tools = adapter_mise_tools(targets);
+) -> Result<Vec<EnvironmentConflict>, ShowError> {
+    let adapter_tools = adapter_mise_tools(targets)?;
     let mut conflicts = Vec::new();
     for tool in tools {
         for adapter in adapter_tools
@@ -192,7 +192,7 @@ fn generic_tool_conflicts(
             });
         }
     }
-    conflicts
+    Ok(conflicts)
 }
 
 struct AdapterMiseTool<'a> {
@@ -202,7 +202,9 @@ struct AdapterMiseTool<'a> {
     source: &'a RequirementSource,
 }
 
-fn adapter_mise_tools(targets: &[ayni_core::TargetEnvironment]) -> Vec<AdapterMiseTool<'_>> {
+fn adapter_mise_tools(
+    targets: &[ayni_core::TargetEnvironment],
+) -> Result<Vec<AdapterMiseTool<'_>>, ShowError> {
     let mut tools = Vec::new();
     for target in targets {
         tools.extend(target.runtimes.iter().map(|runtime| AdapterMiseTool {
@@ -222,32 +224,21 @@ fn adapter_mise_tools(targets: &[ayni_core::TargetEnvironment]) -> Vec<AdapterMi
                     source: &manager.source,
                 }),
         );
-        tools.extend(target.signal_tools.iter().filter_map(|tool| {
-            signal_tool_coordinate(tool).map(|coordinate| AdapterMiseTool {
-                identity: &target.target,
-                coordinate,
-                version: &tool.version,
-                source: &tool.source,
-            })
-        }));
-    }
-    tools
-}
-
-fn signal_tool_coordinate(tool: &ayni_core::SignalToolRequirement) -> Option<String> {
-    match tool.scope {
-        ayni_core::ToolInstallationScope::Project => None,
-        ayni_core::ToolInstallationScope::Runtime => Some(tool.tool.clone()),
-        ayni_core::ToolInstallationScope::Isolated if tool.provider == "cargo-install" => {
-            Some(format!("cargo:{}", tool.tool))
+        for tool in &target.signal_tools {
+            if let Some(coordinate) =
+                ayni_environment::signal_tool_coordinate(tool.scope, &tool.tool, &tool.provider)
+                    .map_err(|error| ShowError::environment(error.message))?
+            {
+                tools.push(AdapterMiseTool {
+                    identity: &target.target,
+                    coordinate,
+                    version: &tool.version,
+                    source: &tool.source,
+                });
+            }
         }
-        ayni_core::ToolInstallationScope::Isolated
-            if tool.provider.starts_with("go:") || tool.provider.starts_with("pipx:") =>
-        {
-            Some(tool.provider.clone())
-        }
-        ayni_core::ToolInstallationScope::Isolated => None,
     }
+    Ok(tools)
 }
 
 type DiscoveryParts = (

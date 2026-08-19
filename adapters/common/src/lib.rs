@@ -17,4 +17,5 @@ pub mod paths;
 pub mod reports;
 pub mod repository;
 pub mod size;
+pub mod workspace;
 pub mod xml;

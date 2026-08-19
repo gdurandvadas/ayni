@@ -196,26 +196,38 @@ fn add_signal_tools(
     tools: &mut BTreeMap<String, BTreeSet<String>>,
 ) -> Result<(), BackendError> {
     for tool in signal_tools {
-        match tool.scope {
-            ToolInstallationScope::Project => continue,
-            ToolInstallationScope::Runtime => add_tool(tools, &tool.tool, &tool.version),
-            ToolInstallationScope::Isolated if tool.provider == "cargo-install" => {
-                add_tool(tools, &format!("cargo:{}", tool.tool), &tool.version);
-            }
-            ToolInstallationScope::Isolated
-                if tool.provider.starts_with("go:") || tool.provider.starts_with("pipx:") =>
-            {
-                add_tool(tools, &tool.provider, &tool.version);
-            }
-            ToolInstallationScope::Isolated => {
-                return Err(BackendError::environment(format!(
-                    "environment backend does not support isolated provider {} for {}",
-                    tool.provider, tool.tool
-                )));
-            }
+        if let Some(coordinate) = signal_tool_coordinate(tool.scope, &tool.tool, &tool.provider)? {
+            add_tool(tools, &coordinate, &tool.version);
         }
     }
     Ok(())
+}
+
+/// Resolve an adapter signal-tool requirement to the backend's mise coordinate.
+///
+/// Provider syntax is an environment-backend concern. Callers that need to
+/// compare generic repository tools with adapter requirements must use this
+/// resolver rather than interpreting provider strings themselves.
+pub fn signal_tool_coordinate(
+    scope: ToolInstallationScope,
+    tool: &str,
+    provider: &str,
+) -> Result<Option<String>, BackendError> {
+    match scope {
+        ToolInstallationScope::Project => Ok(None),
+        ToolInstallationScope::Runtime => Ok(Some(tool.to_owned())),
+        ToolInstallationScope::Isolated if provider == "cargo-install" => {
+            Ok(Some(format!("cargo:{tool}")))
+        }
+        ToolInstallationScope::Isolated
+            if provider.starts_with("go:") || provider.starts_with("pipx:") =>
+        {
+            Ok(Some(provider.to_owned()))
+        }
+        ToolInstallationScope::Isolated => Err(BackendError::environment(format!(
+            "environment backend does not support isolated provider {provider} for {tool}"
+        ))),
+    }
 }
 
 fn add_tool(tools: &mut BTreeMap<String, BTreeSet<String>>, tool: &str, version: &str) {

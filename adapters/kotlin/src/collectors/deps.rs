@@ -3,12 +3,11 @@ use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
-    Budget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope, SignalKind,
-    SignalResult, SignalRow,
+    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope,
+    SignalKind, SignalResult, SignalRow,
 };
 use glob::Pattern;
 use regex::Regex;
-use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub fn collect(context: &RunContext) -> CollectorResult {
@@ -75,7 +74,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             violation_count: offenders.len() as u64,
             failure: None,
         }),
-        budget: Budget::Deps(json!({ "forbidden": rules })),
+        budget: Budget::Deps(DepsBudget {
+            forbidden: Some(rules),
+        }),
         offenders: Offenders::Deps(offenders),
     })
 }
@@ -97,7 +98,7 @@ fn error_row(context: &RunContext, failure: ayni_core::CommandFailure) -> Signal
             violation_count: 1,
             failure: Some(failure),
         }),
-        budget: Budget::Deps(json!({})),
+        budget: Budget::Deps(DepsBudget::default()),
         offenders: Offenders::Deps(Vec::new()),
     }
 }

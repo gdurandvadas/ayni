@@ -5,10 +5,9 @@ use ayni_adapters_common::failure::{command_failure_from_output, test_execution_
 use ayni_adapters_common::xml::{attr_f64, attr_string, attr_u64};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestFailure, TestResult, VerificationSelection,
+    TestBudget, TestFailure, TestResult, VerificationSelection,
 };
 use regex::Regex;
-use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 
@@ -88,7 +87,7 @@ fn collect_with_command(
                 command_failure_from_output(context, SignalKind::Test, &program, &args, &output)
             }),
         }),
-        budget: Budget::Test(json!({})),
+        budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(offenders),
     })
 }

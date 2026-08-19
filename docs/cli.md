@@ -34,7 +34,7 @@ This document contains the help content for the `ayni` command-line program.
 
 ## `ayni`
 
-Correct environments, focused feedback, one definitive quality gate
+Reproducible environments, focused feedback, explicit completion evidence
 
 **Usage:** `ayni <COMMAND>`
 
@@ -243,7 +243,7 @@ Run focused signals or list exact commands from saved evidence
 
 ###### **Subcommands:**
 
-* `list` — List exact verification commands from a saved result artifact
+* `list` — List exact verification commands from a saved current-schema artifact
 * `test` — Run only the test signal
 * `coverage` — Run only the coverage signal
 * `size` — Run only the size signal
@@ -255,13 +255,13 @@ Run focused signals or list exact commands from saved evidence
 
 ## `ayni verify list`
 
-List exact verification commands from a saved result artifact
+List exact verification commands from a saved current-schema artifact
 
 **Usage:** `ayni verify list [OPTIONS]`
 
 ###### **Options:**
 
-* `--artifact <ARTIFACT>` — Saved schema-v3 result artifact to inspect
+* `--artifact <ARTIFACT>` — Saved schema-v4 result artifact to inspect
 
   Default value: `./.ayni/last/signals.json`
 

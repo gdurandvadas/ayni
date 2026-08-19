@@ -1,6 +1,5 @@
 #[cfg(test)]
 use crate::policy::load_from_path;
-use std::collections::BTreeMap;
 #[cfg(test)]
 use std::fs;
 #[cfg(test)]
@@ -9,22 +8,21 @@ use std::path::Path;
 #[cfg(test)]
 use ayni_core::AYNI_POLICY_FILE;
 use ayni_core::{
-    Budget, CommandFailure, CompletionScope, CompletionStage, CompletionState, ComplexityOffender,
-    CoverageOffender, DepsOffender, Level, MutationOffender, RunArtifact, RunCompletion,
-    SignalKind, SignalResult, SignalRow, SizeOffender, TestFailure,
+    Budget, CommandFailure, CompletionScope, ComplexityOffender, CoverageOffender, DepsOffender,
+    Level, MutationOffender, RunArtifact, SignalResult, SignalRow, SizeOffender, TestFailure,
 };
 use owo_colors::OwoColorize;
-use serde_json::Value;
 
-use crate::ui::{FAIL_RGB, PASS_RGB, WARN_RGB, color_enabled};
+use crate::ui::{
+    FAIL_RGB, PASS_RGB, WARN_RGB, color_enabled,
+    report_view::{
+        ReportStatus, ReportView, completion_scope_label, completion_stage_label,
+        completion_state_label, signal_kind_label,
+    },
+};
 
 pub fn print_from_artifact(artifact: &RunArtifact, offenders_limit: usize) {
-    let text = build_report_text(
-        &artifact.rows,
-        Some(&artifact.completion),
-        color_enabled(),
-        offenders_limit,
-    );
+    let text = build_report_text(artifact, color_enabled(), offenders_limit);
     println!("{text}");
 }
 
@@ -35,25 +33,9 @@ pub fn print_from_run_artifact(signals_path: &Path) -> Result<(), String> {
     let artifact: RunArtifact = serde_json::from_str(&content)
         .map_err(|e| format!("failed to parse {}: {e}", signals_path.display()))?;
     let offenders_limit = load_offenders_limit(signals_path);
-    let text = build_report_text(
-        &artifact.rows,
-        Some(&artifact.completion),
-        color_enabled(),
-        offenders_limit,
-    );
+    let text = build_report_text(&artifact, color_enabled(), offenders_limit);
     println!("{text}");
     Ok(())
-}
-
-fn signal_kind_as_str(kind: SignalKind) -> &'static str {
-    match kind {
-        SignalKind::Test => "test",
-        SignalKind::Coverage => "coverage",
-        SignalKind::Size => "size",
-        SignalKind::Complexity => "complexity",
-        SignalKind::Deps => "deps",
-        SignalKind::Mutation => "mutation",
-    }
 }
 
 #[cfg(test)]
@@ -90,74 +72,60 @@ fn test_summary_from_rows(rows: &[SignalRow]) -> Option<(u64, u64, u64)> {
     None
 }
 
-fn build_report_text(
-    rows: &[SignalRow],
-    completion: Option<&RunCompletion>,
-    color: bool,
-    offenders_limit: usize,
-) -> String {
+fn build_report_text(artifact: &RunArtifact, color: bool, offenders_limit: usize) -> String {
+    let view = ReportView::new(artifact);
+    let completion = &artifact.completion;
     let mut out = String::new();
     out.push('\n');
-    let heading = match completion.map(|value| value.scope) {
-        Some(CompletionScope::Requested) => "ayni verify report",
-        Some(CompletionScope::Repository) | None => "ayni check report",
+    let heading = match completion.scope {
+        CompletionScope::Requested => "ayni verify report",
+        CompletionScope::Repository => "ayni check report",
     };
     out.push_str(&stylize(color, heading, Palette::Heading, true));
     out.push('\n');
 
-    if let Some(completion) = completion {
+    out.push_str(&format!(
+        "completion  scope={} state={} targets={}/{} detected={} skipped={}\n",
+        completion_scope_label(completion.scope),
+        completion_state_label(completion.state),
+        completion.completed_targets,
+        completion.expected_targets,
+        completion.detected_targets,
+        completion.skipped_targets,
+    ));
+    for issue in &completion.issues {
         out.push_str(&format!(
-            "completion  scope={} state={} targets={}/{} detected={} skipped={}\n",
-            completion_scope_label(completion.scope),
-            completion_state_label(completion.state),
-            completion.completed_targets,
-            completion.expected_targets,
-            completion.detected_targets,
-            completion.skipped_targets,
+            "  incomplete language={} root={} stage={}: {}\n",
+            issue.language.as_str(),
+            issue.configured_root,
+            completion_stage_label(issue.stage),
+            issue.message,
         ));
-        for issue in &completion.issues {
-            out.push_str(&format!(
-                "  incomplete language={} root={} stage={}: {}\n",
-                issue.language.as_str(),
-                issue.configured_root,
-                completion_stage_label(issue.stage),
-                issue.message,
-            ));
-        }
-        out.push('\n');
     }
+    out.push('\n');
 
-    let mut grouped = BTreeMap::<String, Vec<&SignalRow>>::new();
-    for row in rows {
-        let root = row.scope.path.as_deref().unwrap_or(".");
-        grouped
-            .entry(format!("{}:{}", row.language.as_str(), root))
-            .or_default()
-            .push(row);
-    }
-
-    let mut total = 0usize;
-    let mut pass = 0usize;
-    for (group, lang_rows) in grouped {
-        let mut parts = group.splitn(2, ':');
-        let language = parts.next().unwrap_or("unknown");
-        let root = parts.next().unwrap_or(".");
-        let lang_total = lang_rows.len();
-        let lang_pass = lang_rows.iter().filter(|r| r.pass).count();
-        total += lang_total;
-        pass += lang_pass;
-        let root_label = if root == "." { "workspace" } else { root };
-        let header = format!("{language} ({root_label})  {lang_pass}/{lang_total} passing");
+    for group in &view.groups {
+        let root_label = if group.root == "." {
+            "workspace"
+        } else {
+            group.root.as_str()
+        };
+        let header = format!(
+            "{} ({root_label})  {}/{} passing",
+            group.language.as_str(),
+            group.passing,
+            group.rows.len()
+        );
         out.push_str(&stylize(color, &header, Palette::Section, true));
         out.push('\n');
-        for row in lang_rows {
-            let status = row_status(row);
+        for row in &group.rows {
+            let status = ReportStatus::for_row(row);
             let summary = summarize(row);
             out.push_str(&format!(
                 "  {} {} {:<12} {}",
-                stylize(color, status.glyph(), status.palette(), true),
-                stylize(color, status.label(), status.palette(), false),
-                signal_kind_as_str(row.kind),
+                stylize(color, status.glyph(), palette_for_status(status), true),
+                stylize(color, status.label(), palette_for_status(status), false),
+                signal_kind_label(row.kind),
                 summary
             ));
             out.push('\n');
@@ -168,42 +136,34 @@ fn build_report_text(
 
     out.push_str(&stylize(
         color,
-        &format!("summary  {pass}/{total} checks passing"),
+        &format!("summary  {}/{} checks passing", view.passing, view.total),
         Palette::Section,
         true,
     ));
     out.push('\n');
-    if let Some((total_tests, passed_tests, failed_tests)) = test_summary_from_rows(rows) {
+    if let Some((total_tests, passed_tests, failed_tests)) = test_summary_from_rows(&artifact.rows)
+    {
         out.push_str(&format!(
             "  tests: total={} passed={} failed={}\n",
             total_tests, passed_tests, failed_tests
         ));
     }
+    if !view.commands.is_empty() {
+        out.push('\n');
+        out.push_str(&stylize(
+            color,
+            "verification commands",
+            Palette::Section,
+            true,
+        ));
+        out.push('\n');
+        for command in view.commands {
+            out.push_str("  ");
+            out.push_str(command);
+            out.push('\n');
+        }
+    }
     out
-}
-
-fn completion_scope_label(scope: CompletionScope) -> &'static str {
-    match scope {
-        CompletionScope::Repository => "repository",
-        CompletionScope::Requested => "requested",
-    }
-}
-
-fn completion_state_label(state: CompletionState) -> &'static str {
-    match state {
-        CompletionState::Complete => "complete",
-        CompletionState::Incomplete => "incomplete",
-    }
-}
-
-fn completion_stage_label(stage: CompletionStage) -> &'static str {
-    match stage {
-        CompletionStage::Detection => "detection",
-        CompletionStage::Resolution => "resolution",
-        CompletionStage::Selection => "selection",
-        CompletionStage::Scheduling => "scheduling",
-        CompletionStage::Collection => "collection",
-    }
 }
 
 fn summarize(row: &SignalRow) -> String {
@@ -224,12 +184,8 @@ fn summarize(row: &SignalRow) -> String {
                 .headline_percent()
                 .map(format_percent)
                 .unwrap_or_else(|| String::from("—"));
-            let warn = budget
-                .and_then(|budget| budget.get("line_percent_warn"))
-                .and_then(Value::as_f64);
-            let fail = budget
-                .and_then(|budget| budget.get("line_percent_fail"))
-                .and_then(Value::as_f64);
+            let warn = budget.and_then(|budget| budget.line_percent_warn);
+            let fail = budget.and_then(|budget| budget.line_percent_fail);
             format!(
                 "measured={} thresholds={} deltas={} engine={} status={}{}",
                 measured,
@@ -254,13 +210,13 @@ fn summarize(row: &SignalRow) -> String {
                 _ => None,
             };
             let cyclo_warn =
-                budget.and_then(|budget| nested_budget_number(budget, "fn_cyclomatic", "warn"));
+                budget.and_then(|budget| budget.fn_cyclomatic.map(|threshold| threshold.warn));
             let cyclo_fail =
-                budget.and_then(|budget| nested_budget_number(budget, "fn_cyclomatic", "fail"));
+                budget.and_then(|budget| budget.fn_cyclomatic.map(|threshold| threshold.fail));
             let cognitive_warn =
-                budget.and_then(|budget| nested_budget_number(budget, "fn_cognitive", "warn"));
+                budget.and_then(|budget| budget.fn_cognitive.map(|threshold| threshold.warn));
             let cognitive_fail =
-                budget.and_then(|budget| nested_budget_number(budget, "fn_cognitive", "fail"));
+                budget.and_then(|budget| budget.fn_cognitive.map(|threshold| threshold.fail));
             let cognitive = result
                 .max_fn_cognitive
                 .map(|value| {
@@ -523,10 +479,6 @@ fn palette_for_level(level: Level) -> Palette {
     }
 }
 
-fn nested_budget_number(value: &Value, key: &str, nested: &str) -> Option<f64> {
-    value.get(key)?.get(nested)?.as_f64()
-}
-
 fn threshold_summary(warn: Option<f64>, fail: Option<f64>) -> String {
     format!(
         "warn={} fail={}",
@@ -568,63 +520,11 @@ fn format_number(value: f64) -> String {
     format!("{value:.1}")
 }
 
-#[derive(Clone, Copy)]
-enum RowStatus {
-    Pass,
-    Warn,
-    Fail,
-}
-
-impl RowStatus {
-    fn glyph(self) -> &'static str {
-        match self {
-            Self::Pass => "✓",
-            Self::Warn => "!",
-            Self::Fail => "✗",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Pass => "pass",
-            Self::Warn => "warn",
-            Self::Fail => "fail",
-        }
-    }
-
-    fn palette(self) -> Palette {
-        match self {
-            Self::Pass => Palette::Success,
-            Self::Warn => Palette::Warning,
-            Self::Fail => Palette::Failure,
-        }
-    }
-}
-
-fn row_status(row: &SignalRow) -> RowStatus {
-    if !row.pass {
-        return RowStatus::Fail;
-    }
-    match &row.result {
-        SignalResult::Size(result) if result.warn_count > 0 => RowStatus::Warn,
-        SignalResult::Complexity(result) if result.warn_count > 0 => RowStatus::Warn,
-        SignalResult::Coverage(_) if has_warn_offenders(&row.offenders) => RowStatus::Warn,
-        SignalResult::Mutation(result) if result.timeout > 0 => RowStatus::Warn,
-        _ if has_warn_offenders(&row.offenders) => RowStatus::Warn,
-        _ => RowStatus::Pass,
-    }
-}
-
-fn has_warn_offenders(offenders: &ayni_core::Offenders) -> bool {
-    match offenders {
-        ayni_core::Offenders::Coverage(items) => items.iter().any(|item| item.level == Level::Warn),
-        ayni_core::Offenders::Size(items) => items.iter().any(|item| item.level == Level::Warn),
-        ayni_core::Offenders::Complexity(items) => {
-            items.iter().any(|item| item.level == Level::Warn)
-        }
-        ayni_core::Offenders::Deps(items) => items.iter().any(|item| item.level == Level::Warn),
-        ayni_core::Offenders::Mutation(items) => items.iter().any(|item| item.level == Level::Warn),
-        ayni_core::Offenders::Test(_) => false,
+fn palette_for_status(status: ReportStatus) -> Palette {
+    match status {
+        ReportStatus::Pass => Palette::Success,
+        ReportStatus::Warn => Palette::Warning,
+        ReportStatus::Fail => Palette::Failure,
     }
 }
 
@@ -666,11 +566,12 @@ fn stylize(color_enabled: bool, value: &str, palette: Palette, bold: bool) -> St
 mod tests {
     use super::*;
     use ayni_core::{
-        AYNI_POLICY_FILE, AYNI_SIGNAL_SCHEMA_VERSION, Budget, ComplexityOffender, ComplexityResult,
-        CoverageOffender, CoverageResult, DepsResult, Language, Offenders, Scope, SignalKind,
-        SignalResult, SignalRow,
+        AYNI_POLICY_FILE, AYNI_SIGNAL_SCHEMA_VERSION, Budget, ComplexityBudget, ComplexityOffender,
+        ComplexityResult, CoverageBudget, CoverageOffender, CoverageResult, DepsBudget, DepsResult,
+        Finding, FindingMetadata, Findings, FloatThresholdBudget, Language, Offenders,
+        RunCompletion, Scope, SignalKind, SignalResult, SignalRow, SizeBudget, SizeOffender,
+        VerificationMetadata,
     };
-    use serde_json::json;
     use tempfile::TempDir;
 
     #[test]
@@ -691,7 +592,7 @@ mod tests {
                     fail_count: 1,
                     failure: None,
                 }),
-                budget: Budget::Size(serde_json::json!({})),
+                budget: Budget::Size(SizeBudget::default()),
                 offenders: Offenders::Size(vec![ayni_core::SizeOffender {
                     file: String::from("cli/src/main.rs"),
                     value: 900,
@@ -711,11 +612,15 @@ mod tests {
                     violation_count: 0,
                     failure: None,
                 }),
-                budget: Budget::Deps(serde_json::json!({})),
+                budget: Budget::Deps(DepsBudget::default()),
                 offenders: Offenders::Deps(Vec::new()),
             },
         ];
-        let text = build_report_text(&rows, None, false, 4);
+        let artifact = RunArtifact {
+            rows,
+            ..RunArtifact::default()
+        };
+        let text = build_report_text(&artifact, false, 4);
         assert!(text.contains("rust (apps/api)  0/1 passing"));
         assert!(text.contains("node (workspace)  1/1 passing"));
         assert!(text.contains("summary  1/2 checks passing"));
@@ -738,13 +643,53 @@ mod tests {
             }],
         };
 
-        let text = build_report_text(&[], Some(&completion), false, 3);
+        let artifact = RunArtifact {
+            completion,
+            ..RunArtifact::default()
+        };
+        let text = build_report_text(&artifact, false, 3);
         assert!(text.contains("ayni verify report"));
         assert!(text.contains("scope=requested state=incomplete"));
         assert!(text.contains("targets=0/1 detected=0 skipped=1"));
         assert!(
             text.contains("incomplete language=rust root=crates/api stage=detection: not detected")
         );
+    }
+
+    #[test]
+    fn build_report_text_surfaces_each_verification_command_once() {
+        let finding = |id_character: char, command: &str| Finding {
+            metadata: FindingMetadata {
+                id: format!(
+                    "ayni:finding:v1:sha256:{}",
+                    id_character.to_string().repeat(64)
+                ),
+                verification: VerificationMetadata {
+                    target: None,
+                    command: Some(command.to_string()),
+                },
+            },
+            offender: SizeOffender {
+                file: String::from("src/lib.rs"),
+                value: 10,
+                warn: 5,
+                fail: 9,
+                level: Level::Fail,
+            },
+        };
+        let command = "ayni verify size --file 'src/lib.rs'";
+        let artifact = RunArtifact {
+            findings: vec![Findings::Size(vec![
+                finding('a', command),
+                finding('b', command),
+            ])],
+            ..RunArtifact::default()
+        };
+
+        let text = build_report_text(&artifact, false, 2);
+
+        assert!(text.contains("verification commands\n"));
+        assert_eq!(text.matches(command).count(), 1);
     }
 
     #[test]
@@ -763,10 +708,11 @@ mod tests {
                     status: String::from("ok"),
                     failure: None,
                 }),
-                budget: Budget::Coverage(serde_json::json!({
-                    "line_percent_warn": 70.0,
-                    "line_percent_fail": 50.0
-                })),
+                budget: Budget::Coverage(CoverageBudget {
+                    line_percent_warn: Some(70.0),
+                    line_percent_fail: Some(50.0),
+                    ..CoverageBudget::default()
+                }),
                 offenders: Offenders::Coverage(vec![
                     CoverageOffender {
                         file: String::from("a.rs"),
@@ -803,10 +749,16 @@ mod tests {
                     fail_count: 0,
                     failure: None,
                 }),
-                budget: Budget::Complexity(serde_json::json!({
-                    "fn_cyclomatic": {"warn": 10.0, "fail": 20.0},
-                    "fn_cognitive": {"warn": 15.0, "fail": 25.0}
-                })),
+                budget: Budget::Complexity(ComplexityBudget {
+                    fn_cyclomatic: Some(FloatThresholdBudget {
+                        warn: 10.0,
+                        fail: 20.0,
+                    }),
+                    fn_cognitive: Some(FloatThresholdBudget {
+                        warn: 15.0,
+                        fail: 25.0,
+                    }),
+                }),
                 offenders: Offenders::Complexity(vec![ComplexityOffender {
                     file: String::from("core/src/lib.rs"),
                     line: 42,
@@ -818,7 +770,11 @@ mod tests {
             },
         ];
 
-        let text = build_report_text(&rows, None, false, 2);
+        let artifact = RunArtifact {
+            rows,
+            ..RunArtifact::default()
+        };
+        let text = build_report_text(&artifact, false, 2);
         assert!(text.contains("thresholds=warn=70.0 fail=50.0"));
         assert!(text.contains("deltas=warn=-2.0 fail=+18.0"));
         assert!(text.contains("cyclo_thresholds=warn=10.0 fail=20.0"));
@@ -849,7 +805,7 @@ mod tests {
                     violation_count: 0,
                     failure: None,
                 }),
-                budget: Budget::Deps(json!({})),
+                budget: Budget::Deps(DepsBudget::default()),
                 offenders: Offenders::Deps(vec![]),
             }],
         };

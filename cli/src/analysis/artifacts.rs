@@ -1,4 +1,5 @@
 use super::*;
+use ayni_adapters_common::workspace::is_generated_workspace_entry;
 use sha2::{Digest, Sha256};
 
 const MANAGED_LOCK_FINGERPRINT: &str = "AYNI_MANAGED_LOCK_FINGERPRINT";
@@ -102,11 +103,17 @@ fn source_fingerprint(root: &Path) -> Result<String, String> {
             let target = fs::read_link(&path)
                 .map_err(|error| format!("failed to read symlink {}: {error}", path.display()))?;
             hash_field(&mut hasher, target.to_string_lossy().as_bytes());
-        } else {
+        } else if metadata.is_file() {
             hasher.update(b"file");
+            hasher.update([u8::from(is_executable(&metadata))]);
             let bytes = fs::read(&path)
                 .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
             hash_field(&mut hasher, &bytes);
+        } else if metadata.is_dir() {
+            hasher.update(b"directory");
+        } else {
+            hasher.update(b"special");
+            hash_field(&mut hasher, special_file_type(&metadata).as_bytes());
         }
     }
     Ok(format!("sha256:{:x}", hasher.finalize()))
@@ -124,40 +131,58 @@ fn collect_source_entries(
     entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
         let path = entry.path();
+        let name = entry.file_name();
+        if is_generated_workspace_entry(&name.to_string_lossy()) {
+            continue;
+        }
         let file_type = entry
             .file_type()
             .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+        files.push(
+            path.strip_prefix(root)
+                .map_err(|_| format!("source path {} escaped repository root", path.display()))?
+                .to_path_buf(),
+        );
         if file_type.is_dir() {
-            let name = entry.file_name();
-            if is_generated_directory(&name.to_string_lossy()) {
-                continue;
-            }
             collect_source_entries(root, &path, files)?;
-        } else if file_type.is_file() || file_type.is_symlink() {
-            files.push(
-                path.strip_prefix(root)
-                    .map_err(|_| format!("source path {} escaped repository root", path.display()))?
-                    .to_path_buf(),
-            );
         }
     }
     Ok(())
 }
 
-fn is_generated_directory(name: &str) -> bool {
-    matches!(
-        name,
-        ".ayni"
-            | ".git"
-            | "node_modules"
-            | "target"
-            | ".venv"
-            | "build"
-            | "coverage"
-            | ".gradle"
-            | ".svelte-kit"
-            | "__pycache__"
-    )
+#[cfg(unix)]
+fn is_executable(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn special_file_type(metadata: &fs::Metadata) -> &'static str {
+    use std::os::unix::fs::FileTypeExt;
+
+    let file_type = metadata.file_type();
+    if file_type.is_block_device() {
+        "block"
+    } else if file_type.is_char_device() {
+        "char"
+    } else if file_type.is_fifo() {
+        "fifo"
+    } else if file_type.is_socket() {
+        "socket"
+    } else {
+        "unknown"
+    }
+}
+
+#[cfg(not(unix))]
+fn special_file_type(_metadata: &fs::Metadata) -> &'static str {
+    "unknown"
 }
 
 fn hash_field(hasher: &mut Sha256, value: &[u8]) {
@@ -230,5 +255,54 @@ pub(crate) fn workspace_root_from_config_path(config_path: &Path) -> PathBuf {
         PathBuf::from(".")
     } else {
         parent.to_path_buf()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_fingerprint;
+    use ayni_adapters_common::workspace::GENERATED_WORKSPACE_ENTRY_NAMES;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn generated_workspace_entries_do_not_change_source_provenance() {
+        let directory = TempDir::new().expect("fixture");
+        fs::write(directory.path().join("source.rs"), "fn main() {}\n").expect("source");
+        let before = source_fingerprint(directory.path()).expect("before");
+
+        for name in GENERATED_WORKSPACE_ENTRY_NAMES {
+            let generated = directory.path().join(name);
+            fs::create_dir(&generated).expect("generated directory");
+            fs::write(generated.join("output"), "generated").expect("generated output");
+        }
+
+        assert_eq!(source_fingerprint(directory.path()).expect("after"), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_provenance_distinguishes_executable_files_and_symlinks() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let directory = TempDir::new().expect("fixture");
+        let entry = directory.path().join("entry");
+        fs::write(&entry, "same bytes\n").expect("file");
+        fs::set_permissions(&entry, fs::Permissions::from_mode(0o644)).expect("non-executable");
+        let regular = source_fingerprint(directory.path()).expect("regular");
+
+        fs::set_permissions(&entry, fs::Permissions::from_mode(0o755)).expect("executable");
+        let executable = source_fingerprint(directory.path()).expect("executable fingerprint");
+        assert_ne!(regular, executable);
+
+        fs::remove_file(&entry).expect("remove file");
+        symlink("target-a", &entry).expect("symlink");
+        let symlink_a = source_fingerprint(directory.path()).expect("symlink fingerprint");
+        assert_ne!(executable, symlink_a);
+
+        fs::remove_file(&entry).expect("remove symlink");
+        symlink("target-b", &entry).expect("second symlink");
+        let symlink_b = source_fingerprint(directory.path()).expect("second symlink fingerprint");
+        assert_ne!(symlink_a, symlink_b);
     }
 }

@@ -63,7 +63,7 @@ export default withMermaid(defineConfig({
         items: [
           { text: 'Configuration', link: '/product/config' },
           { text: 'CLI', link: '/cli' },
-          { text: 'Signal Schema v3', link: '/product/signals/v3' },
+          { text: 'Signal Schema v4', link: '/product/signals/v4' },
           { text: 'Adapter Capabilities', link: '/product/capabilities' },
         ],
       },

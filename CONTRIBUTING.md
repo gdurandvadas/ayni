@@ -63,7 +63,10 @@ Regenerate the CLI reference after changing commands or flags:
 cargo doc-cli > docs/cli.md
 ```
 
-The documentation workflow deploys directly to GitHub Pages from an uploaded build artifact. It runs for pushes to `main`, published GitHub Releases (built from the release tag), and manual `workflow_dispatch` runs (built from the selected revision). The workflow regenerates `docs/cli.md`, builds VitePress, then deploys `docs/.vitepress/dist`; source documentation remains under `docs/`.
+Every pull request verifies that `docs/cli.md` matches `cargo doc-cli` and that
+VitePress builds successfully as part of the event-driven `ayni-status` gate.
+Pushes to `main` additionally deploy the uploaded `docs/.vitepress/dist` artifact
+to GitHub Pages; source documentation remains under `docs/`.
 
 The GitHub Pages custom-domain configuration preserves the intended `ayni.gedv.me` domain.
 

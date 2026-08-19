@@ -239,7 +239,7 @@ fn run_persists_separate_non_completion_evidence_and_preserves_other_slots() {
     let stdout = String::from_utf8(output.stdout).expect("stdout");
     let document: Value = serde_json::from_str(&stdout).expect("json");
     assert_eq!(document["schema_version"], "0.1.0");
-    assert_eq!(document["signal_schema_version"], "0.3.0");
+    assert_eq!(document["signal_schema_version"], "0.4.0");
     assert_eq!(document["repository_completion"]["evaluated"], false);
     assert_eq!(
         document["repository_completion"]["required_command"],

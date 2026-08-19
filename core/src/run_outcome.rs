@@ -62,7 +62,7 @@ mod tests {
                     runner: "test".into(),
                     failure: None,
                 }),
-                budget: Budget::Test(serde_json::json!({})),
+                budget: Budget::Test(crate::TestBudget::default()),
                 offenders: Offenders::Test(vec![]),
             }],
         }

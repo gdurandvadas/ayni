@@ -1,4 +1,4 @@
-//! Black-box coverage for schema-v3 finding artifacts and their displayed
+//! Black-box coverage for schema-v4 finding artifacts and their displayed
 //! verification commands.
 
 use serde_json::Value;
@@ -205,15 +205,15 @@ fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
     assert!(!json.status.success(), "size finding must fail the run");
     let stdout = String::from_utf8(json.stdout).expect("JSON stdout");
     assert_eq!(stdout, fixture.persisted());
-    let artifact: Value = serde_json::from_str(&stdout).expect("schema-v3 JSON");
+    let artifact: Value = serde_json::from_str(&stdout).expect("schema-v4 JSON");
     let finding = &artifact["rows"][0]["offenders"]["items"][0];
     assert_public_finding(finding, &command);
 
     let terminal = fixture.analyze(&[]);
     assert!(!terminal.status.success());
     let terminal_stdout = String::from_utf8_lossy(&terminal.stdout);
-    assert!(!terminal_stdout.contains("verification commands"));
-    assert!(!terminal_stdout.contains(&command));
+    assert!(terminal_stdout.contains("verification commands"));
+    assert_eq!(terminal_stdout.matches(&command).count(), 1);
 
     let listed = ayni()
         .args(["verify", "list", "--artifact"])
@@ -228,8 +228,8 @@ fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
     let markdown = fixture.analyze(&["--output", "markdown"]);
     assert!(!markdown.status.success());
     let markdown_stdout = String::from_utf8_lossy(&markdown.stdout);
-    assert!(!markdown_stdout.contains("Verification commands"));
-    assert!(!markdown_stdout.contains(&command));
+    assert!(markdown_stdout.contains("## Verification commands"));
+    assert_eq!(markdown_stdout.matches(&command).count(), 1);
 }
 
 #[test]
@@ -243,7 +243,7 @@ fn synthetic_zero_test_finding_has_an_actionable_public_command() {
     assert!(!output.status.success(), "zero tests must fail the run");
     let stdout = String::from_utf8(output.stdout).expect("JSON stdout");
     assert_eq!(stdout, fixture.persisted());
-    let artifact: Value = serde_json::from_str(&stdout).expect("schema-v3 JSON");
+    let artifact: Value = serde_json::from_str(&stdout).expect("schema-v4 JSON");
     assert_eq!(artifact["rows"][0]["result"]["total_tests"], 0);
     assert_public_finding(&artifact["rows"][0]["offenders"]["items"][0], &command);
 }

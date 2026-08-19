@@ -31,9 +31,17 @@ roots = ["missing"]
     )
     .expect("policy");
 
-    let planning =
-        build_analyze_targets(dir.path(), &policy, None, None, Some(Language::Rust), false)
-            .expect("planning");
+    let registry = crate::build_registry();
+    let planning = build_analyze_targets(
+        dir.path(),
+        &policy,
+        None,
+        None,
+        Some(Language::Rust),
+        false,
+        &registry,
+    )
+    .expect("planning");
 
     assert_eq!(planning.expected_targets, 1);
     assert_eq!(planning.detected_targets, 0);
@@ -60,9 +68,9 @@ fn completion_artifact_writer_atomically_replaces_existing_evidence() {
 use crate::agents::{MANAGED_BEGIN, MANAGED_END, managed_block, sync_impl, upsert_managed_block};
 use ayni_core::{
     AYNI_SIGNAL_SCHEMA_VERSION, AyniPolicy, Budget, InvocationContext, Language, Offenders,
-    OutputContext, RunArtifact, RunArtifactMetadata, Scope, SignalKind, SignalResult, TestResult,
+    OutputContext, RunArtifact, RunArtifactMetadata, Scope, SignalKind, SignalResult, TestBudget,
+    TestResult,
 };
-use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
 
@@ -157,7 +165,7 @@ fn upsert_managed_block_appends_when_missing() {
 }
 
 #[test]
-fn serialized_json_is_schema_v3_and_matches_persisted_artifact() {
+fn serialized_json_is_schema_v4_and_matches_persisted_artifact() {
     let dir = TempDir::new().expect("tempdir");
     fs::create_dir_all(dir.path().join(".ayni/last")).expect("artifact directory");
     let artifact = RunArtifact::new(
@@ -179,7 +187,8 @@ fn serialized_json_is_schema_v3_and_matches_persisted_artifact() {
         },
         ayni_core::RunCompletion::complete(ayni_core::CompletionScope::Repository, 1),
         vec![test_row(true, 1, 0)],
-    );
+    )
+    .expect("valid artifact");
     let serialized = serialize_artifact(&artifact).expect("serialize artifact");
     persist_artifact_at(dir.path(), SIGNALS_ARTIFACT, &serialized).expect("persist artifact");
 
@@ -221,6 +230,7 @@ roots = ["."]
     )
     .expect("policy");
 
+    let registry = crate::build_registry();
     let planning = build_analyze_targets(
         dir.path(),
         &policy,
@@ -228,6 +238,7 @@ roots = ["."]
         None,
         Some(Language::Kotlin),
         false,
+        &registry,
     )
     .expect("targets");
 
@@ -262,6 +273,7 @@ roots = ["."]
     )
     .expect("policy");
 
+    let registry = crate::build_registry();
     let planning = build_analyze_targets(
         dir.path(),
         &policy,
@@ -269,6 +281,7 @@ roots = ["."]
         None,
         Some(Language::Python),
         false,
+        &registry,
     )
     .expect("targets");
     assert_eq!(planning.targets.len(), 1);
@@ -294,7 +307,7 @@ fn test_row(pass: bool, passed: u64, failed: u64) -> ayni_core::SignalRow {
             runner: String::from("cargo-test"),
             failure: None,
         }),
-        budget: Budget::Test(json!({})),
+        budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(Vec::new()),
     }
 }

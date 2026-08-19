@@ -4,11 +4,10 @@ use ayni_adapters_common::exec::{format_command, run_command_for_context_structu
 use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
 use ayni_adapters_common::xml::{attr_string, decode_xml};
 use ayni_core::{
-    Budget, Language, Level, MutationOffender, MutationResult, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    Budget, Language, Level, MutationBudget, MutationOffender, MutationResult, Offenders,
+    RunContext, Scope, SignalKind, SignalResult, SignalRow,
 };
 use regex::Regex;
-use serde_json::json;
 use std::fs;
 use std::path::Path;
 
@@ -32,7 +31,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
                 score: None,
                 failure: None,
             }),
-            budget: Budget::Mutation(json!({"enabled": false})),
+            budget: Budget::Mutation(MutationBudget {
+                enabled: Some(false),
+            }),
             offenders: Offenders::Mutation(Vec::new()),
         });
     }
@@ -107,7 +108,9 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             score,
             failure: None,
         }),
-        budget: Budget::Mutation(json!({"enabled": true})),
+        budget: Budget::Mutation(MutationBudget {
+            enabled: Some(true),
+        }),
         offenders: Offenders::Mutation(report.offenders),
     })
 }
@@ -135,7 +138,9 @@ fn error_row(
             score: None,
             failure: Some(failure),
         }),
-        budget: Budget::Mutation(json!({"enabled": true})),
+        budget: Budget::Mutation(MutationBudget {
+            enabled: Some(true),
+        }),
         offenders: Offenders::Mutation(Vec::new()),
     }
 }

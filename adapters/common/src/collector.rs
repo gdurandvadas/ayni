@@ -3,10 +3,10 @@
 use crate::exec::ExecutionError;
 use crate::failure::command_failure_from_execution_error;
 use ayni_core::{
-    AdapterError, Budget, ComplexityResult, CoverageResult, DepsResult, Language, MutationResult,
-    Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, SizeResult, TestResult,
+    AdapterError, Budget, ComplexityBudget, ComplexityResult, CoverageBudget, CoverageResult,
+    DepsBudget, DepsResult, Language, MutationBudget, MutationResult, Offenders, RunContext, Scope,
+    SignalKind, SignalResult, SignalRow, SizeBudget, SizeResult, TestBudget, TestResult,
 };
-use serde_json::json;
 
 /// A failure returned while collecting one signal.
 ///
@@ -73,7 +73,7 @@ fn execution_error_row(
                 runner: error.command,
                 failure: Some(failure),
             }),
-            budget: Budget::Test(json!({})),
+            budget: Budget::Test(TestBudget::default()),
             offenders: Offenders::Test(Vec::new()),
         },
         SignalKind::Coverage => SignalRow {
@@ -89,7 +89,7 @@ fn execution_error_row(
                 status: String::from("error"),
                 failure: Some(failure),
             }),
-            budget: Budget::Coverage(json!({})),
+            budget: Budget::Coverage(CoverageBudget::default()),
             offenders: Offenders::Coverage(Vec::new()),
         },
         SignalKind::Size => SignalRow {
@@ -104,7 +104,7 @@ fn execution_error_row(
                 fail_count: 1,
                 failure: Some(failure),
             }),
-            budget: Budget::Size(json!({})),
+            budget: Budget::Size(SizeBudget::default()),
             offenders: Offenders::Size(Vec::new()),
         },
         SignalKind::Complexity => SignalRow {
@@ -122,7 +122,7 @@ fn execution_error_row(
                 fail_count: 1,
                 failure: Some(failure),
             }),
-            budget: Budget::Complexity(json!({})),
+            budget: Budget::Complexity(ComplexityBudget::default()),
             offenders: Offenders::Complexity(Vec::new()),
         },
         SignalKind::Deps => SignalRow {
@@ -136,7 +136,7 @@ fn execution_error_row(
                 violation_count: 1,
                 failure: Some(failure),
             }),
-            budget: Budget::Deps(json!({})),
+            budget: Budget::Deps(DepsBudget::default()),
             offenders: Offenders::Deps(Vec::new()),
         },
         SignalKind::Mutation => SignalRow {
@@ -152,7 +152,7 @@ fn execution_error_row(
                 score: None,
                 failure: Some(failure),
             }),
-            budget: Budget::Mutation(json!({})),
+            budget: Budget::Mutation(MutationBudget::default()),
             offenders: Offenders::Mutation(Vec::new()),
         },
     }
