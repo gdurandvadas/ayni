@@ -11,9 +11,10 @@ and `toolchain` directives, validates `go.work` membership, and locks an exact
 Go runtime. Modules with declared dependencies require a committed `go.sum`.
 `env build` runs `go mod download all` only against staged, digest-checked
 manifests, stores module/build data below the managed cache, disables Go's own
-toolchain downloads, and runs quality commands with read-only module metadata
-and networking disabled. Complexity additionally provisions pinned `gocyclo`
-`0.6.0` through its Go module provider.
+toolchain downloads, keeps cached modules writable so generated environment
+state remains removable, and runs quality commands with read-only module
+metadata and networking disabled. Complexity additionally provisions pinned
+`gocyclo` `0.6.0` through its Go module provider.
 
 The Go toolchain and `gocyclo` remain user-owned prerequisites for `--host`
 execution. Managed support does not cover module-less GOPATH projects, external
