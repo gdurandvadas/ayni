@@ -21,6 +21,7 @@ export default withMermaid(defineConfig({
           { text: 'How Ayni Works', link: '/getting-started/how-ayni-works' },
           { text: 'Managed Environments', link: '/product/environments' },
           { text: 'Signals', link: '/product/signals' },
+          { text: 'Adapter Capabilities', link: '/product/capabilities' },
           { text: 'Verification', link: '/product/runtime' },
           { text: 'Impact Analysis', link: '/product/impact' },
         ],
@@ -63,8 +64,7 @@ export default withMermaid(defineConfig({
           { text: 'Configuration', link: '/product/config' },
           { text: 'CLI', link: '/cli' },
           { text: 'Signal Schema v3', link: '/product/signals/v3' },
-          { text: 'Signal Schema v2', link: '/product/signals/v2' },
-          { text: 'Signal Schema v1', link: '/product/signals/v1' },
+          { text: 'Adapter Capabilities', link: '/product/capabilities' },
         ],
       },
       {

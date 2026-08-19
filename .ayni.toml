@@ -30,14 +30,14 @@ roots = [
 # args = ["mutants", "--list"]
 
 [rust.size]
-"*.rs" = { warn = 1600, fail = 2000, exclude = ["target/**"] }
+"*.rs" = { warn = 1000, fail = 1600, exclude = ["target/**", ".ayni/**"] }
 
 [rust.complexity]
-fn_cyclomatic = { warn = 15, fail = 20 }
-fn_cognitive   = { warn = 29, fail = 35 }
+fn_cyclomatic = { warn = 10, fail = 15 }
+fn_cognitive   = { warn = 20, fail = 29 }
 
 [rust.coverage]
-line_percent = { warn = 40, fail = 35 }
+line_percent = { warn = 80, fail = 77 }
 
 [rust.deps.forbidden]
 "core"          = ["adapters/*", "cli"]

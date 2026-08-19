@@ -13,7 +13,7 @@ from typing import Any, NoReturn, Sequence
 
 SCHEMA_VERSION = "0.3.0"
 EXPECTED_KINDS = frozenset({"test", "coverage", "size", "complexity", "deps"})
-LANGUAGES = ("go", "node", "python", "kotlin")
+LANGUAGES = ("rust", "go", "node", "python", "kotlin")
 
 
 class ValidationError(ValueError):
@@ -53,6 +53,17 @@ def reject_non_finite(value: Any, location: str = "artifact") -> None:
             reject_non_finite(child, f"{location}[{index}]")
 
 
+def require_sha256(value: Any, location: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.startswith("sha256:")
+        or len(value) != 71
+        or any(character not in "0123456789abcdef" for character in value[7:])
+    ):
+        fail(f"{location} must be a lowercase SHA-256 fingerprint")
+    return value
+
+
 def normalized_root(scope: dict[str, Any], row_number: int) -> str:
     path = scope.get("path")
     if path is None:
@@ -76,6 +87,27 @@ def validate_artifact(
     reject_non_finite(document)
     if document.get("schema_version") != SCHEMA_VERSION:
         fail(f"schema_version must be {SCHEMA_VERSION!r}")
+    if document.get("execution_mode") != "managed":
+        fail("execution_mode must identify managed evidence")
+    require_sha256(document.get("contract_digest"), "contract_digest")
+    require_sha256(
+        document.get("environment_lock_fingerprint"),
+        "environment_lock_fingerprint",
+    )
+    require_sha256(document.get("source_fingerprint"), "source_fingerprint")
+    tool_versions = require_array(document.get("tool_versions"), "tool_versions")
+    if not tool_versions:
+        fail("tool_versions must record managed runtime provenance")
+    tool_names: list[str] = []
+    for index, raw_tool in enumerate(tool_versions):
+        tool = require_object(raw_tool, f"tool_versions[{index}]")
+        name = tool.get("tool")
+        version = tool.get("version")
+        if not isinstance(name, str) or not name or not isinstance(version, str) or not version:
+            fail(f"tool_versions[{index}] must contain non-empty tool and version strings")
+        tool_names.append(name)
+    if tool_names != sorted(set(tool_names)):
+        fail("tool_versions must be sorted by unique tool name")
 
     # Ayni preserves the normalized lexical parent of the supplied config path.
     # Do not resolve this path: CI intentionally checks fixtures through a

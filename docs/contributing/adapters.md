@@ -319,7 +319,7 @@ Coverage; Focused verification; Impact planning; Contract; Configuration
 Example. State roots and detection, language-specific package-manager or
 build-system resolution, each tool's required/optional ownership, and only
 versions enforced or selected by code; write “no version enforced” otherwise.
-Map all six canonical signals to their tools.
+Map every supported or experimental canonical signal to its real measurement tool, and mark unavailable signals explicitly.
 
 The focused-verification section must include a six-signal matrix for `--file`,
 `--package`, and `--name`, explain rejection behavior, and say that

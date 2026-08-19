@@ -101,9 +101,22 @@ pub struct ArtifactComparison {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtifactComparisonError {
-    IncompatibleSchema { side: &'static str, found: String },
-    IncompleteArtifact { side: &'static str },
-    InvalidArtifact { side: &'static str, reason: String },
+    IncompatibleSchema {
+        side: &'static str,
+        found: String,
+    },
+    IncompleteArtifact {
+        side: &'static str,
+    },
+    IncompatibleProvenance {
+        field: &'static str,
+        before: String,
+        after: String,
+    },
+    InvalidArtifact {
+        side: &'static str,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for ArtifactComparisonError {
@@ -116,6 +129,14 @@ impl std::fmt::Display for ArtifactComparisonError {
             Self::IncompleteArtifact { side } => {
                 write!(formatter, "{side} artifact is incomplete")
             }
+            Self::IncompatibleProvenance {
+                field,
+                before,
+                after,
+            } => write!(
+                formatter,
+                "artifact provenance is incompatible for {field}: before={before}, after={after}"
+            ),
             Self::InvalidArtifact { side, reason } => {
                 write!(formatter, "{side} artifact is invalid: {reason}")
             }
@@ -134,6 +155,7 @@ pub fn compare_artifacts(
 ) -> Result<ArtifactComparison, ArtifactComparisonError> {
     let before_rows = validate_and_index(before, "before")?;
     let after_rows = validate_and_index(after, "after")?;
+    validate_compatible_provenance(before, after)?;
     let mut matched = Vec::new();
     let mut changed = Vec::new();
     let mut added = Vec::new();
@@ -168,6 +190,52 @@ pub fn compare_artifacts(
         added,
         removed,
     })
+}
+
+fn validate_compatible_provenance(
+    before: &RunArtifact,
+    after: &RunArtifact,
+) -> Result<(), ArtifactComparisonError> {
+    let pairs = [
+        (
+            "execution_mode",
+            format!("{:?}", before.metadata.execution_mode),
+            format!("{:?}", after.metadata.execution_mode),
+        ),
+        (
+            "contract_digest",
+            before.metadata.contract_digest.clone(),
+            after.metadata.contract_digest.clone(),
+        ),
+        (
+            "environment_lock_fingerprint",
+            before
+                .metadata
+                .environment_lock_fingerprint
+                .clone()
+                .unwrap_or_else(|| String::from("none")),
+            after
+                .metadata
+                .environment_lock_fingerprint
+                .clone()
+                .unwrap_or_else(|| String::from("none")),
+        ),
+        (
+            "tool_versions",
+            serde_json::to_string(&before.metadata.tool_versions).unwrap_or_default(),
+            serde_json::to_string(&after.metadata.tool_versions).unwrap_or_default(),
+        ),
+    ];
+    for (field, before, after) in pairs {
+        if before != after {
+            return Err(ArtifactComparisonError::IncompatibleProvenance {
+                field,
+                before,
+                after,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn validate_and_index<'a>(

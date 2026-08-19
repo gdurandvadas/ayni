@@ -1,4 +1,5 @@
 import copy
+import copy
 import unittest
 from pathlib import Path
 
@@ -27,6 +28,11 @@ def artifact(*, policy_fail=False):
         )
     return {
         "schema_version": "0.3.0",
+        "execution_mode": "managed",
+        "contract_digest": "sha256:" + "1" * 64,
+        "environment_lock_fingerprint": "sha256:" + "2" * 64,
+        "source_fingerprint": "sha256:" + "3" * 64,
+        "tool_versions": [{"tool": "python:.:runtime:python", "version": "3.12.11"}],
         "repository_root": LEXICAL_ROOT,
         "invocation": {"command": "check", "languages": ["python"]},
         "completion": {
@@ -101,6 +107,16 @@ class ArtifactValidatorTests(unittest.TestCase):
         value = artifact()
         value["schema_version"] = "0.2.0"
         self.assert_invalid(value, "schema_version")
+
+    def test_host_evidence_is_rejected(self):
+        value = artifact()
+        value["execution_mode"] = "host"
+        self.assert_invalid(value, "managed evidence")
+
+    def test_missing_lock_fingerprint_is_rejected(self):
+        value = artifact()
+        del value["environment_lock_fingerprint"]
+        self.assert_invalid(value, "environment_lock_fingerprint")
 
     def test_wrong_language_target(self):
         value = artifact()

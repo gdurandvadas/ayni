@@ -588,18 +588,6 @@ fn signal_tools(
             source.clone(),
         ));
     }
-    if request.requires_any(&[SignalKind::Mutation]) {
-        tools.push(tool(
-            "cargo-mutants",
-            VersionRequirement::unresolved("catalog does not pin cargo-mutants")
-                .map_err(plan_error)?,
-            "cargo-install",
-            ToolInstallationScope::Isolated,
-            vec![SignalKind::Mutation],
-            platforms,
-            source,
-        ));
-    }
     Ok(tools)
 }
 
@@ -1271,7 +1259,7 @@ mod tests {
                 .iter()
                 .map(|tool| tool.tool.as_str())
                 .collect::<Vec<_>>(),
-            ["cargo-llvm-cov", "cargo-mutants", "rust-code-analysis-cli"]
+            ["cargo-llvm-cov", "rust-code-analysis-cli"]
         );
         assert_eq!(
             tools
@@ -1290,11 +1278,8 @@ mod tests {
         assert!(
             tools
                 .iter()
-                .filter(|tool| matches!(
-                    tool.tool.as_str(),
-                    "cargo-mutants" | "rust-code-analysis-cli"
-                ))
-                .all(|tool| matches!(tool.version, VersionRequirement::Unresolved { .. }))
+                .find(|tool| tool.tool == "rust-code-analysis-cli")
+                .is_some_and(|tool| matches!(tool.version, VersionRequirement::Unresolved { .. }))
         );
     }
 }

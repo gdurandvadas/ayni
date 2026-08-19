@@ -23,16 +23,14 @@ jobs:
       - name: Build Ayni CLI
         uses: ./.github/actions/build-ayni
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Install pinned Mise
+        uses: jdx/mise-action@v3
         with:
-          go-version: '1.22.x'
-          cache-dependency-path: examples/go/mono/go.sum
+          version: 2026.6.14
+          install: false
+          cache: false
 
-      - name: Install Go signal tools
-        run: go install github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0
-
-      - name: Validate Go example
+      - name: Validate Go example through managed execution
         uses: ./.github/actions/validate-example
         with:
           language: go

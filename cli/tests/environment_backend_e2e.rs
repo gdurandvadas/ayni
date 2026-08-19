@@ -281,7 +281,7 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         managed_root.join(".ayni").display()
     )));
     assert!(!managed_args.contains(&format!("{}:/workspace:rw", managed_root.display())));
-    assert!(managed_args.contains("/workspace/.ayni/environment:rw,nosuid,size=64m,mode=1777"));
+    assert!(managed_args.contains("/workspace/.ayni/environment:rw,exec,nosuid,size=6g,mode=1777"));
     assert!(managed_args.contains("HOME=/tmp"));
     // The writable nested mount preserves materialized cache/state while the
     // checkout-wide mount remains read-only for managed quality execution.
@@ -319,7 +319,8 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         managed_root.join(".ayni").display()
     )));
     assert!(
-        managed_verify_args.contains("/workspace/.ayni/environment:rw,nosuid,size=64m,mode=1777")
+        managed_verify_args
+            .contains("/workspace/.ayni/environment:rw,exec,nosuid,size=6g,mode=1777")
     );
     assert!(managed_verify_args.contains("HOME=/tmp"));
     assert!(cache_marker.exists());

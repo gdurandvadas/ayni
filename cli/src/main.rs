@@ -13,6 +13,7 @@ mod environment;
 mod environment_backend;
 mod environment_lock;
 mod impact;
+mod init;
 mod policy;
 mod registry;
 mod ui;
@@ -33,6 +34,7 @@ fn dispatch(operation: application::Operation) -> ExitCode {
     use application::Operation;
 
     match operation {
+        Operation::Init(operation) => init::run(operation, &build_registry()),
         operation @ (Operation::Check(_) | Operation::Verify(_) | Operation::ImpactRun(_)) => {
             dispatch_analysis(operation)
         }
@@ -43,9 +45,7 @@ fn dispatch(operation: application::Operation) -> ExitCode {
         | Operation::EnvBuild(_)
         | Operation::EnvShell(_)
         | Operation::EnvRun(_)) => dispatch_environment(operation),
-        operation @ (Operation::ContractShow(_) | Operation::ContractValidate(_)) => {
-            dispatch_contract(operation)
-        }
+        Operation::ContractShow(operation) => dispatch_contract(operation),
         Operation::AgentsSync(operation) => agents_sync(&operation.repo_root),
         Operation::VerifyList(operation) => verification_list::run(&operation.artifact),
         Operation::ResultsCompare(operation) => artifact_compare::run(
@@ -106,19 +106,13 @@ fn dispatch_environment(operation: application::Operation) -> ExitCode {
     }
 }
 
-fn dispatch_contract(operation: application::Operation) -> ExitCode {
-    use application::{Operation, OutputFormat};
+fn dispatch_contract(operation: application::ContractOperation) -> ExitCode {
+    use application::OutputFormat;
 
-    match operation {
-        Operation::ContractShow(operation) => contract_display(
-            operation.config.to_string_lossy().as_ref(),
-            operation.output == OutputFormat::Json,
-        ),
-        Operation::ContractValidate(operation) => {
-            contract_validate(&operation.config, operation.output == OutputFormat::Json)
-        }
-        _ => unreachable!("dispatch_contract received a non-contract operation"),
-    }
+    contract_display(
+        operation.config.to_string_lossy().as_ref(),
+        operation.output == OutputFormat::Json,
+    )
 }
 
 fn output_arg(output: application::OutputFormat) -> OutputArg {
@@ -144,28 +138,6 @@ fn run_verify_operation(operation: application::VerifyOperation) -> ExitCode {
     match verify::run(request) {
         Ok(outcome) => crate::application_error::outcome_exit(outcome),
         Err(error) => crate::application_error::render_error(error),
-    }
-}
-
-fn contract_validate(config_path: &Path, json: bool) -> ExitCode {
-    let adapter_facts = build_registry()
-        .adapters()
-        .iter()
-        .map(|adapter| adapter.policy_effectiveness_facts())
-        .collect::<Vec<_>>();
-    match contract::display(config_path, &adapter_facts, json) {
-        Ok(output) => {
-            if json {
-                print!("{output}");
-            } else {
-                println!("contract valid");
-            }
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            ExitCode::from(2)
-        }
     }
 }
 

@@ -156,3 +156,5 @@ rm "$HOME/.local/bin/ayni"
 ```
 
 If you added a dedicated Ayni `PATH` entry to a shell startup file, remove that line as well. Repository files such as `.ayni.toml`, `.ayni.lock`, `.ayni/`, and OCI images are not removed automatically.
+
+Next: follow the [Quickstart](/getting-started/quickstart) to preview a policy and produce managed evidence.

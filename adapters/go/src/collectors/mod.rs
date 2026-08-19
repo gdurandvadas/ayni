@@ -1,7 +1,6 @@
 mod complexity;
 mod coverage;
 mod deps;
-mod mutation;
 mod size;
 mod test;
 mod util;
@@ -41,7 +40,9 @@ impl SignalCollector for GoCollector {
             SignalKind::Size => size::collect(context).map_err(CollectorError::Adapter),
             SignalKind::Complexity => complexity::collect(context),
             SignalKind::Deps => deps::collect(context),
-            SignalKind::Mutation => mutation::collect(context),
+            SignalKind::Mutation => Err(CollectorError::Adapter(String::from(
+                "mutation is not supported for Go targets",
+            ))),
         };
         finish_collection(Language::Go, kind, context, result)
     }
@@ -58,6 +59,36 @@ mod tests {
     #[test]
     fn controlled_timeout_child() {
         std::thread::sleep(Duration::from_secs(2));
+    }
+
+    #[test]
+    fn mutation_is_rejected_without_invoking_a_tool() {
+        let policy: AyniPolicy = toml::from_str(
+            r#"
+[checks]
+mutation = true
+
+[languages]
+enabled = ["go"]
+"#,
+        )
+        .expect("policy");
+        let cwd = std::env::current_dir().expect("working directory");
+        let context = RunContext {
+            repo_root: cwd.clone(),
+            target_root: cwd.clone(),
+            workdir: cwd.clone(),
+            policy,
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("go", cwd, "test", 100),
+            debug: false,
+        };
+
+        let error = GoCollector
+            .collect(SignalKind::Mutation, &context)
+            .expect_err("Go mutation must be rejected");
+        assert_eq!(error.language, Language::Go);
+        assert_eq!(error.message, "mutation is not supported for Go targets");
     }
 
     #[test]

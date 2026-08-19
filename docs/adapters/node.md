@@ -27,7 +27,7 @@ use `--host` for those package managers.
 | `size` | built-in JavaScript/TypeScript source scan | no external tool |
 | `complexity` | `eslint`; `@typescript-eslint/parser` | managed: exact project versions from the native lockfile; host: no version enforced |
 | `deps` | built-in package and workspace manifest graph | no external tool |
-| `mutation` | `@stryker-mutator/core` (opt-in) | managed: exact project version from the native lockfile; host: no version enforced |
+| `mutation` | `@stryker-mutator/core` (experimental, opt-in) | managed: exact project version from the native lockfile; host: no version enforced; reports no score until Stryker report parsing is implemented |
 
 ## Focused verification
 
@@ -61,7 +61,7 @@ transitive reverse dependencies even when configured roots name individual
 workspace members. Only manifests matched by the workspace patterns enter the
 graph. npm, pnpm, Yarn, and Bun lock changes broaden the plan, and package-
 scoped dependency execution resolves the governing workspace. Tests and dependency checks use package scope;
-coverage and mutation broaden to the configured root; size and complexity use
+coverage and experimental mutation broaden to the configured root; size and complexity use
 exact changed-file scope when safe. Package manifests, npm lockfiles, common
 JSON/YAML/TOML and `*.config.*` inputs, environment files, and ambiguous
 ownership broaden every enabled signal and record an uncertainty.
@@ -74,6 +74,8 @@ Enabled checks come from `[checks]`. Configure roots in `[node].roots`
 `[node.deps.forbidden]`. Command overrides are optional in
 `[node.tooling.test]`, `[node.tooling.coverage]`, and
 `[node.tooling.mutation]`; each override requires `command` and may set `args`.
+Node mutation support is experimental: Ayni delegates pass/fail to Stryker and
+intentionally leaves the mutation score unset rather than fabricating one.
 
 Size requires a budget entry and complexity requires `fn_cyclomatic`; either
 missing value produces a clear collector error. Coverage thresholds and

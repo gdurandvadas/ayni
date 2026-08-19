@@ -16,6 +16,7 @@ pub(crate) enum ExecutionMode {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Operation {
+    Init(InitOperation),
     EnvShow(EnvShowOperation),
     EnvDoctor(RepositoryOperation),
     EnvLock(EnvLockOperation),
@@ -23,7 +24,6 @@ pub(crate) enum Operation {
     EnvShell(EnvShellOperation),
     EnvRun(EnvRunOperation),
     ContractShow(ContractOperation),
-    ContractValidate(ContractOperation),
     Verify(VerifyOperation),
     VerifyList(VerifyListOperation),
     ImpactShow(ImpactOperation),
@@ -32,6 +32,12 @@ pub(crate) enum Operation {
     AgentsSync(RepositoryOperation),
     ResultsCompare(ResultsCompareOperation),
     GenerateDocs,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct InitOperation {
+    pub repo_root: PathBuf,
+    pub write: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]

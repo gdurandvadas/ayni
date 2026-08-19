@@ -15,7 +15,7 @@ jobs:
   status:
     name: status
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - name: Wait for all Ayni workflows
         uses: actions/github-script@v7
@@ -29,7 +29,7 @@ jobs:
               "validate Node mono example",
               "validate Python mono example"
             ];
-            const deadline = Date.now() + 14 * 60 * 1000;
+            const deadline = Date.now() + 44 * 60 * 1000;
 
             while (true) {
               const { data } = await github.rest.checks.listForRef({

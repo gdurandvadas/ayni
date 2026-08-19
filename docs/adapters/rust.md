@@ -27,7 +27,7 @@ ancestry-based.
 | `size` | built-in Rust source scan | no external tool |
 | `complexity` | `rust-code-analysis-cli`; Cargo metadata | managed: an exact tool version selected during locking plus exact-toolchain Cargo; host: no version enforced |
 | `deps` | Cargo workspace/dependency graph scan | managed: Cargo from the exact locked Rust toolchain; host: no version enforced |
-| `mutation` | `cargo-mutants` (opt-in) | managed: an exact version selected during locking; host: no version enforced |
+| `mutation` | unsupported | Rust mutation measurement is not supported; enabling it fails explicitly before tool execution |
 
 ## Focused verification
 
@@ -42,7 +42,7 @@ always valid. The accepted selectors are:
 | `size` | yes | no | no |
 | `complexity` | yes | yes | no |
 | `deps` | yes | yes | no |
-| `mutation` | no | no | no |
+| `mutation` | unsupported | unsupported | unsupported |
 
 Rust source files do not map reliably to Cargo test targets, so use package and
 test-name filters for `test`. `--name` is test-only, and `--file` cannot be
@@ -63,8 +63,8 @@ Dependency mapping includes normal, development, build, target-specific, and
 workspace-inherited aliased Cargo tables. Declared workspace membership and
 exclusions are honored; a changed source below a non-member manifest broadens
 rather than being assigned to an enclosing package.
-Tests and dependency checks use package scope; coverage and mutation broaden to
-the configured root; size and complexity use exact changed-file scope when the
+Tests and dependency checks use package scope; coverage broadens to the
+configured root; size and complexity use exact changed-file scope when the
 file still exists. Cargo manifests, lockfiles, Rust toolchain files, `.cargo`
 configuration, other configuration-sensitive inputs, and ambiguous ownership
 broaden every enabled signal and record an uncertainty.
@@ -75,8 +75,9 @@ Enabled checks come from `[checks]`. Configure Rust roots in `[rust].roots`
 (default `["."]`), size budgets in `[rust.size]`, complexity thresholds in
 `[rust.complexity]`, coverage thresholds in `[rust.coverage]`, and forbidden
 dependency edges in `[rust.deps.forbidden]`. Command overrides are optional in
-`[rust.tooling.test]`, `[rust.tooling.coverage]`, and
-`[rust.tooling.mutation]`; each override requires `command` and may set `args`.
+`[rust.tooling.test]` and `[rust.tooling.coverage]`; each override requires
+`command` and may set `args`. Rust mutation is unsupported, including command
+overrides.
 
 Size requires at least one budget entry and complexity requires
 `fn_cyclomatic`; either missing value produces a clear collector error.

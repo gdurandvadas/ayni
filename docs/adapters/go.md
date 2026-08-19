@@ -29,7 +29,7 @@ cgo system libraries absent from the base image.
 | `size` | built-in Go source scan | no external tool |
 | `complexity` | `gocyclo` | managed: `0.6.0`; host: no version enforced |
 | `deps` | `go list` dependency graph | managed: exact locked Go runtime; host: no version enforced |
-| `mutation` | `go test` mutation proxy, or a configured Go mutation command | managed default: exact locked Go runtime; host: no version enforced |
+| `mutation` | unsupported | Go mutation measurement is not supported; enabling it fails explicitly before tool execution |
 
 ## Focused verification
 
@@ -44,7 +44,7 @@ always valid. The accepted selectors are:
 | `size` | yes | no | no |
 | `complexity` | yes | no | no |
 | `deps` | yes | yes | no |
-| `mutation` | no | no | no |
+| `mutation` | unsupported | unsupported | unsupported |
 
 For `test`, pass a Go package and optional name; the name becomes an exact
 `-run` regular expression. `--name` is test-only, and `--file` cannot be
@@ -71,8 +71,8 @@ Enabled checks come from `[checks]`. Configure Go roots in `[go].roots`
 (default `["."]`), size budgets in `[go.size]`, the cyclomatic threshold in
 `[go.complexity]`, coverage in `[go.coverage]`, and forbidden edges in
 `[go.deps.forbidden]`. Command overrides are optional in `[go.tooling.test]`,
-`[go.tooling.coverage]`, and `[go.tooling.mutation]`; each override requires
-`command` and may set `args`.
+`[go.tooling.coverage]`; each override requires `command` and may set `args`.
+Go mutation is unsupported, including command overrides.
 
 Size requires a budget entry and complexity requires `fn_cyclomatic`; either
 missing value produces a clear collector error. Coverage thresholds and

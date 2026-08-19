@@ -1,11 +1,10 @@
 use crate::{build_registry, discovery, policy, ui, verification_command};
 use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
-    AYNI_SIGNAL_SCHEMA_VERSION, AyniPolicy, Budget, CommandFailure, CompletionIssue,
-    CompletionScope, CompletionStage, CompletionState, ComplexityResult, ConcurrencyPolicy,
-    CoverageResult, DepsResult, InvocationContext, Language, MutationResult, Offenders,
-    OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion, RunContext, RunOutcome, Scope,
-    SignalKind, SignalResult, SignalRow, SizeResult, TestResult,
+    AYNI_SIGNAL_SCHEMA_VERSION, ArtifactToolVersion, AyniPolicy, Budget, CompletionIssue,
+    CompletionScope, CompletionStage, CompletionState, ConcurrencyPolicy, ExecutionMode,
+    InvocationContext, Language, OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion,
+    RunContext, RunOutcome, Scope, SignalKind, SignalResult, SignalRow,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
@@ -24,7 +23,7 @@ pub(crate) use artifacts::{
     emit_analyze_outputs, persist_artifact_at, serialize_artifact, workspace_root_from_config_path,
 };
 pub(crate) use check::analyze;
-pub(crate) use execution::{AnalyzeOptions, failed_signal_row};
+pub(crate) use execution::AnalyzeOptions;
 use execution::{build_analyze_plan, run_collect_with_ui};
 pub(crate) use reconciliation::reconcile;
 

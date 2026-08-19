@@ -10,6 +10,10 @@ Layout:
 - `examples/<language>/single`
 - `examples/<language>/mono`
 
+These fixtures are source fixtures, not per-language Docker harnesses. Preserve
+both layouts when changing examples; run them through Ayni's managed environment
+lifecycle or documented host prerequisites.
+
 The `math` library exports 10 functions and includes tests for 8/10 to make coverage intentionally incomplete.
 
 Kotlin examples use Gradle Kotlin DSL. `single/` is intentionally missing Ayni
@@ -24,13 +28,13 @@ hatch. For example, after installing the Go toolchain and `gocyclo`:
 ayni check --host --config examples/go/mono/.ayni.toml
 ```
 
-CI prepares every host tool explicitly; Ayni does not install tools as a side
-effect of `check`. Pull requests expose one workflow per adapter:
-`ayni-go`, `ayni-node`, `ayni-python`, and `ayni-kotlin` validate the matching
-`mono/` fixture, while `ayni-rust` validates the Ayni repository itself as the
-Rust target. `ayni-quality` runs the classic repository gates, and
-`ayni-status` reports the single `status` context required by the repository
-ruleset after all six workflows pass. Python pins its runtime, uv version, and
+Pull-request CI builds a checkout-local environment base, creates an ephemeral
+lock for each fixture, and runs `env build`, `env doctor`, and managed `check`.
+The `ayni-go`, `ayni-node`, `ayni-python`, and `ayni-kotlin` workflows validate
+the matching `mono/` fixture, while `ayni-rust` validates the committed root
+lock and runs Ayni against itself through the managed path. `ayni-quality` runs
+the classic repository gates, and `ayni-status` reports the single `status`
+context required by the repository ruleset after all six workflows pass. Python pins its runtime, uv version, and
 signal tools in `.python-version`, `pyproject.toml`, and `uv.lock`; Kotlin pins
 its JDK contract, Gradle wrapper distribution, dependency locks, and artifact
 verification metadata with the fixture.

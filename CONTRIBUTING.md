@@ -10,7 +10,7 @@ The open-source CLI supports:
   `impact run`
 - the lock-driven `env show`, `env lock`, `env doctor`, `env build`, `env shell`,
   and `env run` lifecycle
-- `contract show`, `contract validate`, and `results compare`
+- `contract show` and `results compare`
 - `agents sync` to create or refresh only Ayni's marked `AGENTS.md` section
 
 Out of scope:

@@ -20,7 +20,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             },
             pass: true,
             result: SignalResult::Mutation(MutationResult {
-                engine: String::from("stryker"),
+                engine: String::from("stryker (experimental)"),
                 killed: 0,
                 survived: 0,
                 timeout: 0,
@@ -47,8 +47,14 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         )
     };
     let status_ok = output.status.success();
-    let failure = (!status_ok).then(|| {
-        command_failure_from_output(
+    let failure = if status_ok {
+        Some(ayni_adapters_common::failure::setup_failure(
+            context,
+            engine.clone(),
+            "Stryker completed, but Node mutation report normalization is still experimental and cannot produce trustworthy counts",
+        ))
+    } else {
+        Some(command_failure_from_output(
             context,
             SignalKind::Mutation,
             engine.split_whitespace().next().unwrap_or("node"),
@@ -58,8 +64,8 @@ pub fn collect(context: &RunContext) -> CollectorResult {
                 .map(ToString::to_string)
                 .collect::<Vec<_>>(),
             &output,
-        )
-    });
+        ))
+    };
     Ok(SignalRow {
         kind: SignalKind::Mutation,
         language: ayni_core::Language::Node,
@@ -69,15 +75,16 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             package: context.scope.package.clone(),
             file: context.scope.file.clone(),
         },
-        pass: status_ok,
+        // Until Stryker's report is normalized into typed counts and findings,
+        // command success is not sufficient mutation evidence.
+        pass: false,
         result: SignalResult::Mutation(MutationResult {
             engine,
             killed: 0,
             survived: 0,
             timeout: 0,
-            // Stryker enforces its own thresholds via exit status; without
-            // parsing its report we cannot report a real score, so don't
-            // fabricate one.
+            // Experimental support relies on Stryker's exit status. Without
+            // parsing its report, do not fabricate a mutation score.
             score: None,
             failure,
         }),
@@ -105,7 +112,7 @@ fn mutation_override_command(context: &RunContext) -> Option<(String, Vec<String
 
 #[cfg(test)]
 mod tests {
-    use super::mutation_override_command;
+    use super::{collect, mutation_override_command};
     use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use std::path::PathBuf;
 
@@ -120,6 +127,37 @@ mod tests {
             execution: ExecutionResolution::direct("npm", PathBuf::from("."), "test", 100),
             debug: false,
         }
+    }
+
+    #[test]
+    fn experimental_mutation_fails_closed_without_fabricating_a_score() {
+        let context = context_with_policy(
+            r#"
+[checks]
+mutation = true
+
+[languages]
+enabled = ["node"]
+
+[node.tooling.mutation]
+command = "true"
+args = []
+"#,
+        );
+
+        let row = collect(&context).expect("experimental mutation row");
+        assert!(!row.pass);
+        let ayni_core::SignalResult::Mutation(result) = row.result else {
+            panic!("expected mutation result");
+        };
+        assert_eq!(result.score, None);
+        assert_eq!(
+            result
+                .failure
+                .expect("fail-closed diagnostic")
+                .classification,
+            "missing_report"
+        );
     }
 
     #[test]

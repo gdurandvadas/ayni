@@ -52,12 +52,14 @@ This page is the stable entry point for Ayni's canonical vocabulary. It does
 not define a single JSON run-artifact envelope: select the versioned contract
 named by an artifact's `schema_version` before reading envelope or row fields.
 
-- [Schema v3 (`0.3.0`)](/product/signals/v3) is the current emitted contract.
-- [Schema v2 (`0.2.0`)](/product/signals/v2) is a historical reference only.
-- [Schema v1 (`0.1.0`)](/product/signals/v1) is a historical reference only.
+[Schema v3 (`0.3.0`)](/product/signals/v3) is the current, self-contained
+emitted contract and the only contract in primary documentation navigation.
+Exact serialized row fields, optionality, provenance, and payload shapes live
+there.
 
-Exact serialized row fields, optionality, and payload shapes are
-version-specific; use the selected version reference.
+Schema v1 and v2 remain archived beside v3 for consumers of old saved artifacts.
+They are not current navigation targets and carry no parsing, conversion, or
+compatibility promise.
 
 ## Version selection and compatibility
 

@@ -18,6 +18,7 @@ pub mod registry;
 pub mod run_outcome;
 pub mod runtime;
 pub mod signal;
+mod signal_validation;
 pub mod threshold;
 
 pub use adapter::{
@@ -73,14 +74,14 @@ pub use registry::AdapterRegistry;
 pub use run_outcome::RunOutcome;
 pub use runtime::{AdapterError, AdapterErrorKind, ExecutionResolution, RunContext, Scope};
 pub use signal::{
-    AYNI_SIGNAL_SCHEMA_VERSION, AggregateStatus, AggregateSummary, AppliedThreshold, Budget,
-    CommandFailure, CompletionIssue, CompletionScope, CompletionStage, CompletionState,
-    ComplexityOffender, ComplexityResult, CoverageOffender, CoverageResult, DepsOffender,
-    DepsResult, FailureSummary, Finding, FindingError, FindingMetadata, Findings,
-    InvocationContext, Level, MutationOffender, MutationResult, OffenderIdentity, OffenderSummary,
-    Offenders, OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion, SignalKind,
-    SignalResult, SignalRow, SizeOffender, SizeResult, TestFailure, TestResult,
-    VerificationMetadata, VerificationTarget,
+    AYNI_SIGNAL_SCHEMA_VERSION, AggregateStatus, AggregateSummary, AppliedThreshold,
+    ArtifactToolVersion, Budget, CommandFailure, CompletionIssue, CompletionScope, CompletionStage,
+    CompletionState, ComplexityOffender, ComplexityResult, CoverageOffender, CoverageResult,
+    DepsOffender, DepsResult, ExecutionMode, FailureSummary, Finding, FindingError,
+    FindingMetadata, Findings, InvocationContext, Level, MutationOffender, MutationResult,
+    OffenderIdentity, OffenderSummary, Offenders, OutputContext, RunArtifact, RunArtifactMetadata,
+    RunCompletion, SignalKind, SignalResult, SignalRow, SizeOffender, SizeResult, TestFailure,
+    TestResult, VerificationMetadata, VerificationTarget,
 };
 pub use threshold::{
     ConfiguredMetricEvaluation, classify_maximum, classify_minimum, evaluate_configured_metric,

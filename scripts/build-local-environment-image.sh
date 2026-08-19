@@ -40,6 +40,7 @@ cp "$repo_root/.github/docker/ayni-env.Dockerfile" "$context/"
 # shellcheck disable=SC1090
 source "$versions_file"
 docker build \
+  --provenance=false \
   --platform "linux/$platform_arch" \
   --build-arg "DEBIAN_IMAGE=$DEBIAN_IMAGE" \
   --build-arg "AYNI_VERSION=local" \

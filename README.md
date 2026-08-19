@@ -1,11 +1,12 @@
 # Ayni
 
-Ayni is an open-source code quality signal tool for repositories that use AI
-agents.
+Ayni is a local quality protocol for repositories that use AI agents.
+Maintainers commit policy, Ayni runs repository tools in a reproducible managed
+environment, and agents receive scoped, actionable evidence.
 
-It installs agent-facing repository guidance, runs language-specific analysis
-through adapters in a reproducible managed environment, and normalizes the
-results into one report that humans and AI agents can act on.
+Ayni is intentionally forge-neutral and deterministic. It does not generate
+probabilistic review commentary; it normalizes real repository-tool outcomes
+into evidence that humans and AI agents can reproduce.
 
 **Documentation:** [Installation](docs/getting-started/installation.md) ·
 [Quickstart](docs/getting-started/quickstart.md) ·
@@ -28,7 +29,7 @@ repair targets.
 
 - can create or update its marked agent-facing guidance in `AGENTS.md` with an explicit command
 - defines the repository-agent quality contract in `.ayni.toml`
-- collects `test`, `coverage`, `size`, `complexity`, `deps`, and `mutation` signals
+- models `test`, `coverage`, `size`, `complexity`, `deps`, and `mutation` evidence, with explicit adapter capability tiers
 - runs language-specific tooling through adapters in locked managed environments
 - writes machine-readable artifacts under `.ayni/`
 - prints terminal or Markdown reports for local workflows and AI repair loops
@@ -84,12 +85,20 @@ environment:
  policy          exact runtime          measured evidence
 ```
 
-Rust, npm or pnpm Node, Go module, uv Python, and locked Gradle Kotlin
-repositories can lock and build a managed OCI environment, prepare locked native
-dependencies, and run the repository gate offline by default:
+For a supported repository, preview a minimal test-only policy before writing
+anything, then review and create it explicitly:
 
 ```sh
-ayni contract validate
+ayni init --dry-run
+ayni init --write
+ayni contract show
+```
+
+Rust, npm or pnpm Node, Go module, uv Python, and locked Gradle Kotlin
+repositories can then lock and build a managed OCI environment, prepare locked
+native dependencies, and run the repository gate offline by default:
+
+```sh
 ayni env show
 ayni env lock
 ayni env build
@@ -115,8 +124,8 @@ ayni verify test --language kotlin --package com.example.ApiTest --name createsU
 ```
 
 Focused evidence is written to `.ayni/verify/last/signals.json` and never
-replaces `.ayni/last/signals.json`. `verify` has one subcommand for each of the
-six signals; selector support is signal- and adapter-specific. Unsupported,
+replaces `.ayni/last/signals.json`. `verify` has one subcommand for each modeled
+signal; availability and selector support are adapter-specific. Unsupported,
 conflicting, ambiguous, or out-of-scope selectors are rejected before a tool
 runs. Check and focused-run terminal or Markdown reports never include rerun
 commands; those remain structured artifact evidence. List the exact, deduplicated
@@ -156,7 +165,7 @@ ayni contract show
 ayni contract show --config path/to/.ayni.toml
 ```
 
-This human-readable view shows enabled-language roots, all six signal states,
+This human-readable view shows enabled-language roots, every modeled signal state,
 configured thresholds and rules, and explicit tool overrides. It writes no
 artifact; use `ayni check` for managed measured results or `ayni check --host`
 for the explicit host path.
@@ -168,8 +177,11 @@ ayni env show
 ayni env lock
 ayni env build
 ayni env doctor
-ayni env run -- cargo test parser::tests
 ```
+
+Advanced `env shell` and `env run` commands remain available for intentional,
+read-write development access; they are not part of the first-run or quality
+workflow.
 
 Locking requires `mise`, records its version, and may query it for exact
 adapter-owned runtime and tool versions. It uses Docker Buildx for the published
@@ -178,18 +190,15 @@ base-image digest.
 published base is unavailable, run `scripts/build-local-environment-image.sh`;
 it compiles Ayni inside a Linux container and prints the exact local
 `env lock --base` command. Project tools must already be represented in native
-npm, pnpm, uv, or Gradle inputs. Doctor, build, shell, run, and managed check consume
-the validated lock without creating or refreshing it.
+npm, pnpm, uv, or Gradle inputs. Doctor, build, and managed quality commands consume the validated lock without
+creating or refreshing it.
 
 Environment builds stage only digest-verified Cargo/npm/pnpm/Go/uv/Gradle inputs,
 warm provider caches, and retain only declared dependency outputs. Managed
 quality commands materialize seeded npm or pnpm dependencies and fresh uv environments
 below `.ayni/environment/`, run without network access, and copy the read-only
 host checkout into an ephemeral writable workspace. Source changes made there
-are discarded; only generated `.ayni/` state persists to the host. Interactive
-`env shell` and arbitrary `env run` intentionally mount the host checkout
-read-write so humans and agents can edit it. Select an ambiguous target with `--language`;
-add `--root` when that language still has multiple locked roots. Managed check
+are discarded; only generated `.ayni/` state persists to the host. Managed check
 and focused verification support locked Rust, npm or pnpm Node, Go module, uv
 Python, and Gradle Kotlin targets. Yarn, Bun, non-uv Python managers, and
 unsupported Gradle build shapes remain explicit failures. Repositories may add
@@ -242,10 +251,10 @@ Ayni emits a closed signal vocabulary shared across language adapters.
 | `mutation` | Test effectiveness against simulated behavioral change |
 
 For the canonical vocabulary and version selection, see
-[`docs/product/signals.md`](docs/product/signals.md); the current JSON envelope
-is [schema v3](docs/product/signals/v3.md). Schema v2 remains available only
-as a [historical reference](docs/product/signals/v2.md); there is no automatic
-conversion or compatibility payload.
+[`docs/product/signals.md`](docs/product/signals.md); the current self-contained
+JSON envelope is [schema v3](docs/product/signals/v3.md). Availability is
+adapter-specific: see the [capability tiers](docs/product/capabilities.md).
+Historical schemas remain archived but are not part of primary navigation.
 
 ## Configuration
 
@@ -302,7 +311,8 @@ For layer boundaries and change rules, see [ARCHITECTURE.md](ARCHITECTURE.md).
 - [CLI reference](docs/cli.md)
 - [Configuration reference](docs/product/config.md)
 - [Managed environments](docs/product/environments.md)
-- [Signal contract index](docs/product/signals.md) ([current v3](docs/product/signals/v3.md), [historical v2](docs/product/signals/v2.md), [historical v1](docs/product/signals/v1.md))
+- [Signal contract index](docs/product/signals.md) and [current schema v3](docs/product/signals/v3.md)
+- [Adapter capability tiers](docs/product/capabilities.md)
 - [Runtime and setup rules](docs/product/runtime.md)
 - [Architecture](ARCHITECTURE.md)
 - Language adapters:

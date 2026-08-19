@@ -1,8 +1,8 @@
 use crate::image::image_plan_with_preparation;
 use crate::{BackendError, read_lock};
 use ayni_core::{
-    DependencyPreparationPlan, DockerAccess, EnvironmentCapabilities, EnvironmentLock,
-    LockedTargetEnvironment, NetworkAccess, TargetIdentity,
+    ArtifactToolVersion, DependencyPreparationPlan, DockerAccess, EnvironmentCapabilities,
+    EnvironmentLock, LockedTargetEnvironment, NetworkAccess, TargetIdentity,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -127,6 +127,7 @@ pub fn launch_repository_prepared(
     let mounts = materialize_outputs(&root, engine, &lock, &plan, preparations)?;
     let managed_environments =
         crate::preparation::managed_environments(&lock, preparations, &state_home)?;
+    let tool_versions = managed_tool_versions(&lock)?;
     let args = repository_launch_args(RepositoryLaunch {
         root: &root,
         engine,
@@ -136,6 +137,8 @@ pub fn launch_repository_prepared(
         mounts: &mounts,
         managed_environments: Some(&managed_environments),
         capabilities: lock.capabilities(),
+        lock_fingerprint: lock.fingerprint(),
+        tool_versions: &tool_versions,
     })?;
     execute_launch(engine, &args)
 }
@@ -198,6 +201,8 @@ struct RepositoryLaunch<'a> {
     mounts: &'a [(PathBuf, String)],
     managed_environments: Option<&'a str>,
     capabilities: EnvironmentCapabilities,
+    lock_fingerprint: &'a str,
+    tool_versions: &'a str,
 }
 
 fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, BackendError> {
@@ -211,6 +216,12 @@ fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, 
         ]);
     }
     args.extend([
+        "--env".into(),
+        format!("AYNI_MANAGED_LOCK_FINGERPRINT={}", request.lock_fingerprint),
+        "--env".into(),
+        format!("AYNI_MANAGED_TOOL_VERSIONS={}", request.tool_versions),
+    ]);
+    args.extend([
         "--entrypoint".into(),
         "/bin/sh".into(),
         request.image_tag.to_owned(),
@@ -223,6 +234,41 @@ fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, 
     args.push("--".into());
     args.extend(request.command.iter().cloned());
     Ok(args)
+}
+
+fn managed_tool_versions(lock: &EnvironmentLock) -> Result<String, BackendError> {
+    let mut versions = vec![ArtifactToolVersion {
+        tool: String::from("mise"),
+        version: lock.mise_version().to_owned(),
+    }];
+    for target in lock.targets() {
+        let prefix = format!("{}:{}", target.target.language.as_str(), target.target.root);
+        versions.extend(target.runtimes.iter().map(|runtime| ArtifactToolVersion {
+            tool: format!("{prefix}:runtime:{}", runtime.runtime),
+            version: runtime.version.clone(),
+        }));
+        if let Some(manager) = &target.package_manager {
+            versions.push(ArtifactToolVersion {
+                tool: format!("{prefix}:package_manager:{}", manager.family),
+                version: manager.version.clone(),
+            });
+        }
+        versions.extend(target.signal_tools.iter().map(|tool| ArtifactToolVersion {
+            tool: format!("{prefix}:signal_tool:{}", tool.tool),
+            version: tool.version.clone(),
+        }));
+    }
+    versions.extend(lock.tools().iter().map(|tool| ArtifactToolVersion {
+        tool: format!("repository_tool:{}", tool.tool),
+        version: tool.version.clone(),
+    }));
+    versions.sort();
+    versions.dedup();
+    serde_json::to_string(&versions).map_err(|error| {
+        BackendError::environment(format!(
+            "failed to serialize managed tool provenance: {error}"
+        ))
+    })
 }
 
 fn append_managed_prepared_mounts(
@@ -479,7 +525,7 @@ fn append_managed_workspace_state_args(
             root.join(".ayni").display()
         ),
         "--tmpfs".into(),
-        format!("{WORKSPACE}/.ayni/environment:rw,nosuid,size=64m,mode=1777"),
+        format!("{WORKSPACE}/.ayni/environment:rw,exec,nosuid,size=6g,mode=1777"),
     ]);
     append_workspace_execution_settings(args, workdir, "/tmp");
 }
@@ -870,6 +916,8 @@ mod tests {
             mounts: &mounts,
             managed_environments: None,
             capabilities: EnvironmentCapabilities::default(),
+            lock_fingerprint: "sha256:test",
+            tool_versions: "[]",
         })
         .expect("launch args");
         assert!(args.windows(2).any(|pair| pair == ["--network", "none"]));
@@ -898,6 +946,14 @@ mod tests {
         assert!(args.iter().any(|arg| arg == MANAGED_WORKSPACE_INIT));
         assert!(
             args.iter()
+                .any(|arg| arg == "AYNI_MANAGED_LOCK_FINGERPRINT=sha256:test")
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "AYNI_MANAGED_TOOL_VERSIONS=[]")
+        );
+        assert!(
+            args.iter()
                 .any(|arg| { arg == "type=bind,source=/state/cache,target=/home/ayni/.cache" })
         );
         assert!(args.iter().any(|arg| {
@@ -909,8 +965,9 @@ mod tests {
                 .any(|arg| { arg.contains("target=/workspace/packages/member/node_modules") })
         );
         assert!(
-            args.iter()
-                .any(|arg| { arg == "/workspace/.ayni/environment:rw,nosuid,size=64m,mode=1777" })
+            args.iter().any(|arg| {
+                arg == "/workspace/.ayni/environment:rw,exec,nosuid,size=6g,mode=1777"
+            })
         );
         assert!(args.iter().any(|arg| arg == "HOME=/tmp"));
         assert!(

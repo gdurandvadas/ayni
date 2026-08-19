@@ -23,20 +23,14 @@ jobs:
       - name: Build Ayni CLI
         uses: ./.github/actions/build-ayni
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - name: Install pinned Mise
+        uses: jdx/mise-action@v3
         with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: examples/node/mono/package-lock.json
+          version: 2026.6.14
+          install: false
+          cache: false
 
-      - name: Enable Node package managers
-        run: corepack enable
-
-      - name: Install locked Node fixture dependencies
-        run: npm ci --prefix examples/node/mono --ignore-scripts --no-audit --no-fund
-
-      - name: Validate Node example
+      - name: Validate Node example through managed execution
         uses: ./.github/actions/validate-example
         with:
           language: node

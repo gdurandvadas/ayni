@@ -1,6 +1,18 @@
 # Quickstart
 
-This guide takes a repository from an explicit quality contract to its first reproducible Ayni check.
+This guide takes a supported repository from a reviewable policy proposal to its first reproducible Ayni check.
+
+## What the first proof looks like
+
+A complete run produces both a human summary and `.ayni/last/signals.json`. The exact rows depend on the repository, but completion is explicit:
+
+```text
+Completion: repository / complete (1 of 1 targets)
+rust:workspace test pass
+Result: pass
+```
+
+A failed signal can still belong to a **complete** run. Missing expected work instead produces `completion.state = "incomplete"` and fails closed.
 
 ## 1. Install Ayni
 
@@ -10,13 +22,25 @@ Follow [Installation](/getting-started/installation), then confirm the CLI is av
 ayni --version
 ```
 
-Managed execution also needs Docker with Buildx, and every `ayni env lock` requires Mise. See the [managed-environment prerequisites](/getting-started/installation#managed-environment-prerequisites).
+Managed execution also needs Docker with Buildx and Mise. See the [managed-environment prerequisites](/getting-started/installation#managed-environment-prerequisites).
 
-## 2. Define what healthy means
+## 2. Preview a minimal policy
 
-Ayni reads the quality contract from `.ayni.toml`. It does not infer or silently create policy.
+Ayni can discover supported project roots and propose a minimal, test-only contract without writing anything:
 
-For an initial Rust repository that only enables tests:
+```sh
+ayni init --dry-run
+```
+
+Review the complete TOML printed to standard output. The proposal enables tests only; it does not guess thresholds or silently enable deeper signals. Create the file explicitly when it is correct:
+
+```sh
+ayni init --write
+```
+
+`--write` refuses to overwrite an existing `.ayni.toml`. Re-run `--dry-run` whenever you want a fresh proposal to compare by hand.
+
+If automatic project discovery is not appropriate, author `.ayni.toml` directly. For example:
 
 ```toml
 [checks]
@@ -34,135 +58,94 @@ enabled = ["rust"]
 roots = ["."]
 ```
 
-Enable additional signals and thresholds as the contract matures. Policy examples are available for [Rust](https://github.com/gdurandvadas/ayni/tree/main/examples/rust/mono), [Node](https://github.com/gdurandvadas/ayni/tree/main/examples/node/mono), [Go](https://github.com/gdurandvadas/ayni/tree/main/examples/go/mono), [Python](https://github.com/gdurandvadas/ayni/tree/main/examples/python/mono), and [Kotlin](https://github.com/gdurandvadas/ayni/tree/main/examples/kotlin/mono). These demonstrate signal configuration; a repository must also satisfy its adapter's native runtime and dependency metadata requirements before `env lock` can succeed.
-
-Validate the file and inspect the effective policy:
+Inspect and validate the effective policy with the single contract command:
 
 ```sh
-ayni contract validate
 ayni contract show
 ```
 
-See [Configuration](/product/config) for every contract field and [Signals](/product/signals) for the available measurements.
+See [Configuration](/product/config) for every field and [adapter capability tiers](/product/capabilities) before enabling more signals.
 
-## 3. Make runtime inputs explicit
+## 3. Share the workflow with coding agents
 
-The language adapter derives an environment plan from the enabled signals and native project metadata. Keep exact tool and dependency inputs in the repository—for example `rust-toolchain.toml` and `Cargo.lock` for Rust, or `packageManager` and a native Node lockfile for Node.
+Create or refresh only Ayni's managed block in `AGENTS.md`:
 
-Inspect the plan before creating anything:
+```sh
+ayni agents sync
+```
+
+Review and commit that guidance with the policy. Quality commands never modify agent instructions implicitly.
+
+## 4. Inspect runtime requirements
+
+The owning language adapters derive an environment plan from the configured roots, enabled signals, and native project metadata:
 
 ```sh
 ayni env show
 ```
 
-If the plan is incomplete, the command explains which project metadata is missing or unsupported. Per-language requirements are documented in the [Rust](/adapters/rust), [Node](/adapters/node), [Go](/adapters/go), [Python](/adapters/python), and [Kotlin](/adapters/kotlin) adapter guides.
+The plan explains missing or unsupported runtime inputs before anything is locked. Keep native declarations and dependency locks in the repository—for example `rust-toolchain.toml` and `Cargo.lock`, or Node's `packageManager` and native lockfile.
 
-## 4. Lock and build the managed environment
-
-Resolve exact tool versions and the immutable Ayni base image:
+## 5. Lock and build the managed environment
 
 ```sh
 ayni env lock
-```
-
-Review and commit the resulting `.ayni.lock`. The lock is generated state, but it is part of the repository's reproducibility boundary.
-
-Build the OCI image and verify it is ready:
-
-```sh
 ayni env build
 ayni env doctor
 ```
 
-Ayni deliberately does not create or refresh the lock and image when a quality command starts. This keeps environment changes visible and reviewable.
+Review and commit `.ayni.lock`. Ayni deliberately does not create or refresh the lock or image when a quality command starts, so changes to the evidence environment remain visible.
 
 ::: tip Version-control boundary
-Commit `.ayni.toml`, `.ayni.lock`, and the native dependency/tool locks. Ignore `.ayni/`, which contains local evidence and materialized runtime state.
+Commit `.ayni.toml`, `.ayni.lock`, and native dependency/tool locks. Ignore `.ayni/`, which contains local evidence and materialized runtime state.
 :::
 
-## 5. Run the quality contract
+## 6. Run the reproducible repository gate
 
 ```sh
 ayni check
 ```
 
-`ayni check` automatically launches the locked managed environment and evaluates every enabled signal for every configured language root. You do **not** need to wrap it in `ayni env run`.
+`check` launches the locked managed environment automatically and evaluates every enabled, supported signal for every configured root. Do not wrap it in `ayni env run`.
 
-The result uses three statuses:
-
-- **pass** — the measurement is within policy;
-- **warn** — the measurement crossed a warning threshold but not a failure threshold; and
-- **fail** — the measurement or tool execution failed the contract.
-
-The full repository artifact is written to `.ayni/last/signals.json`. For the same evidence on standard output:
+The full artifact is written to `.ayni/last/signals.json`. To render the same evidence in another format:
 
 ```sh
 ayni check --output json
 ayni check --output markdown
 ```
 
-## 6. Use focused feedback while editing
+Artifacts record whether execution was `managed` or `host`, the contract digest, source fingerprint, environment-lock fingerprint, and relevant managed runtime/tool versions. Results from incompatible provenance are rejected by `ayni results compare`.
 
-Run one signal instead of the complete contract:
+## 7. Use focused feedback while editing
 
 ```sh
 ayni verify test
 ayni verify coverage
-ayni verify complexity
-```
-
-For a specific language root in a polyglot or multi-root repository:
-
-```sh
-ayni verify test --language node --root apps/web
-```
-
-Run only the quality work affected by a change:
-
-```sh
 ayni impact run --base origin/main
 ```
 
-Managed execution is also the default for `verify` and `impact run`.
+Use the narrowest adapter-supported selectors and copy exact rerun commands from artifact findings. Impact success never replaces the final unscoped `ayni check`.
 
-## 7. Share the workflow with coding agents
+## Evaluation-only host path
 
-Create or refresh Ayni's managed guidance block in the repository's `AGENTS.md`:
-
-```sh
-ayni agents sync
-```
-
-This is an explicit operation; quality commands do not modify agent instructions. Review and commit the resulting guidance with the repository.
-
-## 8. Run development commands when needed
-
-`env run` and `env shell` are for commands outside Ayni's quality interface:
-
-```sh
-ayni env run -- cargo test parser::tests
-ayni env shell
-```
-
-When more than one target is locked, select one explicitly:
-
-```sh
-ayni env run --language node --root apps/web -- npm test
-```
-
-Use `--host` only as an explicit escape hatch when the repository cannot yet use managed execution:
+When a repository cannot yet satisfy managed prerequisites, `--host` can demonstrate the policy and artifact loop with user-installed tools:
 
 ```sh
 ayni check --host
 ayni verify test --host
-ayni impact run --host --base origin/main
 ```
 
-The host path uses your installed tools, so it does not provide the same runtime reproducibility.
+This is an **evaluation and compatibility path**, not equivalent evidence. Host artifacts are labeled `execution_mode = "host"`, have no environment-lock fingerprint, and are provenance-incompatible with managed artifacts.
+
+## Advanced development access
+
+`env shell` and `env run` expose one locked target for arbitrary development commands. They add no quality semantics and mount the host checkout read-write, so they are intentionally outside the first-run workflow. See [Managed environments](/product/environments#advanced-development-access).
 
 ## What to read next
 
-- [How Ayni works](/getting-started/how-ayni-works) explains the contract, environment, and execution model.
-- [Managed environments](/product/environments) covers locking, image builds, target selection, and runtime behavior.
-- [Signals](/product/signals), [Verification](/product/runtime), and [Impact analysis](/product/impact) cover the feedback loop in detail.
+- [How Ayni works](/getting-started/how-ayni-works) explains policy, environment, and evidence.
+- [Adapter capability tiers](/product/capabilities) states where each signal is supported, experimental, or unavailable.
+- [Managed environments](/product/environments) covers locking, image builds, and runtime behavior.
+- [Signals](/product/signals), [Verification](/product/runtime), and [Impact analysis](/product/impact) define the feedback loop.
 - [CLI reference](/cli) lists every command and option.
