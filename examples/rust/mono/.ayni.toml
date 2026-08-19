@@ -17,6 +17,9 @@ amount = 1
 [report]
 offenders_limit = 8
 
+[environment.debian]
+packages = ["libssl-dev"]
+
 [rust]
 roots = ["."]
 
