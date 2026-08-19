@@ -97,14 +97,6 @@ pub fn build_markdown(artifact: &RunArtifact, offenders_limit: usize) -> String 
             out.push_str("</details>\n\n");
         }
     }
-    if !view.commands.is_empty() {
-        out.push_str("## Verification commands\n\n");
-        out.push_str("Run the exact command supplied by each finding:\n\n");
-        for command in view.commands {
-            out.push_str(&markdown_code_block_with_language(command, "sh"));
-            out.push_str("\n\n");
-        }
-    }
     render_failures(&mut out, artifact.failure_summaries());
     out
 }
@@ -396,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn build_markdown_surfaces_stable_deduplicated_verification_commands() {
+    fn build_markdown_omits_verification_commands() {
         let finding = |id_character: char, command: &str| Finding {
             metadata: FindingMetadata {
                 id: format!(
@@ -427,9 +419,8 @@ mod tests {
 
         let text = build_markdown(&artifact, 2);
 
-        assert!(text.contains("## Verification commands\n\n"));
-        assert!(text.contains(&format!("```sh\n{command}\n```")));
-        assert_eq!(text.matches(command).count(), 1);
+        assert!(!text.contains("## Verification commands"));
+        assert!(!text.contains(command));
         assert!(!text.contains("raw.githubusercontent.com"));
     }
 

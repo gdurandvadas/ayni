@@ -120,9 +120,8 @@ ayni verify coverage --language node --root apps/web
 
 Focused evidence is written to `.ayni/verify/last/signals.json` and never
 replaces the repository result at `.ayni/last/signals.json`. Human and Markdown
-reports show the exact, deduplicated verification commands supplied by their
-findings; the same commands remain in the JSON artifact. Reprint them later
-with:
+reports omit rerun commands; those commands remain structured finding evidence
+in the JSON artifact. Print the exact, deduplicated commands explicitly with:
 
 ```sh
 ayni verify list

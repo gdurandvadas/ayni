@@ -402,13 +402,13 @@ current artifact's `applied_thresholds` field; see [schema v4](signals/v4.md).
 
 ## Output and report safety
 
-`ayni check --output markdown` renders typed findings under **Offenders**, exact
-deduplicated repair commands under **Verification commands**, and a **Failures**
-section only when a collector command failed. Human output includes the same
-repair commands. Failure entries can include the command, working directory,
-exit code, and tool message. Reports and the schema-v4 JSON artifact can
-consequently expose repository paths and raw tool output; do not publish them
-without reviewing that diagnostic data.
+`ayni check --output markdown` renders typed findings under **Offenders** and a
+**Failures** section only when a collector command failed. Human and Markdown
+reports omit finding verification commands; those remain structured in the
+schema-v4 JSON artifact and are available explicitly through `ayni verify list`.
+Failure entries can include the collector command, working directory, exit code,
+and tool message. Reports and artifacts can consequently expose repository paths
+and raw tool output; do not publish them without reviewing that diagnostic data.
 
 For machine consumers, `ayni check --output json` and
 `ayni check --host --output json` select the same schema-v4 artifact shape.

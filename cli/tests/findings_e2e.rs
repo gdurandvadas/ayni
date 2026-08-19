@@ -1,5 +1,4 @@
-//! Black-box coverage for schema-v4 finding artifacts and their displayed
-//! verification commands.
+//! Black-box coverage for schema-v4 finding artifacts and verification commands.
 
 use serde_json::Value;
 use std::fs;
@@ -212,8 +211,8 @@ fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
     let terminal = fixture.analyze(&[]);
     assert!(!terminal.status.success());
     let terminal_stdout = String::from_utf8_lossy(&terminal.stdout);
-    assert!(terminal_stdout.contains("verification commands"));
-    assert_eq!(terminal_stdout.matches(&command).count(), 1);
+    assert!(!terminal_stdout.contains("verification commands"));
+    assert!(!terminal_stdout.contains(&command));
 
     let listed = ayni()
         .args(["verify", "list", "--artifact"])
@@ -228,8 +227,8 @@ fn size_finding_is_flat_and_identical_in_json_persistence_and_reports() {
     let markdown = fixture.analyze(&["--output", "markdown"]);
     assert!(!markdown.status.success());
     let markdown_stdout = String::from_utf8_lossy(&markdown.stdout);
-    assert!(markdown_stdout.contains("## Verification commands"));
-    assert_eq!(markdown_stdout.matches(&command).count(), 1);
+    assert!(!markdown_stdout.contains("## Verification commands"));
+    assert!(!markdown_stdout.contains(&command));
 }
 
 #[test]

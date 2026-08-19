@@ -1,13 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use ayni_core::{
-    CompletionScope, CompletionStage, CompletionState, Findings, Language, Level, Offenders,
-    RunArtifact, SignalKind, SignalResult, SignalRow,
+    CompletionScope, CompletionStage, CompletionState, Language, Level, Offenders, RunArtifact,
+    SignalKind, SignalResult, SignalRow,
 };
 
 pub(crate) struct ReportView<'a> {
     pub(crate) groups: Vec<ReportGroup<'a>>,
-    pub(crate) commands: Vec<&'a str>,
     pub(crate) total: usize,
     pub(crate) passing: usize,
 }
@@ -46,20 +45,10 @@ impl<'a> ReportView<'a> {
 
         Self {
             groups,
-            commands: verification_commands(&artifact.findings),
             total: artifact.rows.len(),
             passing: artifact.rows.iter().filter(|row| row.pass).count(),
         }
     }
-}
-
-fn verification_commands(findings: &[Findings]) -> Vec<&str> {
-    let mut seen = BTreeSet::new();
-    findings
-        .iter()
-        .flat_map(Findings::commands)
-        .filter(|command| seen.insert(*command))
-        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,53 +132,5 @@ pub(crate) fn completion_stage_label(stage: CompletionStage) -> &'static str {
         CompletionStage::Selection => "selection",
         CompletionStage::Scheduling => "scheduling",
         CompletionStage::Collection => "collection",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ReportView;
-    use ayni_core::{Finding, FindingMetadata, Findings, SizeOffender, VerificationMetadata};
-
-    fn finding(id_character: char, command: &str) -> Finding<SizeOffender> {
-        Finding {
-            metadata: FindingMetadata {
-                id: format!(
-                    "ayni:finding:v1:sha256:{}",
-                    id_character.to_string().repeat(64)
-                ),
-                verification: VerificationMetadata {
-                    target: None,
-                    command: Some(command.to_string()),
-                },
-            },
-            offender: SizeOffender {
-                file: String::from("src/lib.rs"),
-                value: 10,
-                warn: 5,
-                fail: 9,
-                level: ayni_core::Level::Fail,
-            },
-        }
-    }
-
-    #[test]
-    fn report_view_deduplicates_commands_in_first_seen_order() {
-        let artifact = ayni_core::RunArtifact {
-            findings: vec![Findings::Size(vec![
-                finding('a', "ayni verify size --file 'src/lib.rs'"),
-                finding('b', "ayni verify size --file 'src/lib.rs'"),
-                finding('c', "ayni verify size --file 'src/main.rs'"),
-            ])],
-            ..ayni_core::RunArtifact::default()
-        };
-
-        assert_eq!(
-            ReportView::new(&artifact).commands,
-            [
-                "ayni verify size --file 'src/lib.rs'",
-                "ayni verify size --file 'src/main.rs'",
-            ]
-        );
     }
 }

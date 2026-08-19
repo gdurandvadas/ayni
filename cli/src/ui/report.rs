@@ -148,21 +148,6 @@ fn build_report_text(artifact: &RunArtifact, color: bool, offenders_limit: usize
             total_tests, passed_tests, failed_tests
         ));
     }
-    if !view.commands.is_empty() {
-        out.push('\n');
-        out.push_str(&stylize(
-            color,
-            "verification commands",
-            Palette::Section,
-            true,
-        ));
-        out.push('\n');
-        for command in view.commands {
-            out.push_str("  ");
-            out.push_str(command);
-            out.push('\n');
-        }
-    }
     out
 }
 
@@ -657,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn build_report_text_surfaces_each_verification_command_once() {
+    fn build_report_text_omits_verification_commands() {
         let finding = |id_character: char, command: &str| Finding {
             metadata: FindingMetadata {
                 id: format!(
@@ -688,8 +673,8 @@ mod tests {
 
         let text = build_report_text(&artifact, false, 2);
 
-        assert!(text.contains("verification commands\n"));
-        assert_eq!(text.matches(command).count(), 1);
+        assert!(!text.contains("verification commands"));
+        assert!(!text.contains(command));
     }
 
     #[test]
