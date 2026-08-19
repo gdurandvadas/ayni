@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.10.0...ayni-v0.10.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* **quality:** harden managed evidence and workflows ([#50](https://github.com/gdurandvadas/ayni/issues/50)) ([8666bde](https://github.com/gdurandvadas/ayni/commit/8666bdeafab06af7e0ec00fe1b32bb4ecb1540fa))
+
 ## [0.10.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.9.1...ayni-v0.10.0) (2026-08-17)
 
 
