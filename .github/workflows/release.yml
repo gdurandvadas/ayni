@@ -161,10 +161,11 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
+    # Release Please creates the public release before downstream jobs run.
+    # Keep validation independent so successful builds publish assets promptly.
     needs:
       - release
       - build
-      - release-validation
     if: ${{ needs.release.outputs.release_created == 'true' }}
     permissions:
       contents: write
