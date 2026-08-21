@@ -86,13 +86,7 @@ jobs:
       - name: Regenerate managed lock
         env:
           BASE: ${{ steps.base.outputs.reference }}
-        run: |
-          docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            --volume "$PWD:/workspace" \
-            --workdir /workspace \
-            ayni-env:local \
-            env lock --config ./.ayni.toml --base "$BASE"
+        run: ./target/release/ayni env lock --config ./.ayni.toml --base "$BASE"
 
       - name: Commit managed lock
         env:
