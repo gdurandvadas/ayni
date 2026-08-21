@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.10.0...ayni-v0.10.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* **quality:** harden managed evidence and workflows ([#50](https://github.com/gdurandvadas/ayni/issues/50)) ([8666bde](https://github.com/gdurandvadas/ayni/commit/8666bdeafab06af7e0ec00fe1b32bb4ecb1540fa))
+* **release:** synchronize managed lock in release PR ([#53](https://github.com/gdurandvadas/ayni/issues/53)) ([fa8d475](https://github.com/gdurandvadas/ayni/commit/fa8d475e70db9655ee63dc312f28fe1a35afb995))
+
 ## [0.10.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.9.1...ayni-v0.10.0) (2026-08-17)
 
 
