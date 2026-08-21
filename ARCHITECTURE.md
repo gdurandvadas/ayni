@@ -78,6 +78,6 @@ Before proposing edits:
 ## See Also
 
 - [README](README.md)
-- [Signal contract index](docs/product/signals.md) ([current v3](docs/product/signals/v3.md))
+- [Signal contract index](docs/product/signals.md) ([current v4](docs/product/signals/v4.md))
 - [Adapter contribution guide](docs/contributing/adapters.md)
 - [Configuration reference](docs/product/config.md)

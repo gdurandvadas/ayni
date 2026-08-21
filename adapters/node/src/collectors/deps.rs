@@ -323,6 +323,7 @@ mod tests {
             policy: AyniPolicy::default(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("npm", canonical, "test", 100),
+            cancellation: Default::default(),
             debug: false,
         };
 
@@ -366,6 +367,7 @@ mod tests {
                 file: None,
             },
             execution: ExecutionResolution::direct("npm", target, "test", 100),
+            cancellation: Default::default(),
             debug: false,
         };
 

@@ -88,6 +88,8 @@ fn inspect_remote_digest(reference: &str) -> Result<String, BackendError> {
 /// unresolved selectors to equal their locked exact versions.
 pub fn plan_matches_lock(plan: &EnvironmentPlan, lock: &EnvironmentLock) -> bool {
     plan.repository().contract_digest == lock.repository().contract_digest
+        && plan.capabilities() == lock.capabilities()
+        && plan.resource_limits() == lock.resource_limits()
         && plan.targets().len() == lock.targets().len()
         && plan.targets().iter().all(|plan| {
             let Some(locked) = lock

@@ -369,6 +369,7 @@ mod tests {
             policy,
             scope: Scope::default(),
             execution: ExecutionResolution::direct("npm", PathBuf::from("."), "test", 100),
+            cancellation: Default::default(),
             debug: false,
         }
     }

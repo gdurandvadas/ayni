@@ -4,6 +4,7 @@ use crate::analysis::{
     persist_artifact_at, serialize_artifact, signal_kind_slug, workspace_root_from_config_path,
 };
 use crate::policy::load_from_path;
+use crate::ui::cancellation::SignalCancellation;
 use crate::{build_registry, verification_command};
 use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
@@ -34,11 +35,18 @@ struct ConfiguredTarget {
 pub(crate) type Error = crate::application_error::ApplicationError;
 
 pub(crate) fn run(mut request: Request) -> Result<RunOutcome, Error> {
+    let signal_cancellation = SignalCancellation::install().map_err(Error::execution)?;
     let (workspace_root, policy) = prepare_request(&mut request).map_err(Error::input)?;
-    let (registry, planning) =
+    let (registry, mut planning) =
         plan_verification(&workspace_root, &policy, &request).map_err(Error::input)?;
+    for target in &mut planning.targets {
+        target.run_context.cancellation = signal_cancellation.token();
+    }
     let artifact = build_verification_artifact(&workspace_root, &registry, &planning, &request)
         .map_err(Error::execution)?;
+    if signal_cancellation.interrupted() {
+        return Err(Error::execution("verification aborted by Ctrl-C"));
+    }
     persist_and_emit_verification(artifact, &workspace_root, &policy, &registry, &request)
         .map_err(Error::execution)
 }
@@ -463,6 +471,9 @@ fn collect_rows(
 ) -> Vec<SignalRow> {
     let mut rows = Vec::new();
     for target in &planning.targets {
+        if target.run_context.cancellation.is_cancelled() {
+            break;
+        }
         let selection = VerificationSelection {
             file: target.run_context.scope.file.clone(),
             package: target.run_context.scope.package.clone(),
@@ -489,6 +500,9 @@ fn collect_rows(
                     eprintln!("[{}] collection incomplete: {error}", target.language);
                 }
             }
+        }
+        if target.run_context.cancellation.is_cancelled() {
+            break;
         }
     }
     rows

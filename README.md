@@ -10,7 +10,8 @@ into evidence that humans and AI agents can reproduce.
 
 **Documentation:** [Installation](docs/getting-started/installation.md) ·
 [Quickstart](docs/getting-started/quickstart.md) ·
-[How Ayni works](docs/getting-started/how-ayni-works.md)
+[How Ayni works](docs/getting-started/how-ayni-works.md) ·
+[Security model](docs/product/security.md)
 
 ## Why
 
@@ -241,6 +242,7 @@ For layer boundaries and change rules, see [ARCHITECTURE.md](ARCHITECTURE.md).
 - [CLI reference](docs/cli.md)
 - [Configuration reference](docs/product/config.md)
 - [Managed environments](docs/product/environments.md)
+- [Security and trust model](docs/product/security.md) and [vulnerability reporting policy](SECURITY.md)
 - [Signal contract index](docs/product/signals.md) and [current schema v4](docs/product/signals/v4.md)
 - [Adapter capability tiers](docs/product/capabilities.md)
 - [Runtime and setup rules](docs/product/runtime.md)

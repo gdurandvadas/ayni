@@ -38,9 +38,9 @@ managed slice.
 
 ## Focused verification
 
-`verify` writes requested-scope evidence only to `.ayni/verify/last/signals.json`.
-Every command accepts an optional `--language kotlin`; unscoped verification is
-always valid. The accepted selectors are:
+Shared artifact, completion, validation, and exact-command reuse semantics are
+defined in [Completion and focused verification](../product/runtime.md#completion-and-focused-verification).
+The accepted Kotlin selectors are:
 
 | Signal | `--file` | `--package` | `--name` |
 | --- | --- | --- | --- |
@@ -59,8 +59,7 @@ rejected before Gradle runs.
 
 Verification commands carry their originating contract and target, for example:
 `ayni verify test --host --config './.ayni.toml' --language kotlin --root '.' --package
-'com.example.ApiTest' --name 'createsUser'`. Use only the selectors marked
-above; copy the exact command in an artifact finding rather than synthesizing one.
+'com.example.ApiTest' --name 'createsUser'`.
 
 ## Impact planning
 
@@ -85,10 +84,9 @@ missing value produces a clear collector error. Coverage thresholds and
 dependency rules are optional: without `line_percent`, coverage has no policy
 threshold, and without `kotlin.deps.forbidden`, no edges are forbidden.
 
-Maximum size and complexity boundaries are inclusive (`warn` and `fail` trigger
-at equality); coverage is an exclusive minimum boundary (equality passes that
-threshold). Line and branch coverage are independently enforced: a configured
-metric with missing or unparseable evidence fails the coverage row.
+Shared boundary rules are defined under [Threshold semantics](../product/config.md#threshold-semantics).
+Kotlin line and branch coverage are independently enforced: a configured metric
+with missing or unparseable evidence fails the coverage row.
 
 ## Configuration Example
 

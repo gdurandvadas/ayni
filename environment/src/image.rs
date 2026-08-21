@@ -14,7 +14,9 @@ pub(crate) const IMAGE_AYNI_LABEL: &str = "dev.ayni.environment.ayni-version";
 pub(crate) const IMAGE_MISE_LABEL: &str = "dev.ayni.environment.mise-version";
 pub(crate) const IMAGE_PLATFORM_LABEL: &str = "dev.ayni.environment.platform";
 pub(crate) const IMAGE_PREPARATION_LABEL: &str = "dev.ayni.environment.preparation-digest";
-pub(crate) const IMAGE_SCHEMA_VERSION: &str = "0.4.0";
+pub(crate) const IMAGE_OWNER_LABEL: &str = "dev.ayni.environment.owner";
+pub(crate) const IMAGE_OWNER_VALUE: &str = "ayni";
+pub(crate) const IMAGE_SCHEMA_VERSION: &str = "0.5.0";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImagePlan {
@@ -242,7 +244,14 @@ fn mise_toml(tools: BTreeMap<String, BTreeSet<String>>) -> String {
     for (tool, versions) in tools {
         let values = versions
             .into_iter()
-            .map(|version| serde_json::to_string(&version).expect("string serialization"))
+            .map(|version| {
+                let version = serde_json::to_string(&version).expect("string serialization");
+                if tool == "rust" {
+                    format!("{{ version = {version}, profile = \"minimal\" }}")
+                } else {
+                    version
+                }
+            })
             .collect::<Vec<_>>();
         let key = serde_json::to_string(&tool).expect("string serialization");
         if values.len() == 1 {
@@ -268,7 +277,7 @@ fn dockerfile(
     let base = lock.provisioning_base();
     let preparation = crate::preparation::dockerfile_fragment(lock, preparations)?;
     Ok(format!(
-        "FROM {}@{} AS ayni-runtime\n{debian_provisioning}USER ayni\nCOPY --chown=10001:10001 mise.toml /etc/ayni/mise.toml\nRUN chmod 0444 /etc/ayni/mise.toml\nENV MISE_CONFIG_FILE=/etc/ayni/mise.toml MISE_TRUSTED_CONFIG_PATHS=/etc/ayni\nRUN mise trust /etc/ayni/mise.toml\n{mise_provisioning}{node_package_manager_provisioning}RUN mise reshim\n{rustup_provisioning}ENV MISE_AUTO_INSTALL=0 MISE_CONFIG_FILE=/etc/ayni/mise.toml\n{preparation}LABEL {IMAGE_SCHEMA_LABEL}=\"{IMAGE_SCHEMA_VERSION}\" {IMAGE_LOCK_LABEL}=\"{}\" {IMAGE_BASE_LABEL}=\"{}\" {IMAGE_AYNI_LABEL}=\"{}\" {IMAGE_MISE_LABEL}=\"{}\" {IMAGE_PLATFORM_LABEL}=\"{}\" {IMAGE_PREPARATION_LABEL}=\"{}\"\nWORKDIR {WORKSPACE}\n",
+        "FROM {}@{} AS ayni-runtime\n{debian_provisioning}USER ayni\nCOPY --chown=10001:10001 mise.toml /etc/ayni/mise.toml\nRUN chmod 0444 /etc/ayni/mise.toml\nENV MISE_CONFIG_FILE=/etc/ayni/mise.toml MISE_TRUSTED_CONFIG_PATHS=/etc/ayni\nRUN mise trust /etc/ayni/mise.toml\n{mise_provisioning}{node_package_manager_provisioning}RUN mise reshim\n{rustup_provisioning}ENV MISE_AUTO_INSTALL=0 MISE_CONFIG_FILE=/etc/ayni/mise.toml\n{preparation}LABEL {IMAGE_OWNER_LABEL}=\"{IMAGE_OWNER_VALUE}\" {IMAGE_SCHEMA_LABEL}=\"{IMAGE_SCHEMA_VERSION}\" {IMAGE_LOCK_LABEL}=\"{}\" {IMAGE_BASE_LABEL}=\"{}\" {IMAGE_AYNI_LABEL}=\"{}\" {IMAGE_MISE_LABEL}=\"{}\" {IMAGE_PLATFORM_LABEL}=\"{}\" {IMAGE_PREPARATION_LABEL}=\"{}\"\nWORKDIR {WORKSPACE}\n",
         base.reference,
         base.digest,
         lock.fingerprint(),
@@ -281,19 +290,25 @@ fn dockerfile(
 }
 
 fn mise_install_provisioning(inventory: &ProvisioningInventory) -> String {
-    let mut coordinates = inventory
-        .tools
-        .iter()
-        .flat_map(|(tool, versions)| {
-            versions.iter().map(move |version| {
-                (
-                    tool.contains(':'),
-                    tool.starts_with("go:") || tool.starts_with("pipx:"),
-                    format!("{tool}@{version}"),
-                )
-            })
-        })
-        .collect::<Vec<_>>();
+    let mut coordinates = Vec::new();
+    for (tool, versions) in &inventory.tools {
+        if tool == "rust" {
+            // Rust's profile is a Mise tool option. The pinned Mise release
+            // reads those options only from the config-backed request, while
+            // an explicit rust@<version> argument constructs a new request
+            // without them. Installing `rust` therefore preserves the exact
+            // locked versions from mise.toml and applies profile=minimal.
+            coordinates.push((false, false, String::from("rust")));
+            continue;
+        }
+        coordinates.extend(versions.iter().map(|version| {
+            (
+                tool.contains(':'),
+                tool.starts_with("go:") || tool.starts_with("pipx:"),
+                format!("{tool}@{version}"),
+            )
+        }));
+    }
     // Runtime and package-manager tools must precede provider-backed tools such
     // as cargo:, go:, and pipx: coordinates.
     coordinates.sort();
@@ -356,24 +371,23 @@ fn debian_provisioning(packages: &[ayni_core::LockedDebianPackage]) -> String {
     if packages.is_empty() {
         return String::new();
     }
-    let update = vec![String::from("apt-get"), String::from("update")];
-    let mut install = vec![
-        String::from("apt-get"),
-        String::from("install"),
-        String::from("--yes"),
-        String::from("--no-install-recommends"),
-    ];
-    install.extend(packages.iter().map(|package| package.package.clone()));
-    let cleanup = vec![
-        String::from("rm"),
-        String::from("-rf"),
-        String::from("/var/lib/apt/lists"),
-    ];
+    let packages = packages
+        .iter()
+        .map(|package| package.package.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    // Package specifications have already been restricted to Debian's safe
+    // name/version character set by the validated lock contract. Keeping all
+    // three operations in one layer ensures the package index is not retained
+    // in an immutable lower layer.
     format!(
-        "USER root\nRUN {}\nRUN {}\nRUN {}\n",
-        serde_json::to_string(&update).expect("apt update argv serialization"),
-        serde_json::to_string(&install).expect("apt install argv serialization"),
-        serde_json::to_string(&cleanup).expect("apt cleanup argv serialization"),
+        concat!(
+            "USER root\n",
+            "RUN apt-get update \\\n",
+            "    && apt-get install --yes --no-install-recommends {packages} \\\n",
+            "    && rm -rf /var/lib/apt/lists/*\n",
+        ),
+        packages = packages,
     )
 }
 
@@ -476,7 +490,9 @@ mod tests {
             ..ProvisioningInventory::default()
         };
         let fragment = mise_install_provisioning(&inventory);
-        let rust = fragment.find("rust@1.97.1").expect("rust layer");
+        let rust = fragment
+            .find("[\"mise\",\"install\",\"--yes\",\"rust\"]")
+            .expect("Rust config-backed layer");
         let node = fragment.find("node@24.14.0").expect("node layer");
         let nextest = fragment
             .find("cargo:cargo-nextest@0.9.100")
@@ -491,6 +507,64 @@ mod tests {
             "[\"env\",\"MISE_EXPERIMENTAL=1\",\"mise\",\"install\",\"--yes\",\"go:github.com/fzipp/gocyclo/cmd/gocyclo@0.6.0\"]"
         ));
         assert_eq!(fragment.matches("RUN [").count(), 4);
+    }
+
+    #[test]
+    fn rust_mise_config_uses_the_minimal_profile_for_every_locked_version() {
+        let tools = BTreeMap::from([
+            (
+                String::from("node"),
+                BTreeSet::from([String::from("24.14.0")]),
+            ),
+            (
+                String::from("rust"),
+                BTreeSet::from([String::from("1.96.0"), String::from("1.97.1")]),
+            ),
+        ]);
+
+        assert_eq!(
+            mise_toml(tools),
+            concat!(
+                "[tools]\n",
+                "\"node\" = \"24.14.0\"\n",
+                "\"rust\" = [{ version = \"1.96.0\", profile = \"minimal\" }, ",
+                "{ version = \"1.97.1\", profile = \"minimal\" }]\n",
+            )
+        );
+    }
+
+    #[test]
+    fn locked_rust_components_and_targets_are_added_after_the_minimal_toolchain() {
+        let inventory = ProvisioningInventory {
+            tools: BTreeMap::from([(
+                String::from("rust"),
+                BTreeSet::from([String::from("1.97.1")]),
+            )]),
+            rust_components: BTreeMap::from([(
+                String::from("1.97.1"),
+                BTreeSet::from([String::from("llvm-tools-preview")]),
+            )]),
+            rust_targets: BTreeMap::from([(
+                String::from("1.97.1"),
+                BTreeSet::from([String::from("wasm32-unknown-unknown")]),
+            )]),
+            ..ProvisioningInventory::default()
+        };
+
+        assert_eq!(
+            mise_install_provisioning(&inventory),
+            "RUN [\"mise\",\"install\",\"--yes\",\"rust\"]\n"
+        );
+        let rustup = rustup_provisioning(&inventory);
+        assert!(rustup.contains(
+            "[\"rustup\",\"component\",\"add\",\"--toolchain\",\"1.97.1\",\"llvm-tools-preview\"]"
+        ));
+        assert!(rustup.contains(
+            "[\"rustup\",\"target\",\"add\",\"--toolchain\",\"1.97.1\",\"wasm32-unknown-unknown\"]"
+        ));
+        assert!(!rustup.contains("rust-docs"));
+        assert!(!rustup.contains("clippy"));
+        assert!(!rustup.contains("rustfmt"));
     }
 
     #[test]
@@ -549,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn debian_packages_generate_root_only_argv_layers() {
+    fn debian_packages_update_install_and_cleanup_in_one_layer() {
         let fragment = debian_provisioning(&[
             ayni_core::LockedDebianPackage {
                 package: String::from("libssl-dev"),
@@ -561,9 +635,12 @@ mod tests {
             },
         ]);
         assert!(fragment.starts_with("USER root\n"));
-        assert!(fragment.contains("[\"apt-get\",\"update\"]"));
-        assert!(fragment.contains("\"libssl-dev\""));
-        assert!(fragment.contains("\"protobuf-compiler=3.21.12-3\""));
+        assert_eq!(fragment.matches("RUN ").count(), 1);
+        assert!(fragment.contains("RUN apt-get update \\\n"));
+        assert!(fragment.contains("    && apt-get install --yes --no-install-recommends"));
+        assert!(fragment.contains("libssl-dev"));
+        assert!(fragment.contains("protobuf-compiler=3.21.12-3"));
+        assert!(fragment.contains("&& rm -rf /var/lib/apt/lists/*"));
         assert!(!fragment.contains(';'));
     }
 

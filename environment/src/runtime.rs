@@ -3,7 +3,8 @@ use crate::{BackendError, read_lock};
 use ayni_adapters_common::workspace::GENERATED_WORKSPACE_ENTRY_NAMES;
 use ayni_core::{
     ArtifactToolVersion, DependencyPreparationPlan, DockerAccess, EnvironmentCapabilities,
-    EnvironmentLock, LockedTargetEnvironment, NetworkAccess, TargetIdentity,
+    EnvironmentLock, EnvironmentResourceLimits, LockedTargetEnvironment, NetworkAccess,
+    TargetIdentity,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -13,6 +14,14 @@ use std::process::{Command, Stdio};
 
 pub const WORKSPACE: &str = "/workspace";
 const CHECKOUT_SOURCE: &str = "/opt/ayni/checkout";
+
+/// Operator-owned authorization for repository-requested runtime capabilities.
+/// This value is intentionally not stored in the repository lock.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LaunchAuthorization {
+    pub allow_network: bool,
+    pub allow_docker_socket: bool,
+}
 
 fn managed_workspace_init() -> String {
     let mut script = String::from(concat!(
@@ -117,16 +126,18 @@ pub fn select_target<'a>(
 /// target environment. Managed quality execution activates each locked target
 /// separately inside the container.
 pub fn launch_repository(repo_root: &Path, command: &[String]) -> Result<i32, BackendError> {
-    launch_repository_prepared(repo_root, &[], command)
+    launch_repository_prepared(repo_root, &[], command, LaunchAuthorization::default())
 }
 
 pub fn launch_repository_prepared(
     repo_root: &Path,
     preparations: &[DependencyPreparationPlan],
     command: &[String],
+    authorization: LaunchAuthorization,
 ) -> Result<i32, BackendError> {
     let root = canonical_root(repo_root)?;
     let lock = read_lock(&root)?;
+    validate_launch_authorization(lock.capabilities(), authorization)?;
     let plan = image_plan_with_preparation(&lock, preparations)?;
     let engine = detect_engine()?;
     validate_image(engine, &plan, &lock)?;
@@ -144,6 +155,7 @@ pub fn launch_repository_prepared(
         mounts: &mounts,
         managed_environments: Some(&managed_environments),
         capabilities: lock.capabilities(),
+        resources: lock.resource_limits(),
         lock_fingerprint: lock.fingerprint(),
         tool_versions: &tool_versions,
     })?;
@@ -156,7 +168,14 @@ pub fn launch(
     command: &[String],
     shell: bool,
 ) -> Result<i32, BackendError> {
-    launch_prepared(repo_root, selection, command, shell, &[])
+    launch_prepared(
+        repo_root,
+        selection,
+        command,
+        shell,
+        &[],
+        LaunchAuthorization::default(),
+    )
 }
 
 pub fn launch_prepared(
@@ -165,9 +184,11 @@ pub fn launch_prepared(
     command: &[String],
     shell: bool,
     preparations: &[DependencyPreparationPlan],
+    authorization: LaunchAuthorization,
 ) -> Result<i32, BackendError> {
     let root = canonical_root(repo_root)?;
     let lock = read_lock(&root)?;
+    validate_launch_authorization(lock.capabilities(), authorization)?;
     let plan = image_plan_with_preparation(&lock, preparations)?;
     let engine = detect_engine()?;
     validate_image(engine, &plan, &lock)?;
@@ -192,6 +213,7 @@ pub fn launch_prepared(
         mounts: &mounts,
         execution_environment: &execution_environment,
         capabilities: lock.capabilities(),
+        resources: lock.resource_limits(),
     })?;
     execute_launch(engine, &args)
 }
@@ -208,12 +230,13 @@ struct RepositoryLaunch<'a> {
     mounts: &'a [(PathBuf, String)],
     managed_environments: Option<&'a str>,
     capabilities: EnvironmentCapabilities,
+    resources: EnvironmentResourceLimits,
     lock_fingerprint: &'a str,
     tool_versions: &'a str,
 }
 
 fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, BackendError> {
-    let mut args = base_launch_args(request.engine, request.capabilities)?;
+    let mut args = base_launch_args(request.engine, request.capabilities, request.resources)?;
     append_managed_workspace_state_args(&mut args, request.root, WORKSPACE, request.state_home);
     let workspace_mounts = append_managed_prepared_mounts(&mut args, request.mounts);
     if let Some(value) = request.managed_environments {
@@ -319,10 +342,11 @@ struct TargetLaunch<'a> {
     mounts: &'a [(PathBuf, String)],
     execution_environment: &'a BTreeMap<String, String>,
     capabilities: EnvironmentCapabilities,
+    resources: EnvironmentResourceLimits,
 }
 
 fn launch_args(request: TargetLaunch<'_>) -> Result<Vec<String>, BackendError> {
-    let mut args = base_launch_args(request.engine, request.capabilities)?;
+    let mut args = base_launch_args(request.engine, request.capabilities, request.resources)?;
     append_workspace_args(&mut args, request.root, request.target, request.state_home);
     append_prepared_mounts(&mut args, request.mounts);
     append_target_environment(&mut args, request.target)?;
@@ -336,6 +360,7 @@ fn launch_args(request: TargetLaunch<'_>) -> Result<Vec<String>, BackendError> {
 fn base_launch_args(
     engine: Engine,
     capabilities: EnvironmentCapabilities,
+    resources: EnvironmentResourceLimits,
 ) -> Result<Vec<String>, BackendError> {
     let network = match capabilities.network {
         NetworkAccess::None => "none",
@@ -351,6 +376,16 @@ fn base_launch_args(
         "ALL".into(),
         "--security-opt".into(),
         "no-new-privileges".into(),
+        "--cpus".into(),
+        resources.cpus.to_string(),
+        "--memory".into(),
+        format!("{}m", resources.memory_mib),
+        "--memory-swap".into(),
+        format!("{}m", resources.memory_swap_mib),
+        "--pids-limit".into(),
+        resources.pids.to_string(),
+        "--ulimit".into(),
+        format!("nofile={0}:{0}", resources.nofile),
         "--tmpfs".into(),
         "/tmp:rw,exec,nosuid,size=1g".into(),
     ];
@@ -373,6 +408,23 @@ fn validate_runtime_capabilities(
             ));
         }
         docker_socket_path()?;
+    }
+    Ok(())
+}
+
+fn validate_launch_authorization(
+    capabilities: EnvironmentCapabilities,
+    authorization: LaunchAuthorization,
+) -> Result<(), BackendError> {
+    if capabilities.network == NetworkAccess::Bridge && !authorization.allow_network {
+        return Err(BackendError::environment(
+            "the locked repository requests bridge networking but the operator did not authorize it",
+        ));
+    }
+    if capabilities.docker == DockerAccess::Socket && !authorization.allow_docker_socket {
+        return Err(BackendError::environment(
+            "the locked repository requests Docker-socket access but the operator did not authorize it",
+        ));
     }
     Ok(())
 }
@@ -895,11 +947,31 @@ mod tests {
                 docker: DockerAccess::None,
                 network: NetworkAccess::Bridge,
             },
+            EnvironmentResourceLimits::default(),
         )
         .expect("launch args");
         assert!(args.windows(2).any(|pair| pair == ["--network", "bridge"]));
         assert!(!args.iter().any(|arg| arg.contains("docker.sock")));
         assert!(args.windows(2).any(|pair| pair == ["--cap-drop", "ALL"]));
+    }
+
+    #[test]
+    fn repository_capabilities_require_operator_authorization() {
+        let requested = EnvironmentCapabilities {
+            docker: DockerAccess::Socket,
+            network: NetworkAccess::Bridge,
+        };
+        assert!(validate_launch_authorization(requested, LaunchAuthorization::default()).is_err());
+        assert!(
+            validate_launch_authorization(
+                requested,
+                LaunchAuthorization {
+                    allow_network: true,
+                    allow_docker_socket: true,
+                },
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -923,12 +995,24 @@ mod tests {
             mounts: &mounts,
             managed_environments: None,
             capabilities: EnvironmentCapabilities::default(),
+            resources: EnvironmentResourceLimits::default(),
             lock_fingerprint: "sha256:test",
             tool_versions: "[]",
         })
         .expect("launch args");
         let workspace_init = managed_workspace_init();
         assert!(args.windows(2).any(|pair| pair == ["--network", "none"]));
+        assert!(args.windows(2).any(|pair| pair == ["--cpus", "4"]));
+        assert!(args.windows(2).any(|pair| pair == ["--memory", "8192m"]));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--memory-swap", "8192m"])
+        );
+        assert!(args.windows(2).any(|pair| pair == ["--pids-limit", "2048"]));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--ulimit", "nofile=8192:8192"])
+        );
         assert!(
             args.windows(2)
                 .any(|pair| pair == ["--workdir", "/workspace"])

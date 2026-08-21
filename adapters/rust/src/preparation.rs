@@ -3,6 +3,7 @@ use ayni_core::{
     DependencyPreparationRequest, Language, PreparationCommand, PreparationInput,
     PreparationScaffold,
 };
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -60,11 +61,16 @@ impl DependencyPreparationCapability for RustDependencyPreparationCapability {
                 (String::from("CARGO_NET_OFFLINE"), String::from("true")),
                 (
                     String::from("CARGO_TARGET_DIR"),
-                    String::from("@generated/target"),
+                    cargo_target_directory(&target.target.root),
                 ),
             ]),
         )
     }
+}
+
+fn cargo_target_directory(target_root: &str) -> String {
+    let digest = Sha256::digest(target_root.as_bytes());
+    format!("/home/ayni/.cache/cargo/targets/{digest:x}")
 }
 
 fn cargo_scaffolds(
@@ -214,6 +220,10 @@ mod tests {
             plan.execution_environment.get("CARGO_BUILD_JOBS"),
             Some(&String::from("1"))
         );
+        assert_eq!(
+            plan.execution_environment.get("CARGO_TARGET_DIR"),
+            Some(&cargo_target_directory("."))
+        );
         assert!(
             RustDependencyPreparationCapability
                 .prepare(
@@ -221,6 +231,19 @@ mod tests {
                         .expect("request")
                 )
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn cargo_target_cache_is_stable_and_isolated_by_target_root() {
+        let root = cargo_target_directory(".");
+        assert_eq!(root, cargo_target_directory("."));
+        assert_ne!(root, cargo_target_directory("crates/member"));
+        assert!(root.starts_with("/home/ayni/.cache/cargo/targets/"));
+        assert_eq!(
+            root.trim_start_matches("/home/ayni/.cache/cargo/targets/")
+                .len(),
+            64
         );
     }
 }

@@ -1,5 +1,7 @@
 use crate::adapter::PolicyEffectivenessFacts;
-use crate::environment::{DockerAccess, EnvironmentCapabilities, NetworkAccess};
+use crate::environment::{
+    DockerAccess, EnvironmentCapabilities, EnvironmentResourceLimits, NetworkAccess,
+};
 use crate::environment_provisioning::normalize_debian_package_spec;
 use crate::language::Language;
 use crate::signal::SignalKind;
@@ -88,6 +90,7 @@ pub struct EnvironmentPolicy {
     pub tools: BTreeMap<String, String>,
     pub debian: DebianEnvironmentPolicy,
     pub docker: DockerEnvironmentPolicy,
+    pub resources: EnvironmentResourceLimits,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
@@ -223,6 +226,11 @@ impl AyniPolicy {
             docker: self.environment.docker.access,
             network: self.environment.docker.network,
         }
+    }
+
+    #[must_use]
+    pub const fn environment_resource_limits(&self) -> EnvironmentResourceLimits {
+        self.environment.resources
     }
 
     #[must_use]
@@ -521,7 +529,8 @@ fn normalize_policy_roots(policy: &mut AyniPolicy) -> Result<(), String> {
 
 fn normalize_environment_policy(environment: &mut EnvironmentPolicy) -> Result<(), String> {
     normalize_environment_tools(&mut environment.tools)?;
-    normalize_debian_packages(&mut environment.debian.packages)
+    normalize_debian_packages(&mut environment.debian.packages)?;
+    environment.resources.validate()
 }
 
 fn normalize_environment_tools(tools: &mut BTreeMap<String, String>) -> Result<(), String> {

@@ -14,6 +14,12 @@ pub(crate) enum ExecutionMode {
     Host,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CapabilityAuthorization {
+    pub allow_network: bool,
+    pub allow_docker_socket: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Operation {
     Init(InitOperation),
@@ -21,6 +27,8 @@ pub(crate) enum Operation {
     EnvDoctor(RepositoryOperation),
     EnvLock(EnvLockOperation),
     EnvBuild(RepositoryOperation),
+    EnvStorage(EnvStorageOperation),
+    EnvPrune(EnvPruneOperation),
     EnvShell(EnvShellOperation),
     EnvRun(EnvRunOperation),
     ContractShow(ContractOperation),
@@ -60,10 +68,25 @@ pub(crate) struct EnvLockOperation {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub(crate) struct EnvStorageOperation {
+    pub repo_root: PathBuf,
+    pub output: OutputFormat,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct EnvPruneOperation {
+    pub repo_root: PathBuf,
+    pub output: OutputFormat,
+    pub apply: bool,
+    pub images: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct EnvShellOperation {
     pub repo_root: PathBuf,
     pub language: Option<Language>,
     pub root: Option<String>,
+    pub authorization: CapabilityAuthorization,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -72,6 +95,7 @@ pub(crate) struct EnvRunOperation {
     pub language: Option<Language>,
     pub root: Option<String>,
     pub command: Vec<String>,
+    pub authorization: CapabilityAuthorization,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -86,6 +110,7 @@ pub(crate) struct CheckOperation {
     pub output: OutputFormat,
     pub execution_mode: ExecutionMode,
     pub debug: bool,
+    pub authorization: CapabilityAuthorization,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -105,6 +130,7 @@ pub(crate) struct VerifyOperation {
     pub output: OutputFormat,
     pub execution_mode: ExecutionMode,
     pub debug: bool,
+    pub authorization: CapabilityAuthorization,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -114,6 +140,7 @@ pub(crate) struct ImpactOperation {
     pub output: OutputFormat,
     pub execution_mode: ExecutionMode,
     pub debug: bool,
+    pub authorization: CapabilityAuthorization,
 }
 
 #[derive(Debug, PartialEq, Eq)]

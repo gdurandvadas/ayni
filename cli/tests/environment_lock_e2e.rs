@@ -22,7 +22,7 @@ fn lock(root: &TempDir) -> Output {
 
 fn fixture() -> TempDir {
     let root = TempDir::new().expect("tempdir");
-    fs::write(root.path().join(".ayni.toml"), "[checks]\ntest = true\ncoverage = false\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n[languages]\nenabled = [\"rust\"]\n[environment.tools]\nprotoc = \"35.1\"\n[environment.debian]\npackages = [\"libssl-dev\"]\n[environment.docker]\naccess = \"socket\"\nnetwork = \"bridge\"\n").unwrap();
+    fs::write(root.path().join(".ayni.toml"), "[checks]\ntest = true\ncoverage = false\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n[languages]\nenabled = [\"rust\"]\n[environment.tools]\nprotoc = \"35.1\"\n[environment.debian]\npackages = [\"libssl-dev\"]\n[environment.docker]\naccess = \"socket\"\nnetwork = \"bridge\"\n[environment.resources]\ncpus = 6\nmemory_mib = 12288\nmemory_swap_mib = 16384\npids = 4096\nnofile = 16384\n").unwrap();
     fs::write(
         root.path().join("Cargo.toml"),
         "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nrust-version = \"1.93.0\"\n",
@@ -72,6 +72,11 @@ fn writes_a_valid_deterministic_lock_without_generated_state() {
         parsed.capabilities().network,
         ayni_core::NetworkAccess::Bridge
     );
+    assert_eq!(parsed.resource_limits().cpus, 6);
+    assert_eq!(parsed.resource_limits().memory_mib, 12_288);
+    assert_eq!(parsed.resource_limits().memory_swap_mib, 16_384);
+    assert_eq!(parsed.resource_limits().pids, 4_096);
+    assert_eq!(parsed.resource_limits().nofile, 16_384);
     assert!(!root.path().join(".ayni").exists());
     let second = lock(&root);
     assert!(second.status.success());

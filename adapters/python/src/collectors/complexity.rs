@@ -318,6 +318,7 @@ mod tests {
                 ..Scope::default()
             },
             execution: ExecutionResolution::direct("uv", PathBuf::from("/repo"), "lock", 100),
+            cancellation: Default::default(),
             debug: false,
         };
 
@@ -333,6 +334,7 @@ mod tests {
             policy: AyniPolicy::default(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("poetry", PathBuf::from("/repo"), "lock", 100),
+            cancellation: Default::default(),
             debug: false,
         };
         let (program, args) = complexity_command(&context, &[String::from(".")]);
@@ -354,6 +356,7 @@ mod tests {
                 "manifest",
                 100,
             ),
+            cancellation: Default::default(),
             debug: false,
         };
         let (program, args) = complexity_command(&context, &[String::from(".")]);

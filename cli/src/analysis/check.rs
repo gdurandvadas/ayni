@@ -1,6 +1,7 @@
 use super::artifacts::ARTIFACTS_DIR;
 use super::*;
 use crate::build_registry;
+use std::time::{Duration, Instant};
 
 pub(crate) fn analyze(
     config_path: &str,
@@ -28,22 +29,30 @@ impl From<String> for AnalyzeError {
 }
 
 fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome, AnalyzeError> {
+    let total_started = Instant::now();
+    let phase_started = Instant::now();
     let config_path = PathBuf::from(config_path);
     let workspace_root = workspace_root_from_config_path(&config_path);
     let policy = policy::load_from_path(&config_path).map_err(AnalyzeError::InvalidContract)?;
     validate_configured_root_containment(&workspace_root, &policy)
         .map_err(AnalyzeError::InvalidContract)?;
     ensure_analyze_directories(&workspace_root)?;
+    profile_phase(options.debug, "contract_setup", phase_started.elapsed());
 
     let output_mode = options.output_mode;
     let debug = options.debug;
 
+    let phase_started = Instant::now();
     let registry = Arc::new(build_registry());
     let planning =
         build_analyze_targets(&workspace_root, &policy, None, None, None, debug, &registry)?;
     let plan = build_analyze_plan(&planning.targets);
+    profile_phase(debug, "target_planning", phase_started.elapsed());
+    let phase_started = Instant::now();
     let metadata = build_artifact_metadata(&config_path, &workspace_root, &planning, output_mode)?;
+    profile_phase(debug, "artifact_metadata", phase_started.elapsed());
     let artifact_slot = Arc::new(Mutex::new(None));
+    let phase_started = Instant::now();
     let aborted = execute_analyze_plan_or_persist_failure(
         &workspace_root,
         &planning,
@@ -53,10 +62,12 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome
         Arc::clone(&artifact_slot),
         Arc::clone(&registry),
     )?;
+    profile_phase(debug, "signal_collection", phase_started.elapsed());
     if persist_aborted_analysis(&workspace_root, &planning, &metadata, aborted)? {
         return Err(AnalyzeError::Incomplete(String::from("check aborted")));
     }
 
+    let phase_started = Instant::now();
     let mut artifact = take_collected_artifact_or_persist_failure(
         &workspace_root,
         &planning,
@@ -69,11 +80,23 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome
         &registry,
         !managed_execution_active(),
     )?;
+    profile_phase(debug, "finding_materialization", phase_started.elapsed());
+    let phase_started = Instant::now();
     let serialized = serialize_artifact(&artifact)?;
     persist_artifact_at(&workspace_root, SIGNALS_ARTIFACT, &serialized)?;
+    profile_phase(debug, "artifact_persistence", phase_started.elapsed());
+    let phase_started = Instant::now();
     emit_analyze_outputs(output_mode, &policy, &artifact, &serialized)?;
+    profile_phase(debug, "output_rendering", phase_started.elapsed());
+    profile_phase(debug, "total", total_started.elapsed());
 
     Ok(artifact.outcome())
+}
+
+fn profile_phase(debug: bool, phase: &str, elapsed: Duration) {
+    if debug {
+        eprintln!("[profile] phase={phase} elapsed_ms={}", elapsed.as_millis());
+    }
 }
 
 fn execute_analyze_plan_or_persist_failure(
@@ -196,7 +219,7 @@ fn execute_analyze_plan(
 fn debug_progress_event(event: ui::runner::ProgressEvent) {
     match event {
         ui::runner::ProgressEvent::Started { language, name } => {
-            eprintln!("[{language}] {name} started");
+            eprintln!("[profile] collector_start language={language} signal={name}");
         }
         ui::runner::ProgressEvent::Line {
             language,
@@ -212,8 +235,8 @@ fn debug_progress_event(event: ui::runner::ProgressEvent) {
             elapsed,
         } => {
             eprintln!(
-                "[{language}] {name} {state:?} {:.1}s",
-                elapsed.as_secs_f64()
+                "[profile] collector_finish language={language} signal={name} state={state:?} elapsed_ms={}",
+                elapsed.as_millis()
             );
         }
     }

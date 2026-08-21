@@ -196,6 +196,7 @@ pub(crate) fn build_analyze_targets(
                 policy: policy.clone(),
                 scope,
                 execution,
+                cancellation: Default::default(),
                 debug,
             };
             targets.push(AnalyzeTarget {

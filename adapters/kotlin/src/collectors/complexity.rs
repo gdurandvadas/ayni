@@ -245,6 +245,7 @@ mod tests {
             policy: AyniPolicy::default(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("gradle", PathBuf::from("/repo"), "test", 100),
+            cancellation: Default::default(),
             debug: false,
         };
         let offenders = parse_checkstyle_content(
@@ -271,6 +272,7 @@ mod tests {
                 ..Scope::default()
             },
             execution: ExecutionResolution::direct("gradle", PathBuf::from("/repo"), "test", 100),
+            cancellation: Default::default(),
             debug: false,
         };
         let offenders = parse_checkstyle_content(

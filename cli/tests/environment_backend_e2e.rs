@@ -104,7 +104,8 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     let fingerprint = lock["fingerprint"].as_str().unwrap();
     let base_digest = lock["provisioning_base"]["digest"].as_str().unwrap();
     let labels = serde_json::json!({
-        "dev.ayni.environment.schema": "0.4.0",
+        "dev.ayni.environment.owner": "ayni",
+        "dev.ayni.environment.schema": "0.5.0",
         "dev.ayni.environment.lock-fingerprint": fingerprint,
         "dev.ayni.environment.base-digest": base_digest,
         "dev.ayni.environment.ayni-version": env!("CARGO_PKG_VERSION"),
@@ -160,6 +161,10 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         "RUN [\"rustup\",\"component\",\"add\",\"--toolchain\",\"1.93.0\",\"llvm-tools-preview\"]"
     ));
     assert!(dockerfile.contains("FROM ayni-runtime AS ayni-preparation"));
+    assert!(dockerfile.contains(
+        "COPY --from=ayni-preparation --chown=10001:10001 --chmod=0755 /home/ayni/.cache /home/ayni/.cache"
+    ));
+    assert!(!dockerfile.contains("RUN chmod -R a+rX /home/ayni/.cache"));
     assert!(dockerfile.contains("\"cargo\",\"fetch\",\"--locked\""));
     assert!(!dockerfile.contains(&root.path().display().to_string()));
     let inputs = fs::read_to_string(format!("{}.inputs", record.display())).unwrap();
@@ -178,7 +183,10 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     );
     let mise = fs::read_to_string(format!("{}.mise", record.display())).unwrap();
     assert!(mise.starts_with("[tools]\n"));
-    assert!(mise.contains("\"rust\" = [\"1.92.0\", \"1.93.0\"]"));
+    assert!(mise.contains(concat!(
+        "\"rust\" = [{ version = \"1.92.0\", profile = \"minimal\" }, ",
+        "{ version = \"1.93.0\", profile = \"minimal\" }]"
+    )));
     assert!(mise.contains("\"cargo:cargo-llvm-cov\" = \"0.8.5\""));
     let ambiguous = command(&root, &["env", "run", "--repo-root"])
         .arg(root.path())
@@ -209,17 +217,18 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     assert!(String::from_utf8_lossy(&run.stderr).contains("exited with code 7"));
     let recorded = fs::read_to_string(format!("{}.run", record.display())).unwrap();
     assert!(recorded.contains("--network\nnone"));
+    assert!(recorded.contains("--cpus\n4"));
+    assert!(recorded.contains("--memory\n8192m"));
+    assert!(recorded.contains("--memory-swap\n8192m"));
+    assert!(recorded.contains("--pids-limit\n2048"));
+    assert!(recorded.contains("--ulimit\nnofile=8192:8192"));
     assert!(recorded.contains("/workspace:rw"));
     assert!(recorded.contains("MISE_AUTO_INSTALL=0"));
     let fingerprint = fingerprint.strip_prefix("sha256:").unwrap_or(fingerprint);
-    let state_home = format!(
-        "/workspace/.ayni/environment/{}/home",
-        &fingerprint[..16.min(fingerprint.len())]
-    );
     assert!(!recorded.contains("CARGO_HOME="));
     assert!(!recorded.contains("MISE_CACHE_DIR="));
     assert!(recorded.contains("target=/home/ayni/.cache"));
-    assert!(recorded.contains(&format!("CARGO_TARGET_DIR={state_home}/targets/")));
+    assert!(recorded.contains("CARGO_TARGET_DIR=/home/ayni/.cache/cargo/targets/"));
     assert!(recorded.contains("MISE_RUST_VERSION=1.93.0"));
     assert!(recorded.contains("--workdir\n/workspace/one"));
     assert!(recorded.contains("RUSTUP_HOME=/home/ayni/.rustup"));
@@ -375,7 +384,8 @@ fn npm_dependencies_are_staged_materialized_offline_and_mounted_for_managed_qual
     let lock: serde_json::Value =
         serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
     let labels = serde_json::json!({
-        "dev.ayni.environment.schema": "0.4.0",
+        "dev.ayni.environment.owner": "ayni",
+        "dev.ayni.environment.schema": "0.5.0",
         "dev.ayni.environment.lock-fingerprint": lock["fingerprint"],
         "dev.ayni.environment.base-digest": lock["provisioning_base"]["digest"],
         "dev.ayni.environment.ayni-version": env!("CARGO_PKG_VERSION"),
@@ -507,7 +517,8 @@ fn pnpm_workspace_materializes_all_node_modules_trees_in_one_offline_run() {
     let lock: serde_json::Value =
         serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
     let labels = serde_json::json!({
-        "dev.ayni.environment.schema": "0.4.0",
+        "dev.ayni.environment.owner": "ayni",
+        "dev.ayni.environment.schema": "0.5.0",
         "dev.ayni.environment.lock-fingerprint": lock["fingerprint"],
         "dev.ayni.environment.base-digest": lock["provisioning_base"]["digest"],
         "dev.ayni.environment.ayni-version": env!("CARGO_PKG_VERSION"),
@@ -690,7 +701,8 @@ fn five_language_build_composes_preparation_without_staging_source() {
     let lock: serde_json::Value =
         serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
     let labels = serde_json::json!({
-        "dev.ayni.environment.schema": "0.4.0",
+        "dev.ayni.environment.owner": "ayni",
+        "dev.ayni.environment.schema": "0.5.0",
         "dev.ayni.environment.lock-fingerprint": lock["fingerprint"],
         "dev.ayni.environment.base-digest": lock["provisioning_base"]["digest"],
         "dev.ayni.environment.ayni-version": env!("CARGO_PKG_VERSION"),
@@ -775,4 +787,198 @@ fn five_language_build_composes_preparation_without_staging_source() {
     assert!(run.contains("target=/opt/ayni/checkout,readonly"));
     assert!(run.contains("/workspace:rw,exec,nosuid,size=4g,mode=1777"));
     assert!(run.contains("target=/workspace/.ayni"));
+}
+
+#[test]
+fn storage_prune_separates_repo_state_from_engine_wide_images() {
+    let root = fixture();
+    let locked = command(&root, &["env", "lock", "--repo-root"])
+        .arg(root.path())
+        .output()
+        .unwrap();
+    assert!(
+        locked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&locked.stderr)
+    );
+    let lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
+    let record = root.path().join("storage-record");
+    let labels = serde_json::json!({
+        "dev.ayni.environment.owner": "ayni",
+        "dev.ayni.environment.schema": "0.5.0",
+        "dev.ayni.environment.lock-fingerprint": lock["fingerprint"],
+        "dev.ayni.environment.base-digest": lock["provisioning_base"]["digest"],
+        "dev.ayni.environment.ayni-version": env!("CARGO_PKG_VERSION"),
+        "dev.ayni.environment.mise-version": "2025.2.4",
+        "dev.ayni.environment.platform": if cfg!(target_arch = "aarch64") {
+            "linux/arm64"
+        } else {
+            "linux/amd64"
+        },
+        "dev.ayni.environment.preparation-digest": "PREPARATION_DIGEST",
+    });
+    write_executable(
+        &root.path().join("bin/docker"),
+        &format!(
+            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\";;\nbuild) file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; fi; shift; done; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; touch '{}.built';;\nesac",
+            record.display(),
+            record.display(),
+            labels,
+            record.display(),
+            record.display(),
+        ),
+    );
+    let built = command(&root, &["env", "build", "--repo-root"])
+        .arg(root.path())
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let preparation = fs::read_to_string(format!("{}.preparation", record.display())).unwrap();
+    let preparation = preparation.trim();
+    let mut current_labels = labels.clone();
+    current_labels["dev.ayni.environment.preparation-digest"] =
+        serde_json::Value::String(preparation.into());
+    let mut stale_labels = current_labels.clone();
+    stale_labels["dev.ayni.environment.lock-fingerprint"] =
+        serde_json::Value::String(format!("sha256:{}", "d".repeat(64)));
+    let mut legacy_labels = stale_labels.clone();
+    legacy_labels
+        .as_object_mut()
+        .unwrap()
+        .remove("dev.ayni.environment.owner");
+    legacy_labels["dev.ayni.environment.schema"] = serde_json::json!("0.4.0");
+    let current_inspect = serde_json::json!([{
+        "Id": "sha256:current",
+        "RepoTags": ["ayni-env:current"],
+        "Size": 1024,
+        "Config": {"Labels": current_labels},
+    }]);
+    let stale_inspect = serde_json::json!([{
+        "Id": "sha256:stale",
+        "RepoTags": ["ayni-env:stale"],
+        "Size": 2048,
+        "Config": {"Labels": stale_labels},
+    }]);
+    let legacy_inspect = serde_json::json!([{
+        "Id": "sha256:legacy",
+        "RepoTags": ["ayni-env:legacy"],
+        "Size": 4096,
+        "Config": {"Labels": legacy_labels},
+    }]);
+    let removed = format!("{}.removed", record.display());
+    write_executable(
+        &root.path().join("bin/docker"),
+        &format!(
+            "case \"$1:$2:$3\" in\nversion:*) echo fake;;\nimage:ls:*) printf 'sha256:current\\nsha256:stale\\nsha256:legacy\\n';;\nimage:inspect:sha256:current) printf '%s\\n' '{}';;\nimage:inspect:sha256:stale) printf '%s\\n' '{}';;\nimage:inspect:sha256:legacy) printf '%s\\n' '{}';;\nimage:rm:sha256:stale) printf '%s\\n' \"$3\" >> '{}';;\n*) exit 1;;\nesac",
+            current_inspect, stale_inspect, legacy_inspect, removed,
+        ),
+    );
+
+    let fingerprint = lock["fingerprint"].as_str().unwrap();
+    let fingerprint = fingerprint.strip_prefix("sha256:").unwrap_or(fingerprint);
+    let preparation = preparation.strip_prefix("sha256:").unwrap_or(preparation);
+    let current_state = root
+        .path()
+        .join(".ayni/environment")
+        .join(&fingerprint[..16])
+        .join(&preparation[..16]);
+    let stale_state = root
+        .path()
+        .join(".ayni/environment/eeeeeeeeeeeeeeee/ffffffffffffffff");
+    fs::create_dir_all(&current_state).unwrap();
+    fs::create_dir_all(&stale_state).unwrap();
+    fs::write(current_state.join("current"), "current").unwrap();
+    fs::write(stale_state.join("stale"), "stale").unwrap();
+    let unclassified_state = root.path().join(".ayni/environment/unclassified");
+    fs::create_dir_all(&unclassified_state).unwrap();
+    fs::write(unclassified_state.join("data"), "unclassified").unwrap();
+
+    let storage = command(&root, &["env", "storage", "--repo-root"])
+        .arg(root.path())
+        .args(["--output", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        storage.status.success(),
+        "{}",
+        String::from_utf8_lossy(&storage.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&storage.stdout).unwrap();
+    assert!(
+        report["expected_image_tag"]
+            .as_str()
+            .unwrap()
+            .starts_with("ayni-env:lock-")
+    );
+    assert_eq!(report["current_image_present"], true);
+    assert!(report.get("current_image_tag").is_none());
+    assert_eq!(report["images"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        report["images"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|image| image["prune_candidate"] == true)
+            .count(),
+        1
+    );
+    assert_eq!(report["build_cache_included"], false);
+    assert_eq!(
+        report["image_prune_scope"],
+        "engine_wide_across_repositories"
+    );
+    assert_eq!(report["image_cumulative_size_bytes"], 7168);
+    assert_eq!(report["state_root_logical_size_bytes"], 24);
+    assert_eq!(report["classified_state_logical_size_bytes"], 12);
+    assert_eq!(report["unclassified_state_logical_size_bytes"], 12);
+    assert!(report.get("state_logical_size_bytes").is_none());
+
+    let dry_run = command(&root, &["env", "prune", "--repo-root"])
+        .arg(root.path())
+        .output()
+        .unwrap();
+    assert!(dry_run.status.success());
+    assert!(String::from_utf8_lossy(&dry_run.stdout).contains("dry run"));
+    assert!(String::from_utf8_lossy(&dry_run.stdout).contains("not selected; add --images"));
+    assert!(stale_state.exists());
+    assert!(!std::path::Path::new(&removed).exists());
+
+    // Even though the non-current image has Ayni's owner label, --apply alone
+    // cannot prove it is exclusive to this repository and must retain it.
+    let applied = command(&root, &["env", "prune", "--repo-root"])
+        .arg(root.path())
+        .arg("--apply")
+        .output()
+        .unwrap();
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert!(!std::path::Path::new(&removed).exists());
+    assert!(!stale_state.exists());
+    assert!(current_state.exists());
+
+    let images_applied = command(&root, &["env", "prune", "--repo-root"])
+        .arg(root.path())
+        .args(["--apply", "--images"])
+        .output()
+        .unwrap();
+    assert!(
+        images_applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&images_applied.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&images_applied.stdout)
+            .contains("explicitly selected with --images")
+    );
+    assert_eq!(fs::read_to_string(&removed).unwrap().trim(), "sha256:stale");
+    assert!(current_state.exists());
 }

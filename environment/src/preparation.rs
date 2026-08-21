@@ -10,7 +10,12 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const INPUT_ROOT: &str = "/tmp/ayni/repository";
 pub(crate) const SEED_ROOT: &str = "/opt/ayni/dependencies";
-const PREPARATION_IMPLEMENTATION_VERSION: &str = "3";
+const PREPARATION_IMPLEMENTATION_VERSION: &str = "7";
+const PREPARED_CACHE_COPY_FRAGMENT: &str = concat!(
+    "FROM ayni-runtime\n",
+    "COPY --from=ayni-preparation --chown=10001:10001 --chmod=0755 ",
+    "/home/ayni/.cache /home/ayni/.cache\n",
+);
 
 pub(crate) fn dockerfile_fragment(
     lock: &EnvironmentLock,
@@ -35,40 +40,22 @@ pub(crate) fn dockerfile_fragment(
             })?;
         let activation = target_environment(target)?;
         for command in &plan.commands {
-            output.push_str("WORKDIR ");
-            output.push_str(&docker_path(INPUT_ROOT, &command.cwd));
-            output.push('\n');
-            let mut argv = vec![String::from("env")];
-            argv.extend(
-                activation
-                    .iter()
-                    .map(|(name, value)| format!("{name}={value}")),
-            );
-            argv.extend(
-                command
-                    .environment
-                    .iter()
-                    .map(|(name, value)| format!("{name}={value}")),
-            );
-            argv.push(command.program.clone());
-            argv.extend(command.args.clone());
-            output.push_str("RUN ");
-            output.push_str(&serde_json::to_string(&argv).expect("argv serialization"));
+            output.push_str(&preparation_run_instruction(command, &activation));
             output.push('\n');
         }
     }
-    output.push_str(
-        "FROM ayni-runtime\nUSER root\nCOPY --from=ayni-preparation /home/ayni/.cache /home/ayni/.cache\nRUN chmod -R a+rX /home/ayni/.cache\nUSER ayni\n",
-    );
+    // Prepared tools sometimes create owner-only files. Materialization runs
+    // as the host identity, so make the seed tree readable and owner-writable
+    // in the COPY layer itself. Use the portable octal form supported by both
+    // Dockerfile and Containerfile builders; this cache intentionally contains
+    // executable tools as well as package data.
+    output.push_str(PREPARED_CACHE_COPY_FRAGMENT);
     for plan in ordered_plans(plans) {
         for prepared in &plan.outputs {
             if prepared.mode == PreparationOutputMode::Fresh {
                 continue;
             }
-            output.push_str("COPY --from=ayni-preparation ");
-            output.push_str(&docker_path(INPUT_ROOT, &prepared.path));
-            output.push(' ');
-            output.push_str(&format!("{SEED_ROOT}/{}", output_key(prepared)));
+            output.push_str(&prepared_output_copy_instruction(prepared));
             output.push('\n');
         }
     }
@@ -278,6 +265,52 @@ fn docker_path(root: &str, relative: &str) -> String {
     }
 }
 
+fn preparation_run_instruction(
+    command: &ayni_core::PreparationCommand,
+    activation: &[(String, String)],
+) -> String {
+    // Keep repository-derived paths out of Dockerfile instruction syntax. The
+    // constant shell program receives the working directory as a JSON-encoded
+    // positional argument, then executes the adapter command without reparsing
+    // any of its data as shell source.
+    let mut argv = vec![
+        String::from("/bin/sh"),
+        String::from("-c"),
+        String::from("cd \"$1\" && shift && exec \"$@\""),
+        String::from("ayni-preparation"),
+        docker_path(INPUT_ROOT, &command.cwd),
+        String::from("env"),
+    ];
+    argv.extend(
+        activation
+            .iter()
+            .map(|(name, value)| format!("{name}={value}")),
+    );
+    argv.extend(
+        command
+            .environment
+            .iter()
+            .map(|(name, value)| format!("{name}={value}")),
+    );
+    argv.push(command.program.clone());
+    argv.extend(command.args.clone());
+    format!(
+        "RUN {}",
+        serde_json::to_string(&argv).expect("argv serialization")
+    )
+}
+
+fn prepared_output_copy_instruction(output: &PreparationOutput) -> String {
+    let paths = [
+        docker_path(INPUT_ROOT, &output.path),
+        format!("{SEED_ROOT}/{}", output_key(output)),
+    ];
+    format!(
+        "COPY --from=ayni-preparation {}",
+        serde_json::to_string(&paths).expect("copy path serialization")
+    )
+}
+
 fn contained_file(repo_root: &Path, relative: &str) -> Result<PathBuf, BackendError> {
     let source = repo_root.join(relative);
     let canonical = source.canonicalize().map_err(|error| {
@@ -347,5 +380,58 @@ mod tests {
             preparation_digest(std::slice::from_ref(&first)).expect("digest"),
             preparation_digest(&[plan("one", &["cargo", "rustc", "cargo"])]).expect("digest")
         );
+    }
+
+    #[test]
+    fn prepared_cache_copy_is_readable_and_writable_without_a_metadata_layer() {
+        assert!(PREPARED_CACHE_COPY_FRAGMENT.contains("--chown=10001:10001"));
+        assert!(PREPARED_CACHE_COPY_FRAGMENT.contains("--chmod=0755"));
+        assert!(!PREPARED_CACHE_COPY_FRAGMENT.contains("RUN chmod"));
+        assert!(!PREPARED_CACHE_COPY_FRAGMENT.contains("USER root"));
+    }
+
+    #[test]
+    fn preparation_run_encodes_repository_paths_as_json_data() {
+        let cwd = "packages/space dir/\tcontrol\r\nRUN touch /tmp/injected";
+        let command = PreparationCommand {
+            program: String::from("cargo"),
+            args: vec![String::from("fetch")],
+            cwd: cwd.into(),
+            environment: BTreeMap::new(),
+        };
+
+        let instruction = preparation_run_instruction(&command, &[]);
+
+        assert!(!instruction.contains(['\n', '\r', '\t']));
+        let argv = serde_json::from_str::<Vec<String>>(
+            instruction.strip_prefix("RUN ").expect("RUN instruction"),
+        )
+        .expect("JSON-form RUN");
+        assert_eq!(argv[0], "/bin/sh");
+        assert_eq!(argv[2], "cd \"$1\" && shift && exec \"$@\"");
+        assert_eq!(argv[4], docker_path(INPUT_ROOT, cwd));
+        assert_eq!(&argv[5..], ["env", "cargo", "fetch"]);
+    }
+
+    #[test]
+    fn prepared_output_copy_encodes_repository_paths_as_json_data() {
+        let path = "packages/space dir/\tcontrol\r\nCOPY secrets /tmp/leak";
+        let output = PreparationOutput {
+            path: path.into(),
+            mount_path: path.into(),
+            mode: PreparationOutputMode::Seeded,
+        };
+
+        let instruction = prepared_output_copy_instruction(&output);
+
+        assert!(!instruction.contains(['\n', '\r', '\t']));
+        let paths = serde_json::from_str::<Vec<String>>(
+            instruction
+                .strip_prefix("COPY --from=ayni-preparation ")
+                .expect("COPY instruction"),
+        )
+        .expect("JSON-form COPY");
+        assert_eq!(paths[0], docker_path(INPUT_ROOT, path));
+        assert_eq!(paths[1], format!("{SEED_ROOT}/{}", output_key(&output)));
     }
 }

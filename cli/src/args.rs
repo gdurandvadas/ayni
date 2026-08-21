@@ -1,7 +1,8 @@
 use crate::application::{
-    CheckOperation, ContractOperation, EnvLockOperation, EnvRunOperation, EnvShellOperation,
-    EnvShowOperation, ExecutionMode, ImpactOperation, InitOperation, Operation, OutputFormat,
-    RepositoryOperation, ResultsCompareOperation, VerifyListOperation, VerifyOperation,
+    CapabilityAuthorization, CheckOperation, ContractOperation, EnvLockOperation,
+    EnvPruneOperation, EnvRunOperation, EnvShellOperation, EnvShowOperation, EnvStorageOperation,
+    ExecutionMode, ImpactOperation, InitOperation, Operation, OutputFormat, RepositoryOperation,
+    ResultsCompareOperation, VerifyListOperation, VerifyOperation,
 };
 use ayni_core::{Language, SignalKind};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -95,6 +96,10 @@ enum EnvCommands {
     Lock(EnvLockOptions),
     /// Build the repository code-environment image from a current lock.
     Build(RepositoryOptions),
+    /// Report Ayni-managed OCI images and repository-local environment state.
+    Storage(EnvStorageOptions),
+    /// Preview or remove stale repository state and explicitly selected images.
+    Prune(EnvPruneOptions),
     /// Enter the managed environment with the checkout mounted.
     Shell(EnvShellOptions),
     /// Run an arbitrary command inside the managed environment.
@@ -108,16 +113,20 @@ impl EnvCommands {
             Self::Doctor(options) => Operation::EnvDoctor(options.into()),
             Self::Lock(options) => Operation::EnvLock(options.into_operation()),
             Self::Build(options) => Operation::EnvBuild(options.into()),
+            Self::Storage(options) => Operation::EnvStorage(options.into_operation()),
+            Self::Prune(options) => Operation::EnvPrune(options.into_operation()),
             Self::Shell(options) => Operation::EnvShell(EnvShellOperation {
                 repo_root: options.repo_root,
                 language: options.target.language.map(LanguageArg::into_language),
                 root: options.target.root,
+                authorization: options.authorization.into_authorization(),
             }),
             Self::Run(options) => Operation::EnvRun(EnvRunOperation {
                 repo_root: options.repo_root,
                 language: options.target.language.map(LanguageArg::into_language),
                 root: options.target.root,
                 command: options.command,
+                authorization: options.authorization.into_authorization(),
             }),
         }
     }
@@ -208,6 +217,7 @@ impl VerifyCommands {
             output: options.output.into(),
             execution_mode: execution_mode(options.host),
             debug: options.debug,
+            authorization: options.authorization.into_authorization(),
         })
     }
 }
@@ -336,6 +346,56 @@ impl EnvLockOptions {
 }
 
 #[derive(Args, Debug)]
+struct EnvStorageOptions {
+    /// Repository root whose current lock and materialized state are inspected.
+    #[arg(long, default_value = ".")]
+    repo_root: PathBuf,
+    /// Render a human-readable report or one JSON document.
+    #[arg(long, value_enum, default_value_t)]
+    output: DataOutputArg,
+}
+
+impl EnvStorageOptions {
+    fn into_operation(self) -> EnvStorageOperation {
+        EnvStorageOperation {
+            repo_root: self.repo_root,
+            output: self.output.into(),
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct EnvPruneOptions {
+    /// Repository root whose current environment is retained.
+    #[arg(long, default_value = ".")]
+    repo_root: PathBuf,
+    /// Render a human-readable report or one JSON document.
+    #[arg(long, value_enum, default_value_t)]
+    output: DataOutputArg,
+    /// Remove selected candidates; without this flag the command is read-only.
+    #[arg(long)]
+    apply: bool,
+    /// Include non-current Ayni-owned images across the selected engine.
+    ///
+    /// Images can be shared by multiple repositories. This flag explicitly
+    /// acknowledges the engine-wide scope; without it, only repository-local
+    /// stale state is selected for removal.
+    #[arg(long)]
+    images: bool,
+}
+
+impl EnvPruneOptions {
+    fn into_operation(self) -> EnvPruneOperation {
+        EnvPruneOperation {
+            repo_root: self.repo_root,
+            output: self.output.into(),
+            apply: self.apply,
+            images: self.images,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
 struct EnvironmentTargetOptions {
     /// Select a locked language target; required with --root and when otherwise ambiguous.
     #[arg(long, value_enum)]
@@ -345,12 +405,33 @@ struct EnvironmentTargetOptions {
     root: Option<String>,
 }
 
+#[derive(Args, Debug, Default)]
+struct CapabilityAuthorizationOptions {
+    /// Authorize bridge networking requested by the locked policy for this managed launch.
+    #[arg(long)]
+    allow_network: bool,
+    /// Authorize host Docker-socket access requested by the locked policy for this managed launch.
+    #[arg(long)]
+    allow_docker_socket: bool,
+}
+
+impl CapabilityAuthorizationOptions {
+    const fn into_authorization(self) -> CapabilityAuthorization {
+        CapabilityAuthorization {
+            allow_network: self.allow_network,
+            allow_docker_socket: self.allow_docker_socket,
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 struct EnvShellOptions {
     #[arg(long, default_value = ".")]
     repo_root: PathBuf,
     #[command(flatten)]
     target: EnvironmentTargetOptions,
+    #[command(flatten)]
+    authorization: CapabilityAuthorizationOptions,
 }
 
 #[derive(Args, Debug)]
@@ -359,6 +440,8 @@ struct EnvRunOptions {
     repo_root: PathBuf,
     #[command(flatten)]
     target: EnvironmentTargetOptions,
+    #[command(flatten)]
+    authorization: CapabilityAuthorizationOptions,
     #[arg(required = true, last = true, allow_hyphen_values = true)]
     command: Vec<String>,
 }
@@ -392,6 +475,8 @@ struct CheckOptions {
     /// Print raw command diagnostics.
     #[arg(long)]
     debug: bool,
+    #[command(flatten)]
+    authorization: CapabilityAuthorizationOptions,
 }
 
 impl CheckOptions {
@@ -401,6 +486,7 @@ impl CheckOptions {
             output: self.output.into(),
             execution_mode: execution_mode(self.host),
             debug: self.debug,
+            authorization: self.authorization.into_authorization(),
         }
     }
 }
@@ -429,6 +515,8 @@ struct VerifyCommonOptions {
     /// Print raw command diagnostics.
     #[arg(long)]
     debug: bool,
+    #[command(flatten)]
+    authorization: CapabilityAuthorizationOptions,
 }
 
 #[derive(Args, Debug)]
@@ -468,6 +556,7 @@ impl ImpactShowOptions {
             output: self.output.into(),
             execution_mode: ExecutionMode::Managed,
             debug: false,
+            authorization: CapabilityAuthorization::default(),
         }
     }
 }
@@ -482,6 +571,8 @@ struct ImpactRunOptions {
     /// Print raw command diagnostics.
     #[arg(long)]
     debug: bool,
+    #[command(flatten)]
+    authorization: CapabilityAuthorizationOptions,
 }
 
 impl ImpactRunOptions {
@@ -489,6 +580,7 @@ impl ImpactRunOptions {
         let mut operation = self.common.into_operation();
         operation.execution_mode = execution_mode(self.host);
         operation.debug = self.debug;
+        operation.authorization = self.authorization.into_authorization();
         operation
     }
 }
@@ -605,6 +697,8 @@ mod tests {
             (vec!["ayni", "env", "doctor"], "EnvDoctor"),
             (vec!["ayni", "env", "lock"], "EnvLock"),
             (vec!["ayni", "env", "build"], "EnvBuild"),
+            (vec!["ayni", "env", "storage"], "EnvStorage"),
+            (vec!["ayni", "env", "prune"], "EnvPrune"),
             (vec!["ayni", "env", "shell"], "EnvShell"),
             (vec!["ayni", "env", "run", "--", "cargo", "test"], "EnvRun"),
             (vec!["ayni", "contract", "show"], "ContractShow"),
@@ -640,6 +734,54 @@ mod tests {
                 "{operation:?}"
             );
         }
+    }
+
+    #[test]
+    fn environment_storage_and_prune_map_output_and_apply_explicitly() {
+        let storage = Cli::try_parse_from([
+            "ayni",
+            "env",
+            "storage",
+            "--repo-root",
+            "fixture",
+            "--output",
+            "json",
+        ])
+        .expect("storage arguments")
+        .into_operation();
+        let Operation::EnvStorage(storage) = storage else {
+            panic!("storage operation");
+        };
+        assert_eq!(storage.repo_root, PathBuf::from("fixture"));
+        assert_eq!(storage.output, OutputFormat::Json);
+
+        let prune = Cli::try_parse_from([
+            "ayni",
+            "env",
+            "prune",
+            "--repo-root",
+            "fixture",
+            "--apply",
+            "--images",
+        ])
+        .expect("prune arguments")
+        .into_operation();
+        let Operation::EnvPrune(prune) = prune else {
+            panic!("prune operation");
+        };
+        assert_eq!(prune.repo_root, PathBuf::from("fixture"));
+        assert_eq!(prune.output, OutputFormat::Human);
+        assert!(prune.apply);
+        assert!(prune.images);
+
+        let Operation::EnvPrune(defaults) = Cli::try_parse_from(["ayni", "env", "prune"])
+            .expect("default prune arguments")
+            .into_operation()
+        else {
+            panic!("prune operation");
+        };
+        assert!(!defaults.apply);
+        assert!(!defaults.images);
     }
 
     #[test]
@@ -719,6 +861,8 @@ mod tests {
             "rust",
             "--root",
             "crates/app",
+            "--allow-network",
+            "--allow-docker-socket",
             "--",
             "cargo",
             "test",
@@ -733,6 +877,8 @@ mod tests {
         assert_eq!(operation.language, Some(Language::Rust));
         assert_eq!(operation.root.as_deref(), Some("crates/app"));
         assert_eq!(operation.command, ["cargo", "test", "--workspace"]);
+        assert!(operation.authorization.allow_network);
+        assert!(operation.authorization.allow_docker_socket);
     }
 
     #[test]
@@ -751,6 +897,7 @@ mod tests {
         };
         assert_eq!(default.execution_mode, ExecutionMode::Managed);
         assert_eq!(host.execution_mode, ExecutionMode::Host);
+        assert_eq!(default.authorization, Default::default());
     }
 
     #[test]

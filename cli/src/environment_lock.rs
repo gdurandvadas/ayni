@@ -206,6 +206,7 @@ fn resolve_plan(
     .and_then(|resolved| resolved.with_tools(plan.tools().to_vec()))
     .and_then(|resolved| resolved.with_debian_packages(plan.debian_packages().to_vec()))
     .and_then(|resolved| resolved.with_capabilities(plan.capabilities()))
+    .and_then(|resolved| resolved.with_resource_limits(plan.resource_limits()))
     .map_err(|error| LockError::environment(error.to_string()))?
     .resolve()
     .map_err(|error| LockError::environment(error.to_string()))

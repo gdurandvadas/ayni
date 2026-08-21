@@ -13,10 +13,11 @@ resolves exact runtime and Cargo catalog-tool versions through `mise`; locking
 does not install tools or modify the checkout. `env build` stages the locked
 Cargo manifests, requires `Cargo.lock`, and runs `cargo fetch --locked` inside
 the image build. `env doctor`, `env shell`, `env run`, managed `check`, and
-managed focused `verify` consume that image with networking and Cargo online
-access disabled. Cargo `package.workspace` values that point to a non-ancestor
-workspace fail closed because the current environment ownership contract is
-ancestry-based.
+managed focused `verify` consume that image with Cargo online access disabled;
+container networking is disabled unless bridge networking is locked and the
+operator authorizes that invocation. Cargo `package.workspace` values that
+point to a non-ancestor workspace fail closed because the current environment
+ownership contract is ancestry-based.
 
 ## Signal Coverage
 
@@ -31,9 +32,9 @@ ancestry-based.
 
 ## Focused verification
 
-`verify` writes requested-scope evidence only to `.ayni/verify/last/signals.json`.
-Every command accepts an optional `--language rust`; unscoped verification is
-always valid. The accepted selectors are:
+Shared artifact, completion, validation, and exact-command reuse semantics are
+defined in [Completion and focused verification](../product/runtime.md#completion-and-focused-verification).
+The accepted Rust selectors are:
 
 | Signal | `--file` | `--package` | `--name` |
 | --- | --- | --- | --- |
@@ -51,8 +52,7 @@ before Cargo or another tool runs.
 
 Verification commands carry their originating contract and target, for example:
 `ayni verify test --host --config './.ayni.toml' --language rust --root '.' --package
-'my-crate' --name 'my_test'`. Use only the selectors marked above; copy the
-exact command in an artifact finding rather than synthesizing one.
+'my-crate' --name 'my_test'`.
 
 ## Impact planning
 
@@ -85,9 +85,8 @@ Coverage thresholds and dependency rules are optional: without `line_percent`,
 coverage has no policy threshold, and without `rust.deps.forbidden`, no edges
 are forbidden.
 
-Maximum size and complexity boundaries are inclusive (`warn` and `fail` trigger
-at equality); coverage is an exclusive minimum boundary (equality passes that
-threshold). Line and branch coverage are independent: every configured metric
+Shared boundary rules are defined under [Threshold semantics](../product/config.md#threshold-semantics).
+Rust supports independent line and branch coverage; every configured metric
 must have finite, parseable evidence or the coverage row fails closed.
 
 ## Configuration Example

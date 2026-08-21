@@ -4,6 +4,9 @@ use crate::exec::{ExecutionError, ExecutionErrorKind, format_command};
 use ayni_core::{CommandFailure, ConfiguredMetricEvaluation, RunContext, SignalKind};
 use std::process::Output;
 
+const FAILURE_DIAGNOSTIC_LIMIT: usize = 32 * 1024;
+const FAILURE_DIAGNOSTIC_HEAD: usize = 8 * 1024;
+
 /// Maps a signal kind to its documented failure category (see
 /// `docs/product/runtime.md`).
 pub fn failure_category(kind: SignalKind) -> &'static str {
@@ -72,6 +75,8 @@ pub fn command_failure_from_execution_error(
         ExecutionErrorKind::Spawn => "command_error",
         ExecutionErrorKind::Wait => "command_error",
         ExecutionErrorKind::Timeout => "timeout",
+        ExecutionErrorKind::Cancelled => "cancelled",
+        ExecutionErrorKind::OutputLimit => "output_limit",
     };
     let timeout_detail = error
         .timeout
@@ -89,14 +94,38 @@ pub fn command_failure_from_execution_error(
 }
 
 fn execution_diagnostics(error: &ExecutionError) -> String {
-    let stdout = String::from_utf8_lossy(&error.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&error.stderr).trim().to_string();
-    match (stdout.is_empty(), stderr.is_empty()) {
+    let stdout = diagnostic_excerpt(&error.stdout);
+    let stderr = diagnostic_excerpt(&error.stderr);
+    let captured = match (stdout.is_empty(), stderr.is_empty()) {
         (true, true) => String::new(),
         (false, true) => format!("\ncaptured stdout:\n{stdout}"),
         (true, false) => format!("\ncaptured stderr:\n{stderr}"),
         (false, false) => format!("\ncaptured stderr:\n{stderr}\ncaptured stdout:\n{stdout}"),
+    };
+    let truncation = match (error.stdout_truncated_bytes, error.stderr_truncated_bytes) {
+        (0, 0) => String::new(),
+        (stdout, 0) => format!("\nstdout truncated by at least {stdout} bytes"),
+        (0, stderr) => format!("\nstderr truncated by at least {stderr} bytes"),
+        (stdout, stderr) => format!(
+            "\nstdout truncated by at least {stdout} bytes; stderr truncated by at least {stderr} bytes"
+        ),
+    };
+    format!("{captured}{truncation}")
+}
+
+fn diagnostic_excerpt(bytes: &[u8]) -> String {
+    if bytes.len() <= FAILURE_DIAGNOSTIC_LIMIT {
+        return String::from_utf8_lossy(bytes).trim().to_string();
     }
+    let tail = FAILURE_DIAGNOSTIC_LIMIT - FAILURE_DIAGNOSTIC_HEAD;
+    let omitted = bytes.len() - FAILURE_DIAGNOSTIC_LIMIT;
+    let head = String::from_utf8_lossy(&bytes[..FAILURE_DIAGNOSTIC_HEAD]);
+    let tail = String::from_utf8_lossy(&bytes[bytes.len() - tail..]);
+    format!(
+        "{}\n[... {omitted} captured bytes omitted ...]\n{}",
+        head.trim_start(),
+        tail.trim_end()
+    )
 }
 
 /// Builds a `CommandFailure` with an adapter-supplied classification and the
@@ -241,6 +270,8 @@ mod tests {
             status: None,
             stdout: Vec::new(),
             stderr: Vec::new(),
+            stdout_truncated_bytes: 0,
+            stderr_truncated_bytes: 0,
             timeout: None,
             detail: String::from("not found"),
         };
@@ -251,6 +282,8 @@ mod tests {
             status: Some(ExitStatus::from_raw(9 << 8)),
             stdout: b"partial output".to_vec(),
             stderr: b"partial diagnostics".to_vec(),
+            stdout_truncated_bytes: 0,
+            stderr_truncated_bytes: 0,
             timeout: Some(Duration::from_secs(12)),
             detail: String::new(),
         };
@@ -270,6 +303,60 @@ mod tests {
         assert!(timeout_failure.message.contains("partial output"));
     }
 
+    #[test]
+    fn output_limit_failure_preserves_truncation_metadata() {
+        let error = ExecutionError {
+            kind: ExecutionErrorKind::OutputLimit,
+            command: String::from("noisy-tool"),
+            cwd: PathBuf::from("workspace"),
+            status: None,
+            stdout: b"retained output".to_vec(),
+            stderr: Vec::new(),
+            stdout_truncated_bytes: 8192,
+            stderr_truncated_bytes: 0,
+            timeout: None,
+            detail: String::from("stdout exceeded capture limit"),
+        };
+
+        let failure = command_failure_from_execution_error(SignalKind::Test, &error);
+        assert_eq!(failure.classification, "output_limit");
+        assert!(failure.message.contains("retained output"));
+        assert!(
+            failure
+                .message
+                .contains("stdout truncated by at least 8192 bytes")
+        );
+
+        let mut cancelled = error;
+        cancelled.kind = ExecutionErrorKind::Cancelled;
+        cancelled.stdout_truncated_bytes = 0;
+        let failure = command_failure_from_execution_error(SignalKind::Test, &cancelled);
+        assert_eq!(failure.classification, "cancelled");
+    }
+
+    #[test]
+    fn execution_failure_diagnostics_are_bounded_and_keep_the_tail() {
+        let mut stdout = vec![b'h'; super::FAILURE_DIAGNOSTIC_LIMIT * 4];
+        stdout.extend_from_slice(b"tail-marker");
+        let error = ExecutionError {
+            kind: ExecutionErrorKind::Timeout,
+            command: String::from("noisy-tool"),
+            cwd: PathBuf::from("workspace"),
+            status: None,
+            stdout,
+            stderr: Vec::new(),
+            stdout_truncated_bytes: 0,
+            stderr_truncated_bytes: 0,
+            timeout: Some(Duration::from_secs(12)),
+            detail: String::new(),
+        };
+
+        let failure = command_failure_from_execution_error(SignalKind::Test, &error);
+        assert!(failure.message.contains("captured bytes omitted"));
+        assert!(failure.message.ends_with("tail-marker"));
+        assert!(failure.message.len() < super::FAILURE_DIAGNOSTIC_LIMIT + 512);
+    }
+
     fn context() -> RunContext {
         let root = PathBuf::from("workspace");
         RunContext {
@@ -279,6 +366,7 @@ mod tests {
             policy: AyniPolicy::default(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("tool", root, "test", 100),
+            cancellation: Default::default(),
             debug: false,
         }
     }

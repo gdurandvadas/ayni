@@ -9,6 +9,7 @@ mod image;
 mod lock;
 mod preparation;
 mod runtime;
+mod storage;
 
 pub use image::{ImagePlan, image_plan, signal_tool_coordinate};
 pub use lock::{
@@ -16,8 +17,13 @@ pub use lock::{
     resolve_provisioning_base,
 };
 pub use runtime::{
-    Engine, TargetSelection, build, build_prepared, detect_engine, doctor, doctor_prepared, launch,
-    launch_prepared, launch_repository, launch_repository_prepared,
+    Engine, LaunchAuthorization, TargetSelection, build, build_prepared, detect_engine, doctor,
+    doctor_prepared, launch, launch_prepared, launch_repository, launch_repository_prepared,
+};
+pub use storage::{
+    StorageImage, StorageImageOwnership, StorageImagePruneScope, StoragePruneFailure,
+    StoragePruneResult, StorageReport, StorageStateGeneration, prune_storage,
+    prune_storage_prepared, storage_report, storage_report_prepared,
 };
 
 /// Merge backend packages required by declared execution capabilities into the

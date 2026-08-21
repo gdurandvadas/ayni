@@ -99,6 +99,7 @@ args = [{args}]
             policy,
             scope: Scope::default(),
             execution: ExecutionResolution::direct("gradle", cwd.clone(), "test", 100),
+            cancellation: Default::default(),
             debug: false,
         };
 

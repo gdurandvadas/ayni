@@ -202,6 +202,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "signal-hook",
  "tempfile",
  "time",
  "toml",
@@ -225,6 +226,7 @@ dependencies = [
  "ayni-adapters-common",
  "ayni-core",
  "libc",
+ "serde",
  "serde_json",
  "sha2",
 ]

@@ -1,15 +1,18 @@
 use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Write};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use ayni_core::CancellationToken;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{DefaultTerminal, TerminalOptions, Viewport};
 
+use crate::ui::cancellation::SignalCancellation;
 use crate::ui::layout;
+
+const PROGRESS_LINE_LIMIT: usize = 8 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolState {
@@ -49,7 +52,6 @@ struct ToolRuntimeState {
     state: ToolState,
     started_at: Option<Instant>,
     elapsed: Duration,
-    last_line: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -59,9 +61,63 @@ pub struct RunOutcome {
 
 enum RunnerEvent {
     Started(usize),
-    Line(usize, String),
+    Line(usize),
     Finished(usize, ToolState),
     Done(Result<(), String>),
+}
+
+#[derive(Default)]
+struct RunnerLoopOutcome {
+    complete_result: Option<Result<(), String>>,
+    aborted: bool,
+    runner_error: Option<String>,
+}
+
+#[derive(Default)]
+struct PendingLine {
+    value: Option<String>,
+    queued: bool,
+}
+
+struct ProgressLines {
+    slots: Mutex<Vec<PendingLine>>,
+}
+
+impl ProgressLines {
+    fn new(tool_count: usize) -> Self {
+        Self {
+            slots: Mutex::new(
+                std::iter::repeat_with(PendingLine::default)
+                    .take(tool_count)
+                    .collect(),
+            ),
+        }
+    }
+
+    fn update(&self, index: usize, line: String) -> bool {
+        let Ok(mut slots) = self.slots.lock() else {
+            return false;
+        };
+        let Some(slot) = slots.get_mut(index) else {
+            return false;
+        };
+        slot.value = Some(bounded_progress_line(line));
+        if slot.queued {
+            false
+        } else {
+            slot.queued = true;
+            true
+        }
+    }
+
+    fn take(&self, index: usize) -> Option<String> {
+        let Ok(mut slots) = self.slots.lock() else {
+            return None;
+        };
+        let slot = slots.get_mut(index)?;
+        slot.queued = false;
+        slot.value.take()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +142,7 @@ pub enum ProgressEvent {
 #[derive(Clone)]
 pub struct ToolHandle {
     tx: Sender<RunnerEvent>,
+    progress_lines: Arc<ProgressLines>,
     index: usize,
 }
 
@@ -95,7 +152,9 @@ impl ToolHandle {
     }
 
     pub fn line(&self, line: impl Into<String>) {
-        let _ = self.tx.send(RunnerEvent::Line(self.index, line.into()));
+        if self.progress_lines.update(self.index, line.into()) {
+            let _ = self.tx.send(RunnerEvent::Line(self.index));
+        }
     }
 
     pub fn finished(&self, state: ToolState) {
@@ -107,7 +166,8 @@ impl ToolHandle {
 pub struct ExecContext {
     tx: Sender<RunnerEvent>,
     tool_index: Arc<HashMap<String, usize>>,
-    abort: Arc<AtomicBool>,
+    progress_lines: Arc<ProgressLines>,
+    cancellation: CancellationToken,
 }
 
 impl ExecContext {
@@ -119,17 +179,23 @@ impl ExecContext {
             .ok_or_else(|| format!("unknown tool id: {id}"))?;
         Ok(ToolHandle {
             tx: self.tx.clone(),
+            progress_lines: Arc::clone(&self.progress_lines),
             index,
         })
     }
 
     #[must_use]
     pub fn is_aborted(&self) -> bool {
-        self.abort.load(Ordering::Relaxed)
+        self.cancellation.is_cancelled()
     }
 
     pub fn abort(&self) {
-        self.abort.store(true, Ordering::Relaxed);
+        self.cancellation.cancel();
+    }
+
+    #[must_use]
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation.clone()
     }
 }
 
@@ -159,7 +225,9 @@ where
     G: FnMut(ProgressEvent),
 {
     let (tx, rx): (Sender<RunnerEvent>, Receiver<RunnerEvent>) = mpsc::channel();
-    let abort = Arc::new(AtomicBool::new(false));
+    let signal_cancellation = SignalCancellation::install()?;
+    let cancellation = signal_cancellation.token();
+    let progress_lines = Arc::new(ProgressLines::new(plan.tools.len()));
     let tool_index = Arc::new(
         plan.tools
             .iter()
@@ -170,7 +238,8 @@ where
     let exec_ctx = ExecContext {
         tx: tx.clone(),
         tool_index,
-        abort: Arc::clone(&abort),
+        progress_lines: Arc::clone(&progress_lines),
+        cancellation: cancellation.clone(),
     };
     let exec_thread = thread::spawn(move || {
         let result = exec(exec_ctx);
@@ -187,56 +256,142 @@ where
             state: ToolState::Queued,
             started_at: None,
             elapsed: Duration::ZERO,
-            last_line: None,
         })
         .collect::<Vec<_>>();
-    let mut complete_result = None;
-    let mut aborted = false;
+    let control = RunnerControl {
+        interactive,
+        cancellation: &cancellation,
+        signal_cancellation: &signal_cancellation,
+    };
+    let loop_outcome = drive_runner_loop(
+        &rx,
+        &progress_lines,
+        &mut terminal,
+        &mut tools,
+        &mut observer,
+        &control,
+    );
 
-    while complete_result.is_none() {
-        match rx.recv_timeout(Duration::from_millis(66)) {
-            Ok(event) => apply_event(event, &mut tools, &mut complete_result, &mut observer),
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
+    restore_terminal(interactive);
+    let join_error = exec_thread
+        .join()
+        .err()
+        .map(|_| String::from("analysis execution thread panicked"));
+    finish_runner(loop_outcome, join_error)
+}
+
+struct RunnerControl<'a> {
+    interactive: bool,
+    cancellation: &'a CancellationToken,
+    signal_cancellation: &'a SignalCancellation,
+}
+
+fn drive_runner_loop<G>(
+    rx: &Receiver<RunnerEvent>,
+    progress_lines: &ProgressLines,
+    terminal: &mut Option<DefaultTerminal>,
+    tools: &mut [ToolRuntimeState],
+    observer: &mut G,
+    control: &RunnerControl<'_>,
+) -> RunnerLoopOutcome
+where
+    G: FnMut(ProgressEvent),
+{
+    let mut outcome = RunnerLoopOutcome::default();
+    while outcome.complete_result.is_none() {
+        if !receive_runner_event(
+            rx,
+            progress_lines,
+            tools,
+            &mut outcome.complete_result,
+            observer,
+        ) {
+            break;
         }
-
-        update_elapsed(&mut tools);
-        if let Some(terminal) = terminal.as_mut() {
-            let view = DashboardView {
-                tools: tools
-                    .iter()
-                    .map(|tool| ToolView {
-                        language: tool.language.clone(),
-                        state: tool.state,
-                    })
-                    .collect(),
-            };
-            terminal
-                .draw(|frame| layout::render(frame, &view))
-                .map_err(|e| format!("failed to draw dashboard: {e}"))?;
+        update_elapsed(tools);
+        if let Err(error) = draw_dashboard(terminal, tools) {
+            control.cancellation.cancel();
+            outcome.runner_error = Some(error);
+            break;
         }
-
-        if interactive && poll_ctrl_c() {
-            aborted = true;
-            abort.store(true, Ordering::Relaxed);
+        if abort_requested(control.interactive, control.signal_cancellation) {
+            control.cancellation.cancel();
+            outcome.aborted = true;
             break;
         }
     }
+    outcome
+}
 
-    if interactive {
-        ratatui::restore();
-        // Leave the cursor on a clean line; otherwise stdout/stderr can splice into the viewport.
-        let _ = io::stdout().write_all(b"\n");
-        let _ = io::stderr().write_all(b"\n");
-        let _ = io::stdout().flush();
-        let _ = io::stderr().flush();
+fn receive_runner_event<G>(
+    rx: &Receiver<RunnerEvent>,
+    progress_lines: &ProgressLines,
+    tools: &mut [ToolRuntimeState],
+    complete_result: &mut Option<Result<(), String>>,
+    observer: &mut G,
+) -> bool
+where
+    G: FnMut(ProgressEvent),
+{
+    match rx.recv_timeout(Duration::from_millis(66)) {
+        Ok(event) => {
+            apply_event(event, progress_lines, tools, complete_result, observer);
+            true
+        }
+        Err(RecvTimeoutError::Timeout) => true,
+        Err(RecvTimeoutError::Disconnected) => false,
     }
-    let _ = exec_thread.join();
+}
 
-    if aborted {
+fn draw_dashboard(
+    terminal: &mut Option<DefaultTerminal>,
+    tools: &[ToolRuntimeState],
+) -> Result<(), String> {
+    let Some(terminal) = terminal.as_mut() else {
+        return Ok(());
+    };
+    let view = DashboardView {
+        tools: tools
+            .iter()
+            .map(|tool| ToolView {
+                language: tool.language.clone(),
+                state: tool.state,
+            })
+            .collect(),
+    };
+    terminal
+        .draw(|frame| layout::render(frame, &view))
+        .map(|_| ())
+        .map_err(|error| format!("failed to draw dashboard: {error}"))
+}
+
+fn abort_requested(interactive: bool, signal_cancellation: &SignalCancellation) -> bool {
+    (interactive && poll_ctrl_c()) || signal_cancellation.interrupted()
+}
+
+fn restore_terminal(interactive: bool) {
+    if !interactive {
+        return;
+    }
+    ratatui::restore();
+    // Leave the cursor on a clean line; otherwise stdout/stderr can splice into the viewport.
+    let _ = io::stdout().write_all(b"\n");
+    let _ = io::stderr().write_all(b"\n");
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+}
+
+fn finish_runner(
+    loop_outcome: RunnerLoopOutcome,
+    join_error: Option<String>,
+) -> Result<RunOutcome, String> {
+    if let Some(error) = loop_outcome.runner_error.or(join_error) {
+        return Err(error);
+    }
+    if loop_outcome.aborted {
         return Ok(RunOutcome { aborted: true });
     }
-    if let Some(result) = complete_result {
+    if let Some(result) = loop_outcome.complete_result {
         result?;
     }
     Ok(RunOutcome { aborted: false })
@@ -244,6 +399,7 @@ where
 
 fn apply_event<G>(
     event: RunnerEvent,
+    progress_lines: &ProgressLines,
     tools: &mut [ToolRuntimeState],
     complete_result: &mut Option<Result<(), String>>,
     observer: &mut G,
@@ -261,13 +417,12 @@ fn apply_event<G>(
                 });
             }
         }
-        RunnerEvent::Line(index, line) => {
-            if let Some(tool) = tools.get_mut(index) {
-                tool.last_line = Some(line.clone());
+        RunnerEvent::Line(index) => {
+            if let (Some(tool), Some(line)) = (tools.get_mut(index), progress_lines.take(index)) {
                 observer(ProgressEvent::Line {
                     language: tool.language.clone(),
                     name: tool.name.clone(),
-                    line: line.clone(),
+                    line,
                 });
             }
         }
@@ -289,6 +444,18 @@ fn apply_event<G>(
             *complete_result = Some(result);
         }
     }
+}
+
+fn bounded_progress_line(line: String) -> String {
+    if line.len() <= PROGRESS_LINE_LIMIT {
+        return line;
+    }
+    let mut start = line.len() - PROGRESS_LINE_LIMIT;
+    while !line.is_char_boundary(start) {
+        start += 1;
+    }
+    let omitted = start;
+    format!("[... {omitted} bytes omitted ...] {}", &line[start..])
 }
 
 fn update_elapsed(tools: &mut [ToolRuntimeState]) {
@@ -366,5 +533,45 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn progress_lines_coalesce_while_control_events_remain_ordered() {
+        let (tx, rx) = mpsc::channel();
+        let progress_lines = Arc::new(ProgressLines::new(1));
+        let tool = ToolHandle {
+            tx,
+            progress_lines: Arc::clone(&progress_lines),
+            index: 0,
+        };
+        tool.started();
+        tool.line("first");
+        tool.line("second");
+        tool.line("last");
+        tool.finished(ToolState::Done);
+
+        assert!(matches!(
+            rx.recv().expect("started"),
+            RunnerEvent::Started(0)
+        ));
+        assert!(matches!(rx.recv().expect("line"), RunnerEvent::Line(0)));
+        assert_eq!(progress_lines.take(0).as_deref(), Some("last"));
+        assert!(matches!(
+            rx.recv().expect("finished"),
+            RunnerEvent::Finished(0, ToolState::Done)
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "only one line notification is queued"
+        );
+    }
+
+    #[test]
+    fn progress_lines_retain_only_a_bounded_tail() {
+        let line = format!("prefix-{}-tail", "x".repeat(PROGRESS_LINE_LIMIT * 2));
+        let bounded = bounded_progress_line(line);
+        assert!(bounded.len() < PROGRESS_LINE_LIMIT + 64);
+        assert!(bounded.ends_with("-tail"));
+        assert!(bounded.starts_with("[... "));
     }
 }

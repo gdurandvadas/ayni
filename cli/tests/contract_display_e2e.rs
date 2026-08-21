@@ -112,6 +112,7 @@ args = ["mutation"]
     }
     for expected in [
         "  docker: Socket | network: Bridge",
+        "  resources: cpus=4 memory=8192MiB memory+swap=8192MiB pids=2048 nofile=8192",
         "    - protoc@35.1",
         "    - libssl-dev",
         "    - crates/api",
@@ -133,7 +134,7 @@ args = ["mutation"]
         !stdout.trim_start().starts_with('{'),
         "display must not emit JSON"
     );
-    assert!(stdout.contains("projection version 0.2.0"));
+    assert!(stdout.contains("projection version 0.3.0"));
     assert!(stdout.contains("warnings:"));
     assert!(stdout.contains("policy.effectiveness.size.no_rules"));
 }
@@ -176,7 +177,7 @@ fn_cognitive = { warn = 10, fail = 20 }
     );
 
     let value: serde_json::Value = serde_json::from_slice(&first.stdout).expect("JSON projection");
-    assert_eq!(value["projection_version"], "0.2.0");
+    assert_eq!(value["projection_version"], "0.3.0");
     assert_eq!(value["environment"]["tools"], serde_json::json!([]));
     assert_eq!(
         value["environment"]["debian_packages"],
@@ -184,6 +185,8 @@ fn_cognitive = { warn = 10, fail = 20 }
     );
     assert_eq!(value["environment"]["docker"], "none");
     assert_eq!(value["environment"]["network"], "none");
+    assert_eq!(value["environment"]["resources"]["cpus"], 4);
+    assert_eq!(value["environment"]["resources"]["memory_mib"], 8_192);
     assert_eq!(value["languages"][0]["language"], "rust");
     assert_eq!(value["languages"][0]["signals"][0]["kind"], "test");
     assert_eq!(

@@ -508,6 +508,7 @@ mod tests {
             policy: AyniPolicy::default(),
             scope,
             execution: ExecutionResolution::direct("cargo", root.to_path_buf(), "test", 100),
+            cancellation: Default::default(),
             debug: false,
         }
     }

@@ -208,6 +208,7 @@ mod tests {
                     policy: AyniPolicy::default(),
                     scope: Scope::default(),
                     execution: ExecutionResolution::direct("cargo", root, "test", 100),
+                    cancellation: Default::default(),
                     debug: false,
                 },
             }],

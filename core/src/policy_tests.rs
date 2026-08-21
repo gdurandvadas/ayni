@@ -136,6 +136,13 @@ packages = ["libssl-dev", "protobuf-compiler=3.21.12+ABC-3"]
 [environment.docker]
 access = "socket"
 network = "bridge"
+
+[environment.resources]
+cpus = 6
+memory_mib = 12288
+memory_swap_mib = 16384
+pids = 4096
+nofile = 16384
 "#;
     let policy = AyniPolicy::parse(document).expect("policy");
     assert_eq!(
@@ -154,6 +161,47 @@ network = "bridge"
         policy.environment_capabilities().network,
         NetworkAccess::Bridge
     );
+    assert_eq!(policy.environment_resource_limits().cpus, 6);
+    assert_eq!(policy.environment_resource_limits().memory_mib, 12_288);
+    assert_eq!(policy.environment_resource_limits().memory_swap_mib, 16_384);
+    assert_eq!(policy.environment_resource_limits().pids, 4_096);
+    assert_eq!(policy.environment_resource_limits().nofile, 16_384);
+}
+
+#[test]
+fn environment_resource_defaults_are_bounded_and_invalid_values_fail() {
+    let policy = AyniPolicy::parse("[languages]\nenabled = [\"rust\"]\n").expect("policy");
+    assert_eq!(policy.environment_resource_limits().cpus, 4);
+    assert_eq!(policy.environment_resource_limits().memory_mib, 8_192);
+    assert_eq!(policy.environment_resource_limits().memory_swap_mib, 8_192);
+    assert_eq!(policy.environment_resource_limits().pids, 2_048);
+    assert_eq!(policy.environment_resource_limits().nofile, 8_192);
+
+    let memory_only = AyniPolicy::parse(
+        "[languages]\nenabled = [\"rust\"]\n[environment.resources]\nmemory_mib = 4096\n",
+    )
+    .expect("memory-only override");
+    assert_eq!(memory_only.environment_resource_limits().memory_mib, 4_096);
+    assert_eq!(
+        memory_only.environment_resource_limits().memory_swap_mib,
+        4_096,
+        "omitted swap should preserve the no-additional-swap default"
+    );
+
+    let larger_memory = AyniPolicy::parse(
+        "[languages]\nenabled = [\"rust\"]\n[environment.resources]\nmemory_mib = 16384\n",
+    )
+    .expect("memory can exceed the default without also spelling swap");
+    assert_eq!(
+        larger_memory.environment_resource_limits().memory_swap_mib,
+        16_384
+    );
+
+    let error = AyniPolicy::parse(
+        "[languages]\nenabled = [\"rust\"]\n[environment.resources]\nmemory_mib = 8192\nmemory_swap_mib = 4096\n",
+    )
+    .expect_err("swap below memory must fail");
+    assert!(error.contains("memory_swap_mib"));
 }
 
 #[test]

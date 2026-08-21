@@ -81,6 +81,7 @@ enabled = ["go"]
             policy,
             scope: Scope::default(),
             execution: ExecutionResolution::direct("go", cwd, "test", 100),
+            cancellation: Default::default(),
             debug: false,
         };
 
@@ -130,6 +131,7 @@ args = [{args}]
             policy,
             scope: Scope::default(),
             execution: ExecutionResolution::direct("test", cwd.clone(), "test", 100),
+            cancellation: Default::default(),
             debug: false,
         };
 

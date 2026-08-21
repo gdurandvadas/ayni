@@ -30,9 +30,9 @@ fail closed for managed execution. They remain available through the explicit
 
 ## Focused verification
 
-`verify` writes requested-scope evidence only to `.ayni/verify/last/signals.json`.
-Every command accepts an optional `--language python`; unscoped verification is
-always valid. The accepted selectors are:
+Shared artifact, completion, validation, and exact-command reuse semantics are
+defined in [Completion and focused verification](../product/runtime.md#completion-and-focused-verification).
+The accepted Python selectors are:
 
 | Signal | `--file` | `--package` | `--name` |
 | --- | --- | --- | --- |
@@ -50,8 +50,7 @@ before a tool runs.
 
 Verification commands carry their originating contract and target, for example:
 `ayni verify test --host --config './.ayni.toml' --language python --root '.' --file
-'tests/test_api.py' --name 'test_create'`. Use only the selectors marked above;
-copy the exact command in an artifact finding rather than synthesizing one.
+'tests/test_api.py' --name 'test_create'`.
 
 ## Impact planning
 
@@ -76,9 +75,8 @@ missing value produces a clear collector error. Coverage thresholds and
 dependency rules are optional: without `line_percent`, coverage has no policy
 threshold, and without `python.deps.forbidden`, no edges are forbidden.
 
-Maximum size and complexity boundaries are inclusive (`warn` and `fail` trigger
-at equality); coverage is an exclusive minimum boundary (equality passes that
-threshold). The default coverage collection requests branch evidence with
+Shared boundary rules are defined under [Threshold semantics](../product/config.md#threshold-semantics).
+The default Python coverage collection requests branch evidence with
 `--cov-branch`. Line and branch coverage are independently enforced, and a
 configured metric with missing or unparseable evidence fails the row; overrides
 must preserve evidence for every configured metric.
