@@ -35,11 +35,11 @@ pub use comparison::{
 pub use environment::{
     Architecture, DebianPackageRequirement, DependencyLockRequirement, DockerAccess,
     ENVIRONMENT_PLAN_SCHEMA_VERSION, EnvironmentCapabilities, EnvironmentConflict,
-    EnvironmentContribution, EnvironmentPlan, EnvironmentPlanError, EnvironmentWarning, Libc,
-    MiseToolRequirement, NetworkAccess, OperatingSystem, PackageManagerRequirement,
-    ProvisioningSupport, RepositoryIdentity, RequirementConfidence, RequirementSource,
-    ResolvedEnvironmentPlan, RuntimeRequirement, SignalToolRequirement, SystemRequirement,
-    SystemRequirementKind, TargetEnvironment, TargetIdentity, TargetPlatform,
+    EnvironmentContribution, EnvironmentPlan, EnvironmentPlanError, EnvironmentResourceLimits,
+    EnvironmentWarning, Libc, MiseToolRequirement, NetworkAccess, OperatingSystem,
+    PackageManagerRequirement, ProvisioningSupport, RepositoryIdentity, RequirementConfidence,
+    RequirementSource, ResolvedEnvironmentPlan, RuntimeRequirement, SignalToolRequirement,
+    SystemRequirement, SystemRequirementKind, TargetEnvironment, TargetIdentity, TargetPlatform,
     ToolInstallationScope, VersionRequirement,
 };
 pub use environment_adapter::{EnvironmentCapability, EnvironmentDiscoveryRequest};
@@ -72,7 +72,9 @@ pub use policy::{
 };
 pub use registry::AdapterRegistry;
 pub use run_outcome::RunOutcome;
-pub use runtime::{AdapterError, AdapterErrorKind, ExecutionResolution, RunContext, Scope};
+pub use runtime::{
+    AdapterError, AdapterErrorKind, CancellationToken, ExecutionResolution, RunContext, Scope,
+};
 pub use signal::{
     AYNI_SIGNAL_SCHEMA_VERSION, AggregateStatus, AggregateSummary, AppliedThreshold,
     ArtifactToolVersion, Budget, CommandFailure, CompletionIssue, CompletionScope, CompletionStage,

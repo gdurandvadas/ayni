@@ -1,11 +1,13 @@
 use super::canonical_root;
 use crate::image::{
-    IMAGE_AYNI_LABEL, IMAGE_BASE_LABEL, IMAGE_LOCK_LABEL, IMAGE_MISE_LABEL, IMAGE_PLATFORM_LABEL,
-    IMAGE_PREPARATION_LABEL, IMAGE_SCHEMA_LABEL, IMAGE_SCHEMA_VERSION, ImagePlan,
-    image_plan_with_preparation,
+    IMAGE_AYNI_LABEL, IMAGE_BASE_LABEL, IMAGE_LOCK_LABEL, IMAGE_MISE_LABEL, IMAGE_OWNER_LABEL,
+    IMAGE_OWNER_VALUE, IMAGE_PLATFORM_LABEL, IMAGE_PREPARATION_LABEL, IMAGE_SCHEMA_LABEL,
+    IMAGE_SCHEMA_VERSION, ImagePlan, image_plan_with_preparation,
 };
 use crate::{BackendError, concise_output, read_lock};
-use ayni_adapters_common::exec::{DEFAULT_TOOL_TIMEOUT, run_command, run_command_streaming};
+use ayni_adapters_common::exec::{
+    DEFAULT_TOOL_TIMEOUT, run_command, run_command_streaming_truncated,
+};
 use ayni_core::{DependencyPreparationPlan, EnvironmentLock, Language};
 use std::collections::BTreeMap;
 use std::env;
@@ -88,11 +90,105 @@ pub fn doctor_prepared(
     let engine = detect_engine()?;
     validate_image(engine, &plan, &lock)?;
     super::validate_runtime_capabilities(engine, lock.capabilities())?;
+    let security = engine_security_posture(&root, engine);
+    let resources = lock.resource_limits();
+    let capabilities = lock.capabilities();
     Ok(format!(
-        "environment ready: {} ({})",
+        "environment ready: {} ({})\nsecurity posture: {security}\nconfigured resource ceilings: cpus={} memory={}MiB memory+swap={}MiB pids={} nofile={}\nruntime capabilities: docker={:?} network={:?}",
         plan.tag,
-        engine_name(engine)
+        engine_name(engine),
+        resources.cpus,
+        resources.memory_mib,
+        resources.memory_swap_mib,
+        resources.pids,
+        resources.nofile,
+        capabilities.docker,
+        capabilities.network,
     ))
+}
+
+fn engine_security_posture(root: &Path, engine: Engine) -> String {
+    match engine {
+        Engine::Docker => docker_security_posture(root),
+        Engine::Podman => podman_security_posture(root),
+    }
+}
+
+fn docker_security_posture(root: &Path) -> String {
+    let args = [
+        String::from("info"),
+        String::from("--format"),
+        String::from("{{json .SecurityOptions}}"),
+    ];
+    let Ok(output) = run_command(root, "docker", &args, COMMAND_TIMEOUT) else {
+        return String::from("unavailable");
+    };
+    if !output.status.success() {
+        return String::from("unavailable");
+    }
+    let Ok(options) = serde_json::from_slice::<Vec<String>>(&output.stdout) else {
+        return String::from("unavailable");
+    };
+    let enabled = |name: &str| options.iter().any(|option| option.contains(name));
+    format!(
+        "rootless={} seccomp={} apparmor={} selinux={}",
+        yes_no(enabled("rootless")),
+        yes_no(enabled("seccomp")),
+        yes_no(enabled("apparmor")),
+        yes_no(enabled("selinux")),
+    )
+}
+
+fn podman_security_posture(root: &Path) -> String {
+    let args = [
+        String::from("info"),
+        String::from("--format"),
+        String::from("json"),
+    ];
+    let Ok(output) = run_command(root, "podman", &args, COMMAND_TIMEOUT) else {
+        return String::from("unavailable");
+    };
+    if !output.status.success() {
+        return String::from("unavailable");
+    }
+    let Ok(info) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return String::from("unavailable");
+    };
+    format!(
+        "rootless={} seccomp={} apparmor={} selinux={}",
+        bool_status(find_json_bool(&info, "rootless")),
+        bool_status(find_json_bool(&info, "seccompenabled")),
+        bool_status(find_json_bool(&info, "apparmorenabled")),
+        bool_status(find_json_bool(&info, "selinuxenabled")),
+    )
+}
+
+fn find_json_bool(value: &serde_json::Value, requested: &str) -> Option<bool> {
+    match value {
+        serde_json::Value::Object(entries) => entries.iter().find_map(|(key, value)| {
+            if key.replace(['_', '-'], "").eq_ignore_ascii_case(requested) {
+                value.as_bool()
+            } else {
+                find_json_bool(value, requested)
+            }
+        }),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .find_map(|value| find_json_bool(value, requested)),
+        _ => None,
+    }
+}
+
+const fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+const fn bool_status(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "unknown",
+    }
 }
 
 pub fn build(repo_root: &Path) -> Result<String, BackendError> {
@@ -121,7 +217,7 @@ pub fn build_prepared(
         input.path.join("Dockerfile").to_string_lossy().into_owned(),
         input.path.to_string_lossy().into_owned(),
     ];
-    let output = run_command_streaming(
+    let captured = run_command_streaming_truncated(
         &input.path,
         engine_name(engine),
         &args,
@@ -134,6 +230,13 @@ pub fn build_prepared(
             engine_name(engine)
         ))
     })?;
+    if captured.stdout_truncated_bytes > 0 || captured.stderr_truncated_bytes > 0 {
+        eprintln!(
+            "Ayni retained the latest bounded build-log tail (stdout omitted: {} bytes; stderr omitted: {} bytes)",
+            captured.stdout_truncated_bytes, captured.stderr_truncated_bytes
+        );
+    }
+    let output = captured.output;
     if !output.status.success() {
         return Err(BackendError::execution(format!(
             "{} build failed: {}",
@@ -262,8 +365,11 @@ pub(super) fn validate_image(
             ))
         })?;
     let current = labels
-        .get(IMAGE_LOCK_LABEL)
-        .is_some_and(|value| value == lock.fingerprint())
+        .get(IMAGE_OWNER_LABEL)
+        .is_some_and(|value| value == IMAGE_OWNER_VALUE)
+        && labels
+            .get(IMAGE_LOCK_LABEL)
+            .is_some_and(|value| value == lock.fingerprint())
         && labels
             .get(IMAGE_BASE_LABEL)
             .is_some_and(|value| value == &lock.provisioning_base().digest)

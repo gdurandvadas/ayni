@@ -246,6 +246,7 @@ mod managed_tests {
             policy: AyniPolicy::default(),
             scope: Scope::default(),
             execution,
+            cancellation: Default::default(),
             debug: false,
         }
     }

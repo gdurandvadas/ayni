@@ -3,6 +3,8 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 versions_file="$repo_root/.github/docker/ayni-env.versions"
+# shellcheck disable=SC1090
+source "$versions_file"
 
 docker_arch="$(docker info --format '{{.Architecture}}')"
 case "$docker_arch" in
@@ -14,12 +16,6 @@ case "$docker_arch" in
     ;;
 esac
 
-rust_version="$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' "$repo_root/rust-toolchain.toml" | head -n1)"
-if [[ -z "$rust_version" ]]; then
-  echo "could not resolve Rust channel from rust-toolchain.toml" >&2
-  exit 2
-fi
-
 # Compile inside Linux so the binary copied into the Debian image is ELF,
 # rather than the host's macOS Mach-O executable.
 docker run --rm \
@@ -28,7 +24,7 @@ docker run --rm \
   --env CARGO_HOME=/tmp/cargo \
   --volume "$repo_root:/workspace" \
   --workdir /workspace \
-  "rust:${rust_version}-bookworm" \
+  "$RUST_BUILDER_IMAGE" \
   cargo build --locked -p ayni-cli --release
 
 context="$(mktemp -d "${TMPDIR:-/tmp}/ayni-env-context.XXXXXX")"
@@ -37,8 +33,6 @@ cp "$repo_root/target/release/ayni" "$context/ayni"
 cp "$repo_root/LICENSE" "$repo_root/NOTICE" "$context/"
 cp "$repo_root/.github/docker/ayni-env.Dockerfile" "$context/"
 
-# shellcheck disable=SC1090
-source "$versions_file"
 docker build \
   --provenance=false \
   --platform "linux/$platform_arch" \
@@ -53,5 +47,12 @@ docker build \
   "$context"
 
 base_id="$(docker image inspect ayni-env:local --format '{{.Id}}')"
+base_reference="$(docker image inspect ayni-env:local --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}')"
 printf '\nBuilt ayni-env:local (%s)\n' "$base_id"
-printf 'Next: cargo run -p ayni-cli -- env lock --base "ayni-env:local@%s"\n' "$base_id"
+if [[ -n "$base_reference" ]]; then
+  printf 'Next: cargo run -p ayni-cli -- env lock --base "%s"\n' "$base_reference"
+else
+  printf '%s\n' \
+    'This engine did not expose a repository manifest digest for the local tag.' \
+    'Push the image to a local registry, then pass its exact RepoDigest to env lock.'
+fi

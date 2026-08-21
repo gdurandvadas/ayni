@@ -83,6 +83,7 @@ command = "this-command-must-not-run"
             policy,
             scope: Scope::default(),
             execution: ExecutionResolution::direct("node", cwd, "test", 100),
+            cancellation: Default::default(),
             debug: false,
         };
 
@@ -132,6 +133,7 @@ args = [{args}]
             policy,
             scope: Scope::default(),
             execution: ExecutionResolution::direct("test", cwd.clone(), "test", 100),
+            cancellation: Default::default(),
             debug: false,
         };
 

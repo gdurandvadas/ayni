@@ -338,6 +338,7 @@ mod tests {
             policy: AyniPolicy::default(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("gradle", PathBuf::from("."), "test", 100),
+            cancellation: Default::default(),
             debug: false,
         }
     }

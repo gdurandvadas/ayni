@@ -3,6 +3,30 @@ use crate::policy::AyniPolicy;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Cooperative cancellation shared by orchestration and command execution.
+///
+/// The token is runtime-only state. It is deliberately absent from policy and
+/// serialized signal artifacts.
+#[derive(Clone, Debug, Default)]
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    /// Requests cancellation for every clone of this token.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    /// Returns whether cancellation has been requested.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Scope {
@@ -23,6 +47,7 @@ pub struct RunContext {
     pub policy: AyniPolicy,
     pub scope: Scope,
     pub execution: ExecutionResolution,
+    pub cancellation: CancellationToken,
     pub debug: bool,
 }
 
@@ -102,3 +127,17 @@ impl std::fmt::Display for AdapterError {
 }
 
 impl std::error::Error for AdapterError {}
+
+#[cfg(test)]
+mod tests {
+    use super::CancellationToken;
+
+    #[test]
+    fn cancellation_is_shared_across_token_clones() {
+        let token = CancellationToken::default();
+        let clone = token.clone();
+        assert!(!clone.is_cancelled());
+        token.cancel();
+        assert!(clone.is_cancelled());
+    }
+}

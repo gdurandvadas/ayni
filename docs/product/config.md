@@ -11,7 +11,7 @@ and tool command overrides.
 Use `ayni contract show` to print a concise, deterministic projection of the
 validated configured policy. Pass `--config <path>` to select a policy other
 than `./.ayni.toml`, or `--output json` for a machine-readable, deterministic
-projection. JSON output has a `projection_version` field (currently `0.2.0`),
+projection. JSON output has a `projection_version` field (currently `0.3.0`),
 ordered `languages` and `signals` arrays, and structured `warnings`. The
 command shows every signal's enabled state for each enabled language,
 normalized roots, configured thresholds, size rules,
@@ -38,7 +38,7 @@ telemetry, see [`runtime.md`](runtime.md).
 | `[concurrency]`                                | Scheduler settings for running independent analyze roots in parallel.                                            |
 | `[execution]`                                  | Tool execution settings such as the per-command timeout.                                                          |
 | `[report]`                                     | Console report rendering settings such as offender list limits.                                                  |
-| `[environment.*]`                              | Repository-wide Mise tools, Debian packages, Docker access, and network capabilities for managed execution.     |
+| `[environment.*]`                              | Repository-wide tools, packages, runtime capabilities, and resource ceilings for managed execution.             |
 | `[rust.*]`, `[go.*]`, `[node.*]`, `[python.*]`, `[kotlin.*]` | Per-language settings (roots, thresholds, dependency rules, and optional tooling command overrides). |
 
 Everything under a language key uses normal TOML **single-bracket** tables and inline tables. There are no `[[array.of.tables]]` blocks in the policy model.
@@ -63,6 +63,13 @@ packages = ["libssl-dev", "postgresql-client"]
 [environment.docker]
 access = "socket"
 network = "bridge"
+
+[environment.resources]
+cpus = 4
+memory_mib = 8192
+memory_swap_mib = 8192
+pids = 2048
+nofile = 8192
 ```
 
 `environment.tools` values must be exact versions. Tool identifiers and Debian
@@ -74,11 +81,45 @@ base must not select a newer version.
 
 Docker access and network access are disabled by default. `access = "socket"`
 mounts the host Docker Unix socket, installs the Debian `docker.io` client, and
-configures sibling-container access for Testcontainers. This grants the managed
-environment control over the host Docker daemon and must only be enabled for a
-trusted repository. `network = "bridge"` opts out of the default
-`--network none` isolation independently of socket access. Podman socket access
+configures Testcontainers' daemon-socket and host overrides. Reaching sibling
+containers independently requires `network = "bridge"` and per-invocation
+network authorization; socket access alone retains `--network none`. Docker
+socket access grants the managed environment control over the host Docker
+daemon and must only be enabled for a trusted repository. Podman socket access
 and privileged Docker-in-Docker are not supported.
+
+The policy requests these capabilities, but it does not authorize a launch.
+Managed `check`, `verify`, `impact run`, `env shell`, and `env run` fail closed
+unless the operator also passes `--allow-network` for a locked bridge request
+and `--allow-docker-socket` for a locked socket request. The flags are
+independent, apply to one invocation, and cannot enable a capability absent from
+the lock. See the
+[security and trust model](security.md#network-and-container-daemon-access)
+before authorizing either capability.
+
+Every managed runtime launch also applies resource ceilings. The defaults are:
+
+| Field | Default | Runtime effect | Validation |
+| --- | ---: | --- | --- |
+| `cpus` | `4` | CPU quota | Positive integer |
+| `memory_mib` | `8192` | Memory limit in MiB | Positive integer |
+| `memory_swap_mib` | `8192` | Combined memory-and-swap limit in MiB | At least `memory_mib` |
+| `pids` | `2048` | Process limit | Positive integer |
+| `nofile` | `8192` | Soft and hard open-file limit | Positive integer |
+
+Override only the values the repository needs under `[environment.resources]`;
+omitted values keep their defaults, except that an omitted `memory_swap_mib`
+tracks the effective `memory_mib`. This preserves the default of no additional
+swap when memory is raised or lowered. Set `memory_swap_mib` above
+`memory_mib` only when the managed process should be allowed to use swap. These
+values enter the environment plan and lock, so changing one makes the lock
+stale and requires `env lock` followed by `env build` where the image identity
+also changed.
+
+Resource values are repository policy, not a defense against a repository that
+can raise its own limits. CI and untrusted-code runners should enforce an outer
+maximum and a disk quota independently of Ayni. The runtime ceilings do not
+bound `env build` or the container engine itself.
 
 Environment provisioning is open-ended; quality analysis remains available for
 the languages represented by registered Ayni adapters. A generic Mise tool does
@@ -324,9 +365,9 @@ per_language = true
 amount = 2
 ```
 
-Allows up to two Rust roots and two Node roots to run at the same time. For a
-repo with `rust/backend`, `rust/worker`, and `node/web`, that means Rust can
-run two targets concurrently while Node gets its own separate capacity.
+Allows up to two targets per language when the owning adapter has no lower
+limit. For a repo with two Node roots and two Go roots, all four may run at the
+same time because each language gets separate capacity.
 
 Languages whose tooling serializes on shared state may cap their own pool:
 the Rust adapter, for example, never runs more than one target at a time

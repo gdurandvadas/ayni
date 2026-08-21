@@ -5,13 +5,14 @@ use crate::analysis::{
 use crate::application::{ExecutionMode, ImpactOperation, OutputFormat};
 use crate::build_registry;
 use crate::policy::load_from_path;
-use ayni_adapters_common::exec::run_command_structured;
+use crate::ui::cancellation::SignalCancellation;
+use ayni_adapters_common::exec::run_command_structured_cancellable;
 use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
-    AdapterRegistry, AyniPolicy, ChangedPath, Findings, IMPACT_SCHEMA_VERSION, ImpactArtifact,
-    ImpactConfidence, ImpactExecutionIssue, ImpactIdentity, ImpactIdentityKind, ImpactPlan,
-    ImpactReason, ImpactReasonKind, ImpactRequest, ImpactUncertainty, ImpactUncertaintyKind,
-    RunOutcome, SelectedCheck, SignalRow, VerificationSelection,
+    AdapterRegistry, AyniPolicy, CancellationToken, ChangedPath, Findings, IMPACT_SCHEMA_VERSION,
+    ImpactArtifact, ImpactConfidence, ImpactExecutionIssue, ImpactIdentity, ImpactIdentityKind,
+    ImpactPlan, ImpactReason, ImpactReasonKind, ImpactRequest, ImpactUncertainty,
+    ImpactUncertaintyKind, RunOutcome, SelectedCheck, SignalRow, VerificationSelection,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -30,7 +31,11 @@ type Error = crate::application_error::ApplicationError;
 
 pub(crate) fn show(operation: ImpactOperation) -> ExitCode {
     let registry = build_registry();
-    match prepare_plan(&operation, &registry) {
+    let cancellation = match SignalCancellation::install() {
+        Ok(cancellation) => cancellation,
+        Err(error) => return fail(Error::execution(error)),
+    };
+    match prepare_plan(&operation, &registry, &cancellation.token()) {
         Ok((_, _, plan, _)) => match emit_plan(&plan, &operation) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => fail(error),
@@ -41,7 +46,11 @@ pub(crate) fn show(operation: ImpactOperation) -> ExitCode {
 
 pub(crate) fn run(operation: ImpactOperation) -> ExitCode {
     let registry = build_registry();
-    match run_inner(&operation, &registry) {
+    let cancellation = match SignalCancellation::install() {
+        Ok(cancellation) => cancellation,
+        Err(error) => return fail(Error::execution(error)),
+    };
+    match run_inner(&operation, &registry, &cancellation.token()) {
         Ok((_, true)) => ExitCode::from(4),
         Ok((true, false)) => ExitCode::from(1),
         Ok((false, false)) => ExitCode::SUCCESS,
@@ -56,11 +65,12 @@ fn fail(error: Error) -> ExitCode {
 fn prepare_plan(
     operation: &ImpactOperation,
     registry: &AdapterRegistry,
+    cancellation: &CancellationToken,
 ) -> Result<(PathBuf, AyniPolicy, ImpactPlan, GitSnapshot), Error> {
     let workspace_root = workspace_root_from_config_path(&operation.config)
         .canonicalize()
         .map_err(|error| Error::input(format!("failed to resolve repository root: {error}")))?;
-    ensure_impact_artifact_ignored(&workspace_root)?;
+    ensure_impact_artifact_ignored(&workspace_root, cancellation)?;
     let config = operation
         .config
         .canonicalize()
@@ -70,7 +80,8 @@ fn prepare_plan(
     }
     let policy = load_from_path(&config).map_err(Error::input)?;
     validate_configured_root_containment(&workspace_root, &policy).map_err(Error::input)?;
-    let snapshot = git_snapshot(&workspace_root, &operation.base)?;
+    let snapshot = git_snapshot(&workspace_root, &operation.base, cancellation)?;
+    ensure_not_cancelled(cancellation, "impact planning")?;
     let config_path = config
         .strip_prefix(&workspace_root)
         .map_err(|_| Error::input("impact contract escapes the repository root"))?
@@ -87,6 +98,7 @@ fn prepare_plan(
         },
         registry,
     )?;
+    ensure_not_cancelled(cancellation, "impact planning")?;
     Ok((workspace_root, policy, plan, snapshot))
 }
 
@@ -211,15 +223,19 @@ fn change_touches(change: &ChangedPath, path: &str) -> bool {
     change.path == path || change.previous_path.as_deref() == Some(path)
 }
 
-fn ensure_impact_artifact_ignored(workspace_root: &Path) -> Result<(), Error> {
+fn ensure_impact_artifact_ignored(
+    workspace_root: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), Error> {
     let args = vec![
         String::from("check-ignore"),
         String::from("-q"),
         String::from("--"),
         String::from(IMPACT_ARTIFACT),
     ];
-    let output = run_command_structured(workspace_root, "git", &args, GIT_TIMEOUT)
-        .map_err(|error| Error::execution(error.to_string()))?;
+    let output =
+        run_command_structured_cancellable(workspace_root, "git", &args, GIT_TIMEOUT, cancellation)
+            .map_err(|error| Error::execution(error.to_string()))?;
     if output.status.success() {
         return Ok(());
     }
@@ -237,27 +253,87 @@ fn ensure_impact_artifact_ignored(workspace_root: &Path) -> Result<(), Error> {
 fn run_inner(
     operation: &ImpactOperation,
     registry: &AdapterRegistry,
+    cancellation: &CancellationToken,
 ) -> Result<(bool, bool), Error> {
-    let (workspace_root, policy, plan, before) = prepare_plan(operation, registry)?;
-    let mut collected = execute_checks(&workspace_root, &policy, &plan, registry, operation)?;
+    let execution = execute_impact_candidate(operation, registry, cancellation)?;
+    let artifact = build_artifact(
+        execution.plan,
+        execution.collected,
+        execution.findings,
+        operation,
+    )?;
+    let serialized = serialize_impact_artifact(&artifact)?;
+    persist_impact_artifact(
+        &execution.workspace_root,
+        &artifact,
+        &serialized,
+        operation,
+        cancellation,
+    )?;
+    Ok(impact_outcome_flags(artifact.outcome()))
+}
+
+struct ImpactCandidateExecution {
+    workspace_root: PathBuf,
+    plan: ImpactPlan,
+    collected: CollectedImpact,
+    findings: Vec<Findings>,
+}
+
+fn execute_impact_candidate(
+    operation: &ImpactOperation,
+    registry: &AdapterRegistry,
+    cancellation: &CancellationToken,
+) -> Result<ImpactCandidateExecution, Error> {
+    let (workspace_root, policy, plan, before) = prepare_plan(operation, registry, cancellation)?;
+    let mut collected = execute_checks(
+        &workspace_root,
+        &policy,
+        &plan,
+        registry,
+        operation,
+        cancellation,
+    )?;
+    ensure_not_cancelled(cancellation, "impact execution")?;
     let findings = materialize_findings(&collected.rows, registry, operation)?;
-    let (_, _, recomputed_plan, after) = prepare_plan(operation, registry)?;
+    let (_, _, recomputed_plan, after) = prepare_plan(operation, registry, cancellation)?;
+    ensure_not_cancelled(cancellation, "impact execution")?;
     if after != before || recomputed_plan != plan {
         collected.issues.push(candidate_drift_issue());
     }
-    let artifact = build_artifact(plan, collected, findings, operation)?;
-    let serialized = serde_json::to_string_pretty(&artifact)
+    Ok(ImpactCandidateExecution {
+        workspace_root,
+        plan,
+        collected,
+        findings,
+    })
+}
+
+fn serialize_impact_artifact(artifact: &ImpactArtifact) -> Result<String, Error> {
+    serde_json::to_string_pretty(artifact)
         .map(|value| format!("{value}\n"))
-        .map_err(|error| {
-            Error::execution(format!("failed to serialize impact artifact: {error}"))
-        })?;
-    persist_artifact_at(&workspace_root, IMPACT_ARTIFACT, &serialized).map_err(Error::execution)?;
-    emit_artifact(&artifact, &serialized, operation.output)?;
-    Ok(match artifact.outcome() {
+        .map_err(|error| Error::execution(format!("failed to serialize impact artifact: {error}")))
+}
+
+fn persist_impact_artifact(
+    workspace_root: &Path,
+    artifact: &ImpactArtifact,
+    serialized: &str,
+    operation: &ImpactOperation,
+    cancellation: &CancellationToken,
+) -> Result<(), Error> {
+    ensure_not_cancelled(cancellation, "impact execution")?;
+    persist_artifact_at(workspace_root, IMPACT_ARTIFACT, serialized).map_err(Error::execution)?;
+    emit_artifact(artifact, serialized, operation.output)?;
+    Ok(())
+}
+
+fn impact_outcome_flags(outcome: RunOutcome) -> (bool, bool) {
+    match outcome {
         RunOutcome::Passed => (false, false),
         RunOutcome::QualityFailed => (true, false),
         RunOutcome::ExecutionIncomplete => (false, true),
-    })
+    }
 }
 
 struct CollectedImpact {
@@ -272,6 +348,7 @@ fn execute_checks(
     plan: &ImpactPlan,
     registry: &AdapterRegistry,
     operation: &ImpactOperation,
+    cancellation: &CancellationToken,
 ) -> Result<CollectedImpact, Error> {
     let planning = build_analyze_targets(
         workspace_root,
@@ -294,6 +371,7 @@ fn execute_checks(
         issues: Vec::new(),
     };
     for check in &plan.selected_checks {
+        ensure_not_cancelled(cancellation, "impact execution")?;
         let Some(base_target) = target_by_key.get(&(check.language, check.configured_root.clone()))
         else {
             collected.issues.push(ImpactExecutionIssue {
@@ -308,6 +386,7 @@ fn execute_checks(
             .find(|adapter| adapter.language() == check.language)
             .ok_or_else(|| Error::execution(format!("{} adapter unavailable", check.language)))?;
         let mut target = (*base_target).clone();
+        target.run_context.cancellation = cancellation.clone();
         target.run_context.scope.package = check.package.clone();
         target.run_context.scope.file = check.file.clone();
         let selection = VerificationSelection {
@@ -354,6 +433,14 @@ fn execute_checks(
         collected.rows.push(row);
     }
     Ok(collected)
+}
+
+fn ensure_not_cancelled(cancellation: &CancellationToken, operation: &str) -> Result<(), Error> {
+    if cancellation.is_cancelled() {
+        Err(Error::execution(format!("{operation} aborted by Ctrl-C")))
+    } else {
+        Ok(())
+    }
 }
 
 fn reconcile_signal_row(
@@ -468,8 +555,8 @@ mod tests {
     use super::render::effective_execution_mode_when;
     use super::{ExecutionMode, reconcile_signal_row};
     use ayni_core::{
-        Budget, ChangeKind, Language, Offenders, Scope, SelectedCheck, SignalKind, SignalResult,
-        SignalRow, TestBudget, TestResult,
+        Budget, CancellationToken, ChangeKind, Language, Offenders, Scope, SelectedCheck,
+        SignalKind, SignalResult, SignalRow, TestBudget, TestResult,
     };
     use sha2::{Digest, Sha256};
 
@@ -532,7 +619,7 @@ mod tests {
     #[cfg(unix)]
     fn untracked_hash(root: &std::path::Path, path: &str) -> String {
         let mut hasher = Sha256::new();
-        hash_untracked_path(&mut hasher, root, path).expect("hash");
+        hash_untracked_path(&mut hasher, root, path, &CancellationToken::default()).expect("hash");
         format!("{:x}", hasher.finalize())
     }
     #[test]

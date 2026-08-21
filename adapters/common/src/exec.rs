@@ -3,8 +3,8 @@
 //! Every adapter command goes through this module so a hung tool (a stuck
 //! Gradle daemon, a wedged test run) can never block an analyze run forever.
 
-use ayni_core::RunContext;
-use std::collections::BTreeMap;
+use ayni_core::{CancellationToken, RunContext};
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -18,7 +18,27 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Maximum time spent draining child pipes after the direct process exits or
 /// is terminated. Descendants must not be able to retain a pipe indefinitely.
+#[cfg(not(test))]
 const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Maximum retained bytes for each child stream. Commands that exceed this
+/// bound are terminated because collectors cannot safely parse partial output.
+const STREAM_CAPTURE_LIMIT: usize = 16 * 1024 * 1024;
+
+/// Bounds reader-to-runner buffering while still allowing both pipes to drain
+/// concurrently. A full queue applies backpressure to the child process.
+const OUTPUT_EVENT_BUFFER: usize = 16;
+
+/// Limit one eager drain pass so a command that writes continuously cannot
+/// starve the timeout and cancellation checks in the outer runner loop.
+const OUTPUT_EVENT_BATCH: usize = OUTPUT_EVENT_BUFFER;
+
+/// A single progress line is diagnostic UI state, not canonical command
+/// output. Bound it separately so a newline-free stream cannot create another
+/// large allocation while the retained command output remains bounded.
+const STREAM_LINE_LIMIT: usize = 64 * 1024;
 
 /// Fallback timeout for invocations that have no `RunContext` (and therefore
 /// no policy) available. Matches the `execution.tool_timeout_seconds` default.
@@ -33,6 +53,10 @@ pub enum ExecutionErrorKind {
     Wait,
     /// The child exceeded its wall-clock limit and was killed and reaped.
     Timeout,
+    /// Orchestration requested cancellation and the process group was stopped.
+    Cancelled,
+    /// A stream exceeded the bounded capture limit and parsing would be partial.
+    OutputLimit,
 }
 
 /// A command-runner failure, including output captured before cleanup.
@@ -47,6 +71,10 @@ pub struct ExecutionError {
     pub status: Option<ExitStatus>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+    /// Bytes observed but not retained after stdout reached its capture limit.
+    pub stdout_truncated_bytes: u64,
+    /// Bytes observed but not retained after stderr reached its capture limit.
+    pub stderr_truncated_bytes: u64,
     pub timeout: Option<Duration>,
     pub detail: String,
 }
@@ -74,6 +102,14 @@ impl fmt::Display for ExecutionError {
                 self.timeout.unwrap_or_default().as_secs_f64(),
                 self.command
             ),
+            ExecutionErrorKind::Cancelled => {
+                write!(formatter, "command cancelled: {}", self.command)
+            }
+            ExecutionErrorKind::OutputLimit => write!(
+                formatter,
+                "command output exceeded the {} byte per-stream capture limit: {}",
+                STREAM_CAPTURE_LIMIT, self.command
+            ),
         }
     }
 }
@@ -82,6 +118,48 @@ impl std::error::Error for ExecutionError {}
 
 /// Result returned by structured command-runner entry points.
 pub type ExecutionResult = Result<Output, Box<ExecutionError>>;
+
+/// Successful infrastructure output retained as a rolling tail.
+///
+/// Unlike collector execution, infrastructure streaming does not fail merely
+/// because verbose build logs exceed the capture ceiling. Callers still receive
+/// explicit truncation counts for diagnostics.
+#[derive(Debug)]
+pub struct TruncatedOutput {
+    pub output: Output,
+    pub stdout_truncated_bytes: u64,
+    pub stderr_truncated_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CapturePolicy {
+    FailClosed,
+    RetainTail,
+}
+
+struct CommandSettings<'a> {
+    environment: &'a BTreeMap<String, String>,
+    cancellation: Option<&'a CancellationToken>,
+    capture_policy: CapturePolicy,
+}
+
+struct CapturedOutput {
+    output: Output,
+    stdout_truncated_bytes: u64,
+    stderr_truncated_bytes: u64,
+}
+
+struct CapturedStreams {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    stdout_truncated_bytes: u64,
+    stderr_truncated_bytes: u64,
+}
+
+enum CommandCompletion {
+    Exited(ExitStatus),
+    Failed(ExecutionErrorKind, String),
+}
 
 /// Formats a program and args for diagnostics (`cargo test --workspace`).
 pub fn format_command(program: &str, args: &[String]) -> String {
@@ -142,9 +220,67 @@ pub fn run_command_streaming_structured(
         program,
         args,
         timeout,
-        &BTreeMap::new(),
+        CommandSettings {
+            environment: &BTreeMap::new(),
+            cancellation: None,
+            capture_policy: CapturePolicy::FailClosed,
+        },
         on_line,
     )
+    .map(|captured| captured.output)
+}
+
+/// Runs a command with cooperative cancellation and fail-closed output capture.
+pub fn run_command_structured_cancellable(
+    workdir: &Path,
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+    cancellation: &CancellationToken,
+) -> ExecutionResult {
+    run_command_streaming_structured_with_environment(
+        workdir,
+        program,
+        args,
+        timeout,
+        CommandSettings {
+            environment: &BTreeMap::new(),
+            cancellation: Some(cancellation),
+            capture_policy: CapturePolicy::FailClosed,
+        },
+        |_| {},
+    )
+    .map(|captured| captured.output)
+}
+
+/// Streams infrastructure logs while retaining only the most recent bounded
+/// stdout/stderr tails. Capture truncation is reported but does not terminate
+/// an otherwise healthy build command.
+pub fn run_command_streaming_truncated(
+    workdir: &Path,
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+    on_line: impl FnMut(&str),
+) -> Result<TruncatedOutput, String> {
+    run_command_streaming_structured_with_environment(
+        workdir,
+        program,
+        args,
+        timeout,
+        CommandSettings {
+            environment: &BTreeMap::new(),
+            cancellation: None,
+            capture_policy: CapturePolicy::RetainTail,
+        },
+        on_line,
+    )
+    .map(|captured| TruncatedOutput {
+        output: captured.output,
+        stdout_truncated_bytes: captured.stdout_truncated_bytes,
+        stderr_truncated_bytes: captured.stderr_truncated_bytes,
+    })
+    .map_err(|error| error.to_string())
 }
 
 fn run_command_streaming_structured_with_environment(
@@ -152,104 +288,218 @@ fn run_command_streaming_structured_with_environment(
     program: &str,
     args: &[String],
     timeout: Duration,
-    environment: &BTreeMap<String, String>,
+    settings: CommandSettings<'_>,
     mut on_line: impl FnMut(&str),
-) -> ExecutionResult {
+) -> Result<CapturedOutput, Box<ExecutionError>> {
     let command_text = format_command(program, args);
-    let mut command = Command::new(program);
-    command
-        .args(args.iter().map(String::as_str))
-        .envs(environment)
-        .current_dir(workdir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let mut child = command.spawn().map_err(|error| {
-        Box::new(ExecutionError {
-            kind: ExecutionErrorKind::Spawn,
-            command: command_text.clone(),
-            cwd: workdir.to_path_buf(),
-            status: None,
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-            timeout: None,
-            detail: error.to_string(),
-        })
-    })?;
-
-    let (sender, receiver) = mpsc::channel();
+    let mut child = spawn_command(workdir, program, args, &settings, &command_text)?;
+    let (sender, receiver) = mpsc::sync_channel(OUTPUT_EVENT_BUFFER);
     spawn_reader(Stream::Stdout, child.stdout.take(), sender.clone());
     spawn_reader(Stream::Stderr, child.stderr.take(), sender);
-
-    let started = Instant::now();
     let mut capture = Capture::default();
-    let mut status = None;
-    let mut execution_failure = None;
 
-    while status.is_none() && execution_failure.is_none() {
-        drain_available(
-            &receiver,
-            &mut capture,
-            &mut on_line,
-            &mut execution_failure,
-        );
-        match child.try_wait() {
-            Ok(Some(exit_status)) => status = Some(exit_status),
-            Ok(None) if started.elapsed() >= timeout => {
-                execution_failure = Some((ExecutionErrorKind::Timeout, String::new()));
-            }
-            Ok(None) => {
-                let remaining = timeout.saturating_sub(started.elapsed());
-                let wait = POLL_INTERVAL.min(remaining);
-                if let Ok(event) = receiver.recv_timeout(wait) {
-                    capture.handle(event, &mut on_line, &mut execution_failure);
-                }
-            }
-            Err(error) => {
-                execution_failure = Some((ExecutionErrorKind::Wait, error.to_string()));
-            }
+    let status = match wait_for_command(
+        &mut child,
+        &receiver,
+        &mut capture,
+        timeout,
+        &settings,
+        &mut on_line,
+    ) {
+        CommandCompletion::Exited(status) => status,
+        CommandCompletion::Failed(kind, mut detail) => {
+            let cleanup_status = terminate_and_reap(&mut child, &mut detail);
+            let mut failure = Some((kind, detail));
+            capture.drain_to_end(
+                &receiver,
+                settings.capture_policy,
+                &mut on_line,
+                &mut failure,
+                OUTPUT_DRAIN_TIMEOUT,
+            );
+            let (kind, detail) = failure.expect("cleanup preserves the primary failure");
+            let captured = capture.into_streams();
+            return Err(Box::new(ExecutionError {
+                kind,
+                command: command_text,
+                cwd: workdir.to_path_buf(),
+                status: cleanup_status,
+                stdout: captured.stdout,
+                stderr: captured.stderr,
+                stdout_truncated_bytes: captured.stdout_truncated_bytes,
+                stderr_truncated_bytes: captured.stderr_truncated_bytes,
+                timeout: (kind == ExecutionErrorKind::Timeout).then_some(timeout),
+                detail,
+            }));
         }
-    }
+    };
 
-    if let Some((kind, mut detail)) = execution_failure {
-        let cleanup_status = terminate_and_reap(&mut child, &mut detail);
-        capture.drain_to_end(&receiver, &mut on_line, &mut detail, OUTPUT_DRAIN_TIMEOUT);
+    let mut drain_failure = None;
+    capture.drain_to_end(
+        &receiver,
+        settings.capture_policy,
+        &mut on_line,
+        &mut drain_failure,
+        OUTPUT_DRAIN_TIMEOUT,
+    );
+    if let Some((kind, mut detail)) = drain_failure {
+        let cleanup_status = terminate_after_exit(&mut child, &mut detail).or(Some(status));
+        let mut failure = Some((kind, detail));
+        capture.drain_to_end(
+            &receiver,
+            settings.capture_policy,
+            &mut on_line,
+            &mut failure,
+            OUTPUT_DRAIN_TIMEOUT,
+        );
+        let (kind, detail) = failure.expect("post-exit cleanup preserves the primary failure");
+        let captured = capture.into_streams();
         return Err(Box::new(ExecutionError {
             kind,
             command: command_text,
             cwd: workdir.to_path_buf(),
             status: cleanup_status,
-            stdout: capture.stdout.bytes,
-            stderr: capture.stderr.bytes,
-            timeout: (kind == ExecutionErrorKind::Timeout).then_some(timeout),
-            detail,
-        }));
-    }
-
-    let mut detail = String::new();
-    capture.drain_to_end(&receiver, &mut on_line, &mut detail, OUTPUT_DRAIN_TIMEOUT);
-    if !detail.is_empty() {
-        return Err(Box::new(ExecutionError {
-            kind: ExecutionErrorKind::Wait,
-            command: command_text,
-            cwd: workdir.to_path_buf(),
-            status,
-            stdout: capture.stdout.bytes,
-            stderr: capture.stderr.bytes,
+            stdout: captured.stdout,
+            stderr: captured.stderr,
+            stdout_truncated_bytes: captured.stdout_truncated_bytes,
+            stderr_truncated_bytes: captured.stderr_truncated_bytes,
             timeout: None,
             detail,
         }));
     }
-    Ok(Output {
-        status: status.expect("runner loop exits normally only with child status"),
-        stdout: capture.stdout.bytes,
-        stderr: capture.stderr.bytes,
+    let captured = capture.into_streams();
+    Ok(CapturedOutput {
+        output: Output {
+            status,
+            stdout: captured.stdout,
+            stderr: captured.stderr,
+        },
+        stdout_truncated_bytes: captured.stdout_truncated_bytes,
+        stderr_truncated_bytes: captured.stderr_truncated_bytes,
     })
+}
+
+fn spawn_command(
+    workdir: &Path,
+    program: &str,
+    args: &[String],
+    settings: &CommandSettings<'_>,
+    command_text: &str,
+) -> Result<Child, Box<ExecutionError>> {
+    if settings
+        .cancellation
+        .is_some_and(CancellationToken::is_cancelled)
+    {
+        return Err(Box::new(ExecutionError {
+            kind: ExecutionErrorKind::Cancelled,
+            command: command_text.to_owned(),
+            cwd: workdir.to_path_buf(),
+            status: None,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            stdout_truncated_bytes: 0,
+            stderr_truncated_bytes: 0,
+            timeout: None,
+            detail: String::from("cancellation requested before process start"),
+        }));
+    }
+    let mut command = Command::new(program);
+    command
+        .args(args.iter().map(String::as_str))
+        .envs(settings.environment)
+        .current_dir(workdir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(test)]
+    configure_test_profile_discard(&mut command);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command.spawn().map_err(|error| {
+        Box::new(ExecutionError {
+            kind: ExecutionErrorKind::Spawn,
+            command: command_text.to_owned(),
+            cwd: workdir.to_path_buf(),
+            status: None,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            stdout_truncated_bytes: 0,
+            stderr_truncated_bytes: 0,
+            timeout: None,
+            detail: error.to_string(),
+        })
+    })
+}
+
+#[cfg(test)]
+fn configure_test_profile_discard(command: &mut Command) {
+    // Ignored fixture binaries are process plumbing rather than coverage
+    // evidence. They and every descendant inherit the platform null device,
+    // so forced termination cannot leave a corrupt or checkout-local profile.
+    #[cfg(unix)]
+    command.env("LLVM_PROFILE_FILE", "/dev/null");
+    #[cfg(windows)]
+    command.env("LLVM_PROFILE_FILE", "NUL");
+}
+
+fn wait_for_command(
+    child: &mut Child,
+    receiver: &mpsc::Receiver<ReaderEvent>,
+    capture: &mut Capture,
+    timeout: Duration,
+    settings: &CommandSettings<'_>,
+    on_line: &mut impl FnMut(&str),
+) -> CommandCompletion {
+    let started = Instant::now();
+    loop {
+        let mut execution_failure = None;
+        drain_available(
+            receiver,
+            capture,
+            settings.capture_policy,
+            on_line,
+            &mut execution_failure,
+        );
+        if let Some((kind, detail)) = execution_failure {
+            return CommandCompletion::Failed(kind, detail);
+        }
+        if settings
+            .cancellation
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return CommandCompletion::Failed(
+                ExecutionErrorKind::Cancelled,
+                String::from("cancellation requested by orchestrator"),
+            );
+        }
+        match child.try_wait() {
+            Ok(Some(exit_status)) => return CommandCompletion::Exited(exit_status),
+            Ok(None) if started.elapsed() >= timeout => {
+                return CommandCompletion::Failed(ExecutionErrorKind::Timeout, String::new());
+            }
+            Ok(None) => {
+                let remaining = timeout.saturating_sub(started.elapsed());
+                let wait = POLL_INTERVAL.min(remaining);
+                if let Ok(event) = receiver.recv_timeout(wait) {
+                    capture.handle(
+                        event,
+                        settings.capture_policy,
+                        on_line,
+                        &mut execution_failure,
+                    );
+                    if let Some((kind, detail)) = execution_failure {
+                        return CommandCompletion::Failed(kind, detail);
+                    }
+                }
+            }
+            Err(error) => {
+                return CommandCompletion::Failed(ExecutionErrorKind::Wait, error.to_string());
+            }
+        }
+    }
 }
 
 /// Runs a command in the context's execution cwd with the policy timeout and
@@ -289,14 +539,35 @@ pub fn run_command_for_context_streaming_structured(
     args: &[String],
     on_line: impl FnMut(&str),
 ) -> ExecutionResult {
-    let output = run_command_streaming_structured_with_environment(
+    let started = Instant::now();
+    let result = run_command_streaming_structured_with_environment(
         &context.execution.exec_cwd,
         program,
         args,
         context_timeout(context),
-        &context.execution.environment,
+        CommandSettings {
+            environment: &context.execution.environment,
+            cancellation: Some(&context.cancellation),
+            capture_policy: CapturePolicy::FailClosed,
+        },
         on_line,
-    )?;
+    );
+    if context.debug {
+        let status = match &result {
+            Ok(captured) => captured
+                .output
+                .status
+                .code()
+                .map_or_else(|| String::from("signal"), |code| code.to_string()),
+            Err(error) => format!("runner_error:{:?}", error.kind),
+        };
+        eprintln!(
+            "[profile] command={} elapsed_ms={} status={status}",
+            format_command(program, args),
+            started.elapsed().as_millis(),
+        );
+    }
+    let output = result?.output;
     debug_output(context, program, args, &output);
     Ok(output)
 }
@@ -350,7 +621,7 @@ enum ReaderEvent {
 fn spawn_reader(
     stream_name: Stream,
     stream: Option<impl Read + Send + 'static>,
-    sender: mpsc::Sender<ReaderEvent>,
+    sender: mpsc::SyncSender<ReaderEvent>,
 ) {
     thread::spawn(move || {
         let Some(mut stream) = stream else {
@@ -386,38 +657,111 @@ fn spawn_reader(
 
 #[derive(Default)]
 struct StreamCapture {
-    bytes: Vec<u8>,
-    line_start: usize,
+    bytes: VecDeque<u8>,
+    line: LineCapture,
     done: bool,
+    truncated_bytes: u64,
 }
 
 impl StreamCapture {
-    fn push(&mut self, chunk: &[u8], on_line: &mut impl FnMut(&str)) {
-        self.bytes.extend_from_slice(chunk);
-        while let Some(offset) = self.bytes[self.line_start..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-        {
-            let line_end = self.line_start + offset;
-            let line = String::from_utf8_lossy(&self.bytes[self.line_start..line_end]);
-            on_line(line.trim_end_matches('\r'));
-            self.line_start = line_end + 1;
-        }
+    fn push(
+        &mut self,
+        chunk: &[u8],
+        policy: CapturePolicy,
+        on_line: &mut impl FnMut(&str),
+    ) -> bool {
+        self.line.push(chunk, on_line);
+        let was_truncated = self.truncated_bytes > 0;
+        let truncated = match policy {
+            CapturePolicy::FailClosed => {
+                let remaining = STREAM_CAPTURE_LIMIT.saturating_sub(self.bytes.len());
+                let retained = remaining.min(chunk.len());
+                self.bytes.extend(&chunk[..retained]);
+                (chunk.len() - retained) as u64
+            }
+            CapturePolicy::RetainTail => retain_tail(&mut self.bytes, chunk, STREAM_CAPTURE_LIMIT),
+        };
+        self.truncated_bytes = self.truncated_bytes.saturating_add(truncated);
+        policy == CapturePolicy::FailClosed && !was_truncated && self.truncated_bytes > 0
     }
 
     fn finish(&mut self, on_line: &mut impl FnMut(&str)) {
-        if self.done {
-            return;
+        if !self.done {
+            self.line.finish(on_line);
+            self.done = true;
         }
-        if self.line_start < self.bytes.len() {
-            let line = String::from_utf8_lossy(&self.bytes[self.line_start..]);
-            let line = line.trim_end_matches('\r');
-            if !line.is_empty() {
-                on_line(line);
-            }
-        }
-        self.done = true;
     }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.bytes.into_iter().collect()
+    }
+}
+
+#[derive(Default)]
+struct LineCapture {
+    bytes: VecDeque<u8>,
+    truncated_bytes: u64,
+}
+
+impl LineCapture {
+    fn push(&mut self, mut chunk: &[u8], on_line: &mut impl FnMut(&str)) {
+        while let Some(line_end) = chunk.iter().position(|byte| *byte == b'\n') {
+            self.append(&chunk[..line_end]);
+            self.emit(true, on_line);
+            chunk = &chunk[line_end + 1..];
+        }
+        self.append(chunk);
+    }
+
+    fn append(&mut self, bytes: &[u8]) {
+        self.truncated_bytes = self.truncated_bytes.saturating_add(retain_tail(
+            &mut self.bytes,
+            bytes,
+            STREAM_LINE_LIMIT,
+        ));
+    }
+
+    fn finish(&mut self, on_line: &mut impl FnMut(&str)) {
+        if !self.bytes.is_empty() || self.truncated_bytes > 0 {
+            self.emit(false, on_line);
+        }
+    }
+
+    fn emit(&mut self, complete: bool, on_line: &mut impl FnMut(&str)) {
+        let bytes = self.bytes.drain(..).collect::<Vec<_>>();
+        let line = String::from_utf8_lossy(&bytes);
+        let line = line.trim_end_matches('\r');
+        if self.truncated_bytes > 0 {
+            let rendered = format!(
+                "[... {} line bytes omitted ...] {line}",
+                self.truncated_bytes
+            );
+            on_line(&rendered);
+        } else if complete || !line.is_empty() {
+            on_line(line);
+        }
+        self.truncated_bytes = 0;
+    }
+}
+
+fn retain_tail(buffer: &mut VecDeque<u8>, chunk: &[u8], limit: usize) -> u64 {
+    if chunk.len() >= limit {
+        let truncated = buffer
+            .len()
+            .saturating_add(chunk.len().saturating_sub(limit));
+        buffer.clear();
+        buffer.extend(&chunk[chunk.len() - limit..]);
+        return truncated as u64;
+    }
+    let overflow = buffer
+        .len()
+        .saturating_add(chunk.len())
+        .saturating_sub(limit);
+    if overflow > 0 {
+        buffer.drain(..overflow);
+    }
+    buffer.extend(chunk);
+    overflow as u64
 }
 
 #[derive(Default)]
@@ -430,19 +774,33 @@ impl Capture {
     fn handle(
         &mut self,
         event: ReaderEvent,
+        policy: CapturePolicy,
         on_line: &mut impl FnMut(&str),
         failure: &mut Option<(ExecutionErrorKind, String)>,
     ) {
         match event {
-            ReaderEvent::Data(Stream::Stdout, bytes) => self.stdout.push(&bytes, on_line),
-            ReaderEvent::Data(Stream::Stderr, bytes) => self.stderr.push(&bytes, on_line),
+            ReaderEvent::Data(stream, bytes) => {
+                let truncated = self.stream_mut(stream).push(&bytes, policy, on_line);
+                if truncated {
+                    record_failure(
+                        failure,
+                        ExecutionErrorKind::OutputLimit,
+                        format!(
+                            "{} exceeded the {} byte capture limit",
+                            stream.name(),
+                            STREAM_CAPTURE_LIMIT
+                        ),
+                    );
+                }
+            }
             ReaderEvent::Done(stream, error) => {
                 self.stream_mut(stream).finish(on_line);
                 if let Some(error) = error {
-                    *failure = Some((
+                    record_failure(
+                        failure,
                         ExecutionErrorKind::Wait,
                         format!("failed to read {}: {error}", stream.name()),
-                    ));
+                    );
                 }
             }
         }
@@ -458,34 +816,52 @@ impl Capture {
     fn drain_to_end(
         &mut self,
         receiver: &mpsc::Receiver<ReaderEvent>,
+        policy: CapturePolicy,
         on_line: &mut impl FnMut(&str),
-        detail: &mut String,
+        failure: &mut Option<(ExecutionErrorKind, String)>,
         timeout: Duration,
     ) {
         let started = Instant::now();
         while !self.stdout.done || !self.stderr.done {
             let remaining = timeout.saturating_sub(started.elapsed());
             if remaining.is_zero() {
-                append_detail(detail, "timed out while draining child output pipes");
+                record_failure(
+                    failure,
+                    ExecutionErrorKind::Wait,
+                    String::from("timed out while draining child output pipes"),
+                );
                 break;
             }
             match receiver.recv_timeout(remaining) {
                 Ok(event) => {
-                    let mut failure = None;
-                    self.handle(event, on_line, &mut failure);
-                    if let Some((_, error)) = failure {
-                        append_detail(detail, &error);
-                    }
+                    self.handle(event, policy, on_line, failure);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    append_detail(detail, "timed out while draining child output pipes");
+                    record_failure(
+                        failure,
+                        ExecutionErrorKind::Wait,
+                        String::from("timed out while draining child output pipes"),
+                    );
                     break;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    append_detail(detail, "output readers disconnected");
+                    record_failure(
+                        failure,
+                        ExecutionErrorKind::Wait,
+                        String::from("output readers disconnected"),
+                    );
                     break;
                 }
             }
+        }
+    }
+
+    fn into_streams(self) -> CapturedStreams {
+        CapturedStreams {
+            stdout_truncated_bytes: self.stdout.truncated_bytes,
+            stderr_truncated_bytes: self.stderr.truncated_bytes,
+            stdout: self.stdout.into_bytes(),
+            stderr: self.stderr.into_bytes(),
         }
     }
 }
@@ -502,32 +878,51 @@ impl Stream {
 fn drain_available(
     receiver: &mpsc::Receiver<ReaderEvent>,
     capture: &mut Capture,
+    policy: CapturePolicy,
     on_line: &mut impl FnMut(&str),
     failure: &mut Option<(ExecutionErrorKind, String)>,
 ) {
-    while let Ok(event) = receiver.try_recv() {
-        capture.handle(event, on_line, failure);
+    for _ in 0..OUTPUT_EVENT_BATCH {
+        let Ok(event) = receiver.try_recv() else {
+            break;
+        };
+        capture.handle(event, policy, on_line, failure);
+        if failure.is_some() {
+            break;
+        }
+    }
+}
+
+fn record_failure(
+    failure: &mut Option<(ExecutionErrorKind, String)>,
+    kind: ExecutionErrorKind,
+    detail: String,
+) {
+    if let Some((first_kind, first_detail)) = failure {
+        if failure_priority(kind) > failure_priority(*first_kind) {
+            *first_kind = kind;
+        }
+        append_detail(first_detail, &detail);
+    } else {
+        *failure = Some((kind, detail));
+    }
+}
+
+fn failure_priority(kind: ExecutionErrorKind) -> u8 {
+    match kind {
+        // The operation-level cause remains authoritative while cleanup drains
+        // any already-buffered child output.
+        ExecutionErrorKind::Timeout | ExecutionErrorKind::Cancelled => 3,
+        // Partial collector output must never be mislabeled as a generic pipe
+        // wait merely because the other stream reported its error first.
+        ExecutionErrorKind::OutputLimit => 2,
+        ExecutionErrorKind::Spawn | ExecutionErrorKind::Wait => 1,
     }
 }
 
 fn terminate_and_reap(child: &mut Child, detail: &mut String) -> Option<ExitStatus> {
     #[cfg(unix)]
-    {
-        let process_group = -(i64::from(child.id()) as libc::pid_t);
-        // SAFETY: the spawned child is placed in a new process group whose ID
-        // equals its PID. `kill` receives that bounded process-group ID and a
-        // constant signal; no pointers or borrowed memory cross the FFI call.
-        let result = unsafe { libc::kill(process_group, libc::SIGKILL) };
-        if result != 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                append_detail(
-                    detail,
-                    &format!("failed to kill child process group: {error}"),
-                );
-            }
-        }
-    }
+    terminate_process_group(child.id(), detail);
     #[cfg(not(unix))]
     if let Err(error) = child.kill() {
         append_detail(detail, &format!("failed to kill child: {error}"));
@@ -537,6 +932,36 @@ fn terminate_and_reap(child: &mut Child, detail: &mut String) -> Option<ExitStat
         Err(error) => {
             append_detail(detail, &format!("failed to reap child: {error}"));
             None
+        }
+    }
+}
+
+fn terminate_after_exit(child: &mut Child, detail: &mut String) -> Option<ExitStatus> {
+    #[cfg(unix)]
+    terminate_process_group(child.id(), detail);
+    child.wait().map_or_else(
+        |error| {
+            append_detail(detail, &format!("failed to confirm child exit: {error}"));
+            None
+        },
+        Some,
+    )
+}
+
+#[cfg(unix)]
+fn terminate_process_group(child_id: u32, detail: &mut String) {
+    let process_group = -(i64::from(child_id) as libc::pid_t);
+    // SAFETY: the spawned child is placed in a new process group whose ID
+    // equals its PID. `kill` receives that bounded process-group ID and a
+    // constant signal; no pointers or borrowed memory cross the FFI call.
+    let result = unsafe { libc::kill(process_group, libc::SIGKILL) };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            append_detail(
+                detail,
+                &format!("failed to kill child process group: {error}"),
+            );
         }
     }
 }
@@ -551,19 +976,21 @@ fn append_detail(detail: &mut String, addition: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecutionErrorKind, format_command, run_command, run_command_for_context_structured,
-        run_command_streaming, run_command_streaming_structured, run_command_structured,
+        Capture, CapturePolicy, ExecutionErrorKind, ReaderEvent, STREAM_CAPTURE_LIMIT, Stream,
+        format_command, run_command, run_command_for_context_streaming_structured,
+        run_command_for_context_structured, run_command_streaming,
+        run_command_streaming_structured, run_command_streaming_truncated, run_command_structured,
     };
-    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
+    use ayni_core::{AyniPolicy, CancellationToken, ExecutionResolution, RunContext, Scope};
     use std::fs;
     use std::io::{self, Write};
     use std::path::Path;
     use std::process;
     #[cfg(unix)]
     use std::process::Command;
-    use std::time::Duration;
-    #[cfg(unix)]
-    use std::time::Instant;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     fn test_child(test_name: &str, extra: &[String]) -> (String, Vec<String>) {
         let executable = std::env::current_exe().expect("test executable path");
@@ -601,6 +1028,7 @@ mod tests {
             policy: AyniPolicy::default(),
             scope: Scope::default(),
             execution,
+            cancellation: Default::default(),
             debug: false,
         };
         let (program, args) = test_child("fixture_prints_context_environment", &[]);
@@ -650,6 +1078,104 @@ mod tests {
         );
     }
 
+    #[test]
+    fn output_limit_terminates_the_child_and_reports_truncation() {
+        let (program, args) = test_child("fixture_exceeds_capture_limit", &[]);
+        let error =
+            run_command_structured(Path::new("."), &program, &args, Duration::from_secs(10))
+                .expect_err("oversized output must fail closed");
+        assert_eq!(error.kind, ExecutionErrorKind::OutputLimit);
+        assert_eq!(error.stdout.len(), STREAM_CAPTURE_LIMIT);
+        assert!(error.stdout_truncated_bytes > 0);
+        assert_eq!(error.stderr_truncated_bytes, 0);
+    }
+
+    #[test]
+    fn infrastructure_streaming_retains_a_tail_without_failing() {
+        let (program, args) = test_child("fixture_exceeds_capture_limit_with_tail", &[]);
+        let mut lines = Vec::new();
+        let captured = run_command_streaming_truncated(
+            Path::new("."),
+            &program,
+            &args,
+            Duration::from_secs(10),
+            |line| lines.push(line.to_owned()),
+        )
+        .expect("verbose infrastructure output is truncated, not failed");
+        assert!(captured.output.status.success());
+        assert_eq!(captured.output.stdout.len(), STREAM_CAPTURE_LIMIT);
+        assert!(captured.stdout_truncated_bytes > 0);
+        assert!(captured.output.stdout.ends_with(b"tail-marker"));
+        assert!(
+            lines
+                .last()
+                .is_some_and(|line| line.ends_with("tail-marker"))
+        );
+    }
+
+    #[test]
+    fn final_drain_preserves_output_limit_as_the_first_failure() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(ReaderEvent::Done(
+                Stream::Stderr,
+                Some(String::from("earlier read error")),
+            ))
+            .expect("stderr done");
+        sender
+            .send(ReaderEvent::Data(
+                Stream::Stdout,
+                vec![b'x'; STREAM_CAPTURE_LIMIT + 1],
+            ))
+            .expect("data event");
+        sender
+            .send(ReaderEvent::Done(Stream::Stdout, None))
+            .expect("stdout done");
+        drop(sender);
+
+        let mut capture = Capture::default();
+        let mut failure = None;
+        capture.drain_to_end(
+            &receiver,
+            CapturePolicy::FailClosed,
+            &mut |_| {},
+            &mut failure,
+            Duration::from_secs(1),
+        );
+        let (kind, detail) = failure.expect("drain must fail");
+        assert_eq!(kind, ExecutionErrorKind::OutputLimit);
+        assert!(detail.contains("earlier read error"));
+    }
+
+    #[test]
+    fn cancellation_terminates_an_active_child() {
+        let cwd = std::env::current_dir().expect("current directory");
+        let cancellation = CancellationToken::default();
+        let context = RunContext {
+            repo_root: cwd.clone(),
+            target_root: cwd.clone(),
+            workdir: cwd.clone(),
+            policy: AyniPolicy::default(),
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("runner", cwd, "test", 100),
+            cancellation: cancellation.clone(),
+            debug: false,
+        };
+        let (program, args) = test_child("fixture_never_exits", &[]);
+        let handle =
+            thread::spawn(move || run_command_for_context_structured(&context, &program, &args));
+        thread::sleep(Duration::from_millis(100));
+        let started = Instant::now();
+        cancellation.cancel();
+        let error = handle
+            .join()
+            .expect("runner thread joins")
+            .expect_err("cancelled child must fail");
+        assert_eq!(error.kind, ExecutionErrorKind::Cancelled);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(error.status.is_some_and(|status| !status.success()));
+    }
+
     #[cfg(unix)]
     #[test]
     fn timeout_kills_descendants_that_retain_output_pipes() {
@@ -663,6 +1189,94 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "surviving descendant retained an output pipe"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_kills_descendants_that_retain_output_pipes() {
+        let cwd = std::env::current_dir().expect("current directory");
+        let cancellation = CancellationToken::default();
+        let context = RunContext {
+            repo_root: cwd.clone(),
+            target_root: cwd.clone(),
+            workdir: cwd.clone(),
+            policy: AyniPolicy::default(),
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("runner", cwd, "test", 100),
+            cancellation: cancellation.clone(),
+            debug: false,
+        };
+        let (program, args) = test_child("fixture_spawns_descendant", &[]);
+        let started = Instant::now();
+        let error =
+            run_command_for_context_streaming_structured(&context, &program, &args, |line| {
+                if line.ends_with("descendant-ready") {
+                    cancellation.cancel();
+                }
+            })
+            .expect_err("process tree must be cancelled");
+        assert_eq!(error.kind, ExecutionErrorKind::Cancelled);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "surviving descendant retained an output pipe"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn post_exit_drain_failure_kills_remaining_process_group() {
+        let (program, args) = test_child("fixture_exits_with_descendant", &[]);
+        let started = Instant::now();
+        let error =
+            run_command_structured(Path::new("."), &program, &args, Duration::from_secs(10))
+                .expect_err("a descendant retained the output pipe");
+        assert_eq!(error.kind, ExecutionErrorKind::Wait);
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        let stdout = String::from_utf8_lossy(&error.stdout);
+        let marker = "descendant-pid=";
+        let start = stdout.find(marker).expect("descendant pid is reported") + marker.len();
+        let pid = stdout[start..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse::<libc::pid_t>()
+            .expect("valid descendant pid");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if !process_is_running(pid) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "descendant process survived cleanup"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    fn process_is_running(pid: libc::pid_t) -> bool {
+        // SAFETY: signal 0 performs a read-only existence check for the
+        // bounded PID emitted by the test child.
+        let exists = unsafe { libc::kill(pid, 0) } == 0;
+        if !exists && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return false;
+        }
+        #[cfg(target_os = "linux")]
+        if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
+            // A container without an init reaper can retain a killed orphan as
+            // a zombie until the container exits. It no longer executes or
+            // owns the output pipe, so it satisfies the cleanup guarantee.
+            if stat
+                .rsplit_once(") ")
+                .and_then(|(_, fields)| fields.chars().next())
+                == Some('Z')
+            {
+                return false;
+            }
+        }
+        exists
     }
 
     #[test]
@@ -776,9 +1390,26 @@ mod tests {
             .args(args)
             .spawn()
             .expect("spawn descendant");
+        println!("descendant-ready");
+        io::stdout().flush().expect("flush readiness");
         loop {
             std::thread::park();
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore]
+    #[allow(clippy::zombie_processes)]
+    fn fixture_exits_with_descendant() {
+        let (program, args) = test_child("fixture_never_exits", &[]);
+        let descendant = Command::new(program)
+            .args(args)
+            .spawn()
+            .expect("spawn descendant");
+        println!("descendant-pid={}", descendant.id());
+        io::stdout().flush().expect("flush descendant pid");
+        process::exit(0);
     }
 
     #[test]
@@ -810,6 +1441,31 @@ mod tests {
             .write_all(b"stderr-partial")
             .expect("write fixture stderr");
         io::stderr().flush().expect("flush fixture stderr");
+        process::exit(0);
+    }
+
+    #[test]
+    #[ignore]
+    fn fixture_exceeds_capture_limit() {
+        let chunk = [b'x'; 8192];
+        let mut stdout = io::stdout().lock();
+        for _ in 0..=(STREAM_CAPTURE_LIMIT / chunk.len()) {
+            stdout.write_all(&chunk).expect("write oversized output");
+        }
+        stdout.flush().expect("flush oversized output");
+        process::exit(0);
+    }
+
+    #[test]
+    #[ignore]
+    fn fixture_exceeds_capture_limit_with_tail() {
+        let chunk = [b'x'; 8192];
+        let mut stdout = io::stdout().lock();
+        for _ in 0..=(STREAM_CAPTURE_LIMIT / chunk.len()) {
+            stdout.write_all(&chunk).expect("write oversized output");
+        }
+        stdout.write_all(b"tail-marker").expect("write tail marker");
+        stdout.flush().expect("flush oversized output");
         process::exit(0);
     }
 

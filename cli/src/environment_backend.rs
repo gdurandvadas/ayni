@@ -1,12 +1,14 @@
 use crate::application::{
-    CheckOperation, EnvRunOperation, EnvShellOperation, EnvShowOperation, ImpactOperation,
-    OutputFormat, RepositoryOperation, VerifyOperation,
+    CapabilityAuthorization, CheckOperation, EnvPruneOperation, EnvRunOperation, EnvShellOperation,
+    EnvShowOperation, EnvStorageOperation, ImpactOperation, OutputFormat, RepositoryOperation,
+    VerifyOperation,
 };
 use ayni_core::{
-    AdapterRegistry, DependencyPreparationPlan, DependencyPreparationRequest, EnvironmentLock,
-    EnvironmentPlan,
+    AdapterRegistry, DependencyPreparationPlan, DependencyPreparationRequest, DockerAccess,
+    EnvironmentLock, EnvironmentPlan, NetworkAccess,
 };
 use ayni_environment::TargetSelection;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -36,12 +38,264 @@ pub(crate) fn build(operation: RepositoryOperation, registry: &AdapterRegistry) 
     })())
 }
 
+pub(crate) fn storage(operation: EnvStorageOperation, registry: &AdapterRegistry) -> ExitCode {
+    let report = (|| {
+        let (root, plan) = current_plan(&operation.repo_root, None, registry)?;
+        let preparations = dependency_preparations(&root, registry, &plan)?;
+        ayni_environment::storage_report_prepared(&root, &preparations)
+    })();
+    match report {
+        Ok(report) => match operation.output {
+            OutputFormat::Human => {
+                print!("{}", render_storage_report(&report));
+                ExitCode::SUCCESS
+            }
+            OutputFormat::Json => render_json(&report),
+            OutputFormat::Markdown => unreachable!("env storage does not accept Markdown output"),
+        },
+        Err(error) => render_error(error),
+    }
+}
+
+pub(crate) fn prune(operation: EnvPruneOperation, registry: &AdapterRegistry) -> ExitCode {
+    let result = (|| {
+        let (root, plan) = current_plan(&operation.repo_root, None, registry)?;
+        let preparations = dependency_preparations(&root, registry, &plan)?;
+        ayni_environment::prune_storage_prepared(
+            &root,
+            &preparations,
+            operation.apply,
+            operation.images,
+        )
+    })();
+    match result {
+        Ok(result) => {
+            let complete = result.complete();
+            let rendered = match operation.output {
+                OutputFormat::Human => {
+                    print!("{}", render_storage_prune(&result));
+                    ExitCode::SUCCESS
+                }
+                OutputFormat::Json => render_json(&result),
+                OutputFormat::Markdown => {
+                    unreachable!("env prune does not accept Markdown output")
+                }
+            };
+            if rendered == ExitCode::SUCCESS && !complete {
+                ExitCode::from(4)
+            } else {
+                rendered
+            }
+        }
+        Err(error) => render_error(error),
+    }
+}
+
+fn render_json(value: &impl serde::Serialize) -> ExitCode {
+    match serde_json::to_string_pretty(value) {
+        Ok(output) => {
+            println!("{output}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("failed to render environment storage data: {error}");
+            ExitCode::from(4)
+        }
+    }
+}
+
+fn render_storage_report(report: &ayni_environment::StorageReport) -> String {
+    let mut output = String::new();
+    writeln!(output, "Ayni environment storage ({})", report.engine).expect("string write");
+    writeln!(output, "Expected image tag: {}", report.expected_image_tag).expect("string write");
+    writeln!(
+        output,
+        "Current image present: {}",
+        if report.current_image_present {
+            "yes"
+        } else {
+            "no; run `ayni env build` to create it"
+        }
+    )
+    .expect("string write");
+    writeln!(
+        output,
+        "Images: {} ({} cumulative)",
+        report.images.len(),
+        format_bytes(report.image_cumulative_size_bytes)
+    )
+    .expect("string write");
+    for image in &report.images {
+        let state = if image.current {
+            "current"
+        } else if image.prune_candidate {
+            "stale"
+        } else {
+            "legacy"
+        };
+        let name = image.tags.first().map_or(image.id.as_str(), String::as_str);
+        writeln!(
+            output,
+            "  {state:<7} {:>10}  {name}",
+            format_bytes(image.cumulative_size_bytes)
+        )
+        .expect("string write");
+    }
+    writeln!(
+        output,
+        "State root: {} total logical data under {}",
+        format_bytes(report.state_root_logical_size_bytes),
+        report.state_root
+    )
+    .expect("string write");
+    writeln!(
+        output,
+        "Classified environment state: {} path(s), {} logical data",
+        report.state_generations.len(),
+        format_bytes(report.classified_state_logical_size_bytes),
+    )
+    .expect("string write");
+    for generation in &report.state_generations {
+        let state = if generation.current {
+            "current"
+        } else {
+            "stale"
+        };
+        writeln!(
+            output,
+            "  {state:<7} {:>10}  {}",
+            format_bytes(generation.logical_size_bytes),
+            generation.path
+        )
+        .expect("string write");
+    }
+    writeln!(
+        output,
+        "Unclassified state: {} (included in state-root total; reported, never pruned)",
+        format_bytes(report.unclassified_state_logical_size_bytes)
+    )
+    .expect("string write");
+    writeln!(
+        output,
+        "Image sizes are cumulative, not unique or reclaimable; shared layers and engine build cache are not attributed."
+    )
+    .expect("string write");
+    writeln!(
+        output,
+        "Image deletion scope is engine-wide across repositories; repository-local state is reported separately."
+    )
+    .expect("string write");
+    output
+}
+
+fn render_storage_prune(result: &ayni_environment::StoragePruneResult) -> String {
+    let image_candidates = result
+        .report
+        .images
+        .iter()
+        .filter(|image| image.prune_candidate)
+        .collect::<Vec<_>>();
+    let state_candidates = result
+        .report
+        .state_generations
+        .iter()
+        .filter(|generation| generation.prune_candidate)
+        .collect::<Vec<_>>();
+    let mut output = String::new();
+    if result.applied {
+        writeln!(output, "Ayni storage prune applied").expect("string write");
+    } else {
+        writeln!(output, "Ayni storage prune dry run").expect("string write");
+    }
+    writeln!(
+        output,
+        "Repository-local state candidates: {} managed-state path(s)",
+        state_candidates.len()
+    )
+    .expect("string write");
+    writeln!(
+        output,
+        "Engine-wide image candidates: {} managed image(s) ({})",
+        image_candidates.len(),
+        if result.images_requested {
+            "explicitly selected with --images"
+        } else {
+            "not selected; add --images to acknowledge cross-repository scope"
+        }
+    )
+    .expect("string write");
+    for image in image_candidates {
+        let name = image.tags.first().map_or(image.id.as_str(), String::as_str);
+        writeln!(
+            output,
+            "  image {:>10}  {name}",
+            format_bytes(image.cumulative_size_bytes)
+        )
+        .expect("string write");
+    }
+    for generation in state_candidates {
+        writeln!(
+            output,
+            "  state {:>10}  {}",
+            format_bytes(generation.logical_size_bytes),
+            generation.path
+        )
+        .expect("string write");
+    }
+    if result.applied {
+        writeln!(
+            output,
+            "Removed: {} image(s), {} managed-state path(s)",
+            result.removed_images.len(),
+            result.removed_state_generations.len()
+        )
+        .expect("string write");
+        for failure in &result.failures {
+            writeln!(output, "Failed: {} — {}", failure.target, failure.message)
+                .expect("string write");
+        }
+    } else {
+        writeln!(
+            output,
+            "No data was removed. Rerun with --apply to delete repository-local state; add --images only to include engine-wide image candidates."
+        )
+        .expect("string write");
+    }
+    writeln!(
+        output,
+        "Images are never deleted without both --apply and --images. The current image, legacy images, unclassified state, shared layers, and global build cache are retained."
+    )
+    .expect("string write");
+    output
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes == 0 {
+        return String::from("0 B");
+    }
+    const UNITS: [(&str, u64); 4] = [
+        ("GiB", 1024 * 1024 * 1024),
+        ("MiB", 1024 * 1024),
+        ("KiB", 1024),
+        ("B", 1),
+    ];
+    let (unit, divisor) = UNITS
+        .into_iter()
+        .find(|(_, divisor)| bytes >= *divisor)
+        .expect("byte unit");
+    if divisor == 1 {
+        format!("{bytes} B")
+    } else {
+        format!("{:.1} {unit}", bytes as f64 / divisor as f64)
+    }
+}
+
 pub(crate) fn check(operation: CheckOperation, registry: &AdapterRegistry) -> ExitCode {
     managed_quality_result(
         "check",
         (|| {
             let (root, preparations, container_config) =
-                prepared_quality_environment(&operation.config, registry)?;
+                prepared_quality_environment(&operation.config, registry, operation.authorization)?;
             let mut command = vec![
                 String::from("check"),
                 String::from("--host"),
@@ -53,7 +307,12 @@ pub(crate) fn check(operation: CheckOperation, registry: &AdapterRegistry) -> Ex
             if operation.debug {
                 command.push(String::from("--debug"));
             }
-            ayni_environment::launch_repository_prepared(&root, &preparations, &command)
+            ayni_environment::launch_repository_prepared(
+                &root,
+                &preparations,
+                &command,
+                launch_authorization(operation.authorization),
+            )
         })(),
     )
 }
@@ -63,9 +322,14 @@ pub(crate) fn verify(operation: VerifyOperation, registry: &AdapterRegistry) -> 
         "verify",
         (|| {
             let (root, preparations, container_config) =
-                prepared_quality_environment(&operation.config, registry)?;
+                prepared_quality_environment(&operation.config, registry, operation.authorization)?;
             let command = managed_verify_command(&operation, container_config);
-            ayni_environment::launch_repository_prepared(&root, &preparations, &command)
+            ayni_environment::launch_repository_prepared(
+                &root,
+                &preparations,
+                &command,
+                launch_authorization(operation.authorization),
+            )
         })(),
     )
 }
@@ -75,9 +339,14 @@ pub(crate) fn impact_run(operation: ImpactOperation, registry: &AdapterRegistry)
         "impact run",
         (|| {
             let (root, preparations, container_config) =
-                prepared_quality_environment(&operation.config, registry)?;
+                prepared_quality_environment(&operation.config, registry, operation.authorization)?;
             let command = managed_impact_command(&operation, container_config);
-            ayni_environment::launch_repository_prepared(&root, &preparations, &command)
+            ayni_environment::launch_repository_prepared(
+                &root,
+                &preparations,
+                &command,
+                launch_authorization(operation.authorization),
+            )
         })(),
     )
 }
@@ -142,6 +411,7 @@ fn output_name(output: OutputFormat) -> &'static str {
 fn prepared_quality_environment(
     config: &Path,
     registry: &AdapterRegistry,
+    authorization: CapabilityAuthorization,
 ) -> Result<
     (std::path::PathBuf, Vec<DependencyPreparationPlan>, String),
     ayni_environment::BackendError,
@@ -151,6 +421,7 @@ fn prepared_quality_environment(
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let (root, plan) = current_plan(repo_root, Some(config), registry)?;
+    authorize_capabilities(plan.capabilities(), authorization)?;
     let preparations = dependency_preparations(&root, registry, &plan)?;
     let config = config.canonicalize().map_err(|error| {
         ayni_environment::BackendError::input(format!(
@@ -183,6 +454,7 @@ fn managed_quality_result(
 
 pub(crate) fn shell(operation: EnvShellOperation, registry: &AdapterRegistry) -> ExitCode {
     match current_plan(&operation.repo_root, None, registry).and_then(|(root, plan)| {
+        authorize_capabilities(plan.capabilities(), operation.authorization)?;
         let preparations = dependency_preparations(&root, registry, &plan)?;
         Ok((root, preparations))
     }) {
@@ -195,6 +467,7 @@ pub(crate) fn shell(operation: EnvShellOperation, registry: &AdapterRegistry) ->
             &[],
             true,
             &preparations,
+            operation.authorization,
         ),
         Err(error) => render_error(error),
     }
@@ -202,6 +475,7 @@ pub(crate) fn shell(operation: EnvShellOperation, registry: &AdapterRegistry) ->
 
 pub(crate) fn run(operation: EnvRunOperation, registry: &AdapterRegistry) -> ExitCode {
     match current_plan(&operation.repo_root, None, registry).and_then(|(root, plan)| {
+        authorize_capabilities(plan.capabilities(), operation.authorization)?;
         let preparations = dependency_preparations(&root, registry, &plan)?;
         Ok((root, preparations))
     }) {
@@ -214,9 +488,27 @@ pub(crate) fn run(operation: EnvRunOperation, registry: &AdapterRegistry) -> Exi
             &operation.command,
             false,
             &preparations,
+            operation.authorization,
         ),
         Err(error) => render_error(error),
     }
+}
+
+fn authorize_capabilities(
+    capabilities: ayni_core::EnvironmentCapabilities,
+    authorization: CapabilityAuthorization,
+) -> Result<(), ayni_environment::BackendError> {
+    if capabilities.network == NetworkAccess::Bridge && !authorization.allow_network {
+        return Err(ayni_environment::BackendError::environment(String::from(
+            "the locked repository requests bridge networking; rerun with --allow-network only after reviewing the repository trust boundary",
+        )));
+    }
+    if capabilities.docker == DockerAccess::Socket && !authorization.allow_docker_socket {
+        return Err(ayni_environment::BackendError::environment(String::from(
+            "the locked repository requests host Docker-daemon access; rerun with --allow-docker-socket only for a trusted repository and daemon",
+        )));
+    }
+    Ok(())
 }
 
 fn current_plan(
@@ -331,8 +623,16 @@ fn launch(
     command: &[String],
     shell: bool,
     preparations: &[DependencyPreparationPlan],
+    authorization: CapabilityAuthorization,
 ) -> ExitCode {
-    match ayni_environment::launch_prepared(repo_root, &target, command, shell, preparations) {
+    match ayni_environment::launch_prepared(
+        repo_root,
+        &target,
+        command,
+        shell,
+        preparations,
+        launch_authorization(authorization),
+    ) {
         Ok(0) => ExitCode::SUCCESS,
         Ok(code @ 1..=255) => {
             eprintln!("managed environment command exited with code {code}");
@@ -346,15 +646,33 @@ fn launch(
     }
 }
 
+const fn launch_authorization(
+    authorization: CapabilityAuthorization,
+) -> ayni_environment::LaunchAuthorization {
+    ayni_environment::LaunchAuthorization {
+        allow_network: authorization.allow_network,
+        allow_docker_socket: authorization.allow_docker_socket,
+    }
+}
+
 fn render_error(error: ayni_environment::BackendError) -> ExitCode {
     crate::application_error::render_error(error.into())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{managed_impact_command, managed_verify_command};
-    use crate::application::{ExecutionMode, ImpactOperation, OutputFormat, VerifyOperation};
-    use ayni_core::{Language, SignalKind};
+    use super::{
+        authorize_capabilities, format_bytes, managed_impact_command, managed_verify_command,
+        render_storage_prune, render_storage_report,
+    };
+    use crate::application::{
+        CapabilityAuthorization, ExecutionMode, ImpactOperation, OutputFormat, VerifyOperation,
+    };
+    use ayni_core::{DockerAccess, EnvironmentCapabilities, Language, NetworkAccess, SignalKind};
+    use ayni_environment::{
+        StorageImage, StorageImageOwnership, StorageImagePruneScope, StoragePruneResult,
+        StorageReport, StorageStateGeneration,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -370,6 +688,7 @@ mod tests {
             output: OutputFormat::Markdown,
             execution_mode: ExecutionMode::Managed,
             debug: true,
+            authorization: CapabilityAuthorization::default(),
         };
 
         assert_eq!(
@@ -404,6 +723,7 @@ mod tests {
             output: OutputFormat::Json,
             execution_mode: ExecutionMode::Managed,
             debug: true,
+            authorization: CapabilityAuthorization::default(),
         };
 
         assert_eq!(
@@ -422,5 +742,137 @@ mod tests {
             ]
             .map(String::from)
         );
+    }
+
+    #[test]
+    fn elevated_capabilities_require_independent_operator_authorization() {
+        let requested = EnvironmentCapabilities {
+            docker: DockerAccess::Socket,
+            network: NetworkAccess::Bridge,
+        };
+        let network_error = authorize_capabilities(
+            requested,
+            CapabilityAuthorization {
+                allow_network: false,
+                allow_docker_socket: true,
+            },
+        )
+        .expect_err("network must be authorized");
+        assert!(network_error.message.contains("--allow-network"));
+
+        let socket_error = authorize_capabilities(
+            requested,
+            CapabilityAuthorization {
+                allow_network: true,
+                allow_docker_socket: false,
+            },
+        )
+        .expect_err("socket must be authorized");
+        assert!(socket_error.message.contains("--allow-docker-socket"));
+
+        authorize_capabilities(
+            requested,
+            CapabilityAuthorization {
+                allow_network: true,
+                allow_docker_socket: true,
+            },
+        )
+        .expect("explicit authorization");
+    }
+
+    #[test]
+    fn storage_human_output_distinguishes_cumulative_size_and_safe_candidates() {
+        let report = storage_fixture();
+        let rendered = render_storage_report(&report);
+        assert!(rendered.contains("Expected image tag: ayni-env:current"));
+        assert!(rendered.contains("Current image present: yes"));
+        assert!(rendered.contains("Images: 2 (3.0 KiB cumulative)"));
+        assert!(rendered.contains("State root: 768 B total logical data"));
+        assert!(rendered.contains("Classified environment state: 1 path(s), 512 B"));
+        assert!(rendered.contains(
+            "Unclassified state: 256 B (included in state-root total; reported, never pruned)"
+        ));
+        assert!(rendered.contains("current"));
+        assert!(rendered.contains("stale"));
+        assert!(rendered.contains("shared layers and engine build cache are not attributed"));
+        assert!(rendered.contains("engine-wide across repositories"));
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1024), "1.0 KiB");
+    }
+
+    #[test]
+    fn storage_human_output_does_not_claim_an_absent_current_image() {
+        let mut report = storage_fixture();
+        report.current_image_present = false;
+        report.images.clear();
+        report.image_cumulative_size_bytes = 0;
+
+        let rendered = render_storage_report(&report);
+
+        assert!(rendered.contains("Expected image tag: ayni-env:current"));
+        assert!(rendered.contains("Current image present: no; run `ayni env build` to create it"));
+        assert!(!rendered.contains("Current image: ayni-env:current"));
+    }
+
+    #[test]
+    fn prune_human_output_keeps_dry_run_explicit() {
+        let result = StoragePruneResult {
+            applied: false,
+            images_requested: false,
+            report: storage_fixture(),
+            removed_images: Vec::new(),
+            removed_state_generations: Vec::new(),
+            failures: Vec::new(),
+        };
+        let rendered = render_storage_prune(&result);
+        assert!(rendered.contains("dry run"));
+        assert!(rendered.contains("No data was removed"));
+        assert!(rendered.contains("Rerun with --apply"));
+        assert!(rendered.contains("not selected; add --images"));
+    }
+
+    fn storage_fixture() -> StorageReport {
+        StorageReport {
+            engine: String::from("docker"),
+            expected_image_tag: String::from("ayni-env:current"),
+            current_image_present: true,
+            images: vec![
+                StorageImage {
+                    id: String::from("sha256:current"),
+                    tags: vec![String::from("ayni-env:current")],
+                    cumulative_size_bytes: 1024,
+                    lock_fingerprint: Some(String::from("sha256:current")),
+                    preparation_digest: Some(String::from("sha256:current")),
+                    schema_version: Some(String::from("0.5.0")),
+                    ownership: StorageImageOwnership::Managed,
+                    current: true,
+                    prune_candidate: false,
+                },
+                StorageImage {
+                    id: String::from("sha256:stale"),
+                    tags: vec![String::from("ayni-env:stale")],
+                    cumulative_size_bytes: 2048,
+                    lock_fingerprint: Some(String::from("sha256:stale")),
+                    preparation_digest: Some(String::from("sha256:stale")),
+                    schema_version: Some(String::from("0.5.0")),
+                    ownership: StorageImageOwnership::Managed,
+                    current: false,
+                    prune_candidate: true,
+                },
+            ],
+            image_cumulative_size_bytes: 3072,
+            image_prune_scope: StorageImagePruneScope::EngineWideAcrossRepositories,
+            state_root: String::from(".ayni/environment"),
+            state_generations: vec![StorageStateGeneration {
+                path: String::from(".ayni/environment/aaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbb"),
+                logical_size_bytes: 512,
+                current: false,
+                prune_candidate: true,
+            }],
+            state_root_logical_size_bytes: 768,
+            classified_state_logical_size_bytes: 512,
+            unclassified_state_logical_size_bytes: 256,
+            build_cache_included: false,
+        }
     }
 }

@@ -158,6 +158,7 @@ mod tests {
                 "test",
                 100,
             ),
+            cancellation: Default::default(),
             debug: false,
         };
 

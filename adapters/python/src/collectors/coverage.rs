@@ -293,6 +293,7 @@ mod tests {
             policy: AyniPolicy::default(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("pytest", PathBuf::from("."), "test", 100),
+            cancellation: Default::default(),
             debug: false,
         }
     }

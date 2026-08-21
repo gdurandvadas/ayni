@@ -57,7 +57,13 @@ pub(super) fn materialize_outputs(
         .join(&fingerprint[..16.min(fingerprint.len())])
         .join(&preparation[..16.min(preparation.len())]);
     validate_output_ownership(preparations)?;
-    let cache_destination = materialize_cache(root, engine, image_plan, &state_root)?;
+    let cache_destination = materialize_cache(
+        root,
+        engine,
+        image_plan,
+        &state_root,
+        lock.resource_limits(),
+    )?;
     let outputs = crate::preparation::unique_outputs(preparations);
     let mut destinations = BTreeMap::new();
     let mut handled = std::collections::BTreeSet::new();
@@ -127,6 +133,7 @@ fn materialize_cache(
     engine: Engine,
     image_plan: &ImagePlan,
     state_root: &Path,
+    resources: ayni_core::EnvironmentResourceLimits,
 ) -> Result<PathBuf, BackendError> {
     let parent_relative = state_root.join("cache");
     create_contained_directory_tree(root, &parent_relative)?;
@@ -148,15 +155,16 @@ fn materialize_cache(
     }
     reject_partial_materialization(&destination)?;
     let staging = StagingDirectory::create(destination.parent().expect("cache parent"))?;
-    copy_image_tree(
+    copy_image_tree(ImageTreeCopy {
         root,
         engine,
-        &image_plan.tag,
-        "/home/ayni/.cache/.",
-        staging.path(),
-        "/tmp/ayni/cache",
-        "prepared tool cache",
-    )?;
+        image_tag: &image_plan.tag,
+        source: "/home/ayni/.cache/.",
+        destination: staging.path(),
+        container_destination: "/tmp/ayni/cache",
+        description: "prepared tool cache",
+        resources,
+    })?;
     staging.publish(&destination)?;
     write_completion_marker(root, &marker, &image_plan.preparation_digest)?;
     Ok(destination)
@@ -199,7 +207,13 @@ fn materialize_preparation_outputs(
         return Ok(pending_destinations(pending));
     }
 
-    stage_pending_outputs(root, engine, image_plan, &mut pending)?;
+    stage_pending_outputs(
+        root,
+        engine,
+        image_plan,
+        &mut pending,
+        lock.resource_limits(),
+    )?;
     run_preparation_for_outputs(
         root,
         engine,
@@ -273,6 +287,7 @@ fn stage_pending_outputs(
     engine: Engine,
     image_plan: &ImagePlan,
     outputs: &mut [PendingOutput<'_>],
+    resources: ayni_core::EnvironmentResourceLimits,
 ) -> Result<(), BackendError> {
     for output in outputs {
         if !output.current {
@@ -285,15 +300,17 @@ fn stage_pending_outputs(
                 .expect("dependency output parent"),
         )?;
         if output.output.mode == PreparationOutputMode::Seeded {
-            copy_image_tree(
+            let source = format!("{}/{}/.", crate::preparation::SEED_ROOT, output.key);
+            copy_image_tree(ImageTreeCopy {
                 root,
                 engine,
-                &image_plan.tag,
-                &format!("{}/{}/.", crate::preparation::SEED_ROOT, output.key),
-                staging.path(),
-                "/tmp/ayni/dependencies",
-                "locked dependencies",
-            )?;
+                image_tag: &image_plan.tag,
+                source: &source,
+                destination: staging.path(),
+                container_destination: "/tmp/ayni/dependencies",
+                description: "locked dependencies",
+                resources,
+            })?;
         }
         output.staging = Some(staging);
     }
@@ -506,16 +523,33 @@ impl Drop for MaterializationLock {
     }
 }
 
-fn copy_image_tree(
-    root: &Path,
+struct ImageTreeCopy<'a> {
+    root: &'a Path,
     engine: Engine,
-    image_tag: &str,
-    source: &str,
-    destination: &Path,
-    container_destination: &str,
-    description: &str,
-) -> Result<(), BackendError> {
-    let mut args = base_launch_args(engine, ayni_core::EnvironmentCapabilities::default())?;
+    image_tag: &'a str,
+    source: &'a str,
+    destination: &'a Path,
+    container_destination: &'a str,
+    description: &'a str,
+    resources: ayni_core::EnvironmentResourceLimits,
+}
+
+fn copy_image_tree(request: ImageTreeCopy<'_>) -> Result<(), BackendError> {
+    let ImageTreeCopy {
+        root,
+        engine,
+        image_tag,
+        source,
+        destination,
+        container_destination,
+        description,
+        resources,
+    } = request;
+    let mut args = base_launch_args(
+        engine,
+        ayni_core::EnvironmentCapabilities::default(),
+        resources,
+    )?;
     args.extend([
         "--mount".into(),
         format!(
@@ -831,7 +865,11 @@ fn run_materialization_commands(request: MaterializationRequest<'_>) -> Result<(
         } else {
             format!("{WORKSPACE}/{}", command.cwd)
         };
-        let mut args = base_launch_args(engine, ayni_core::EnvironmentCapabilities::default())?;
+        let mut args = base_launch_args(
+            engine,
+            ayni_core::EnvironmentCapabilities::default(),
+            lock.resource_limits(),
+        )?;
         args.extend([
             "--mount".into(),
             format!(

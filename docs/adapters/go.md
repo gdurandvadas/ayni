@@ -13,8 +13,9 @@ Go runtime. Modules with declared dependencies require a committed `go.sum`.
 manifests, stores module/build data below the managed cache, disables Go's own
 toolchain downloads, keeps cached modules writable so generated environment
 state remains removable, and runs quality commands with read-only module
-metadata and networking disabled. Complexity additionally provisions pinned
-`gocyclo` `0.6.0` through its Go module provider.
+metadata. Container networking is disabled unless bridge networking is locked
+and the operator authorizes that invocation. Complexity additionally provisions
+pinned `gocyclo` `0.6.0` through its Go module provider.
 
 The Go toolchain and `gocyclo` remain user-owned prerequisites for `--host`
 execution. Managed support does not cover module-less GOPATH projects, external
@@ -34,9 +35,9 @@ cgo system libraries absent from the base image.
 
 ## Focused verification
 
-`verify` writes requested-scope evidence only to `.ayni/verify/last/signals.json`.
-Every command accepts an optional `--language go`; unscoped verification is
-always valid. The accepted selectors are:
+Shared artifact, completion, validation, and exact-command reuse semantics are
+defined in [Completion and focused verification](../product/runtime.md#completion-and-focused-verification).
+The accepted Go selectors are:
 
 | Signal | `--file` | `--package` | `--name` |
 | --- | --- | --- | --- |
@@ -54,8 +55,7 @@ before `go` runs.
 
 Verification commands carry their originating contract and target, for example:
 `ayni verify test --host --config './.ayni.toml' --language go --root 'services/api'
---package './internal/api' --name 'TestCreate'`. Use only the selectors marked
-above; copy the exact command in an artifact finding rather than synthesizing one.
+--package './internal/api' --name 'TestCreate'`.
 
 ## Impact planning
 
@@ -80,12 +80,11 @@ missing value produces a clear collector error. Coverage thresholds and
 dependency rules are optional: without `line_percent`, coverage has no policy
 threshold, and without `go.deps.forbidden`, no edges are forbidden.
 
-Maximum size and complexity boundaries are inclusive (`warn` and `fail` trigger
-at equality); coverage is an exclusive minimum boundary (equality passes that
-threshold). Line and branch coverage are independent and configured evidence
-fails closed when it is missing or unparseable. Standard Go coverage profiles
-provide statement coverage only: configuring `branch_percent` therefore fails
-the coverage row rather than reinterpreting statement coverage as branches.
+Shared boundary rules are defined under [Threshold semantics](../product/config.md#threshold-semantics).
+Configured Go coverage evidence fails closed when it is missing or unparseable.
+Standard Go coverage profiles provide statement coverage only: configuring
+`branch_percent` therefore fails the coverage row rather than reinterpreting
+statement coverage as branches.
 
 ## Configuration Example
 

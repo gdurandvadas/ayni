@@ -1,0 +1,31 @@
+name: rustsec-audit
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: locked Rust dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+
+      - name: Audit locked Rust dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          audit_root="$RUNNER_TEMP/cargo-audit-0.22.2"
+          cargo install cargo-audit --version 0.22.2 --locked --root "$audit_root"
+          export PATH="$audit_root/bin:$PATH"
+          cargo audit

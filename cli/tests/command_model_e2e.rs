@@ -6,12 +6,26 @@ fn ayni() -> Command {
 
 #[test]
 fn environment_operations_require_a_valid_lock_without_implicit_provisioning() {
-    for arguments in [["env", "doctor"], ["env", "build"], ["env", "shell"]] {
+    for arguments in [
+        ["env", "doctor"],
+        ["env", "build"],
+        ["env", "storage"],
+        ["env", "prune"],
+        ["env", "shell"],
+    ] {
         let output = ayni().args(arguments).output().expect("launch ayni");
         assert_eq!(output.status.code(), Some(3));
         assert!(output.stdout.is_empty());
         assert!(String::from_utf8_lossy(&output.stderr).contains("environment lock"));
     }
+
+    let apply = ayni()
+        .args(["env", "prune", "--apply"])
+        .output()
+        .expect("launch prune apply");
+    assert_eq!(apply.status.code(), Some(3));
+    assert!(apply.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&apply.stderr).contains("environment lock"));
 }
 
 #[test]
@@ -66,6 +80,32 @@ fn invalid_host_contract_uses_contract_exit() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("failed to read"));
+}
+
+#[test]
+fn managed_capability_authorization_is_rejected_in_host_mode() {
+    for arguments in [
+        vec!["check", "--host", "--allow-network"],
+        vec!["verify", "test", "--host", "--allow-docker-socket"],
+        vec![
+            "impact",
+            "run",
+            "--base",
+            "HEAD",
+            "--host",
+            "--allow-network",
+        ],
+    ] {
+        let output = ayni().args(&arguments).output().expect("launch ayni");
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("authorize managed-container capabilities"),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]

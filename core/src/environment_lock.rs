@@ -1,8 +1,8 @@
 use crate::environment_provisioning::normalize_debian_package_spec;
 use crate::{
-    EnvironmentCapabilities, EnvironmentPlanError, RequirementConfidence, RequirementSource,
-    ResolvedEnvironmentPlan, SignalKind, TargetIdentity, TargetPlatform, ToolInstallationScope,
-    VersionRequirement,
+    EnvironmentCapabilities, EnvironmentPlanError, EnvironmentResourceLimits,
+    RequirementConfidence, RequirementSource, ResolvedEnvironmentPlan, SignalKind, TargetIdentity,
+    TargetPlatform, ToolInstallationScope, VersionRequirement,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 /// Version of the committed, deterministic environment lock document.
-pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.4.0";
+pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.5.0";
 
 /// Immutable OCI base selected by the environment backend. The reference is
 /// human-readable while the digest is the authoritative image identity.
@@ -147,6 +147,8 @@ pub struct EnvironmentLock {
     debian_packages: Vec<LockedDebianPackage>,
     #[serde(default)]
     capabilities: EnvironmentCapabilities,
+    #[serde(default)]
+    resources: EnvironmentResourceLimits,
     fingerprint: String,
 }
 
@@ -171,6 +173,8 @@ impl<'de> Deserialize<'de> for EnvironmentLock {
             debian_packages: Vec<LockedDebianPackage>,
             #[serde(default)]
             capabilities: EnvironmentCapabilities,
+            #[serde(default)]
+            resources: EnvironmentResourceLimits,
             fingerprint: String,
         }
         let wire = Wire::deserialize(deserializer)?;
@@ -184,6 +188,7 @@ impl<'de> Deserialize<'de> for EnvironmentLock {
             tools: wire.tools,
             debian_packages: wire.debian_packages,
             capabilities: wire.capabilities,
+            resources: wire.resources,
             fingerprint: wire.fingerprint,
             schema_version: Some(wire.schema_version),
         })
@@ -201,6 +206,7 @@ struct EnvironmentLockParts {
     tools: Vec<LockedMiseTool>,
     debian_packages: Vec<LockedDebianPackage>,
     capabilities: EnvironmentCapabilities,
+    resources: EnvironmentResourceLimits,
     fingerprint: String,
     schema_version: Option<String>,
 }
@@ -314,6 +320,7 @@ impl EnvironmentLock {
             tools,
             debian_packages,
             capabilities: plan.capabilities(),
+            resources: plan.resource_limits(),
             fingerprint: String::new(),
             schema_version: None,
         })
@@ -330,6 +337,7 @@ impl EnvironmentLock {
             mut tools,
             mut debian_packages,
             capabilities,
+            resources,
             fingerprint,
             schema_version,
         } = parts;
@@ -349,6 +357,9 @@ impl EnvironmentLock {
         normalize_locked_targets(&mut targets)?;
         normalize_locked_mise_tools(&mut tools)?;
         normalize_locked_debian_packages(&mut debian_packages)?;
+        resources
+            .validate()
+            .map_err(EnvironmentPlanError::InvalidResourceLimits)?;
         let mut lock = Self {
             schema_version: ENVIRONMENT_LOCK_SCHEMA_VERSION.to_owned(),
             repository,
@@ -360,6 +371,7 @@ impl EnvironmentLock {
             tools,
             debian_packages,
             capabilities,
+            resources,
             fingerprint: String::new(),
         };
         let expected = lock.computed_fingerprint()?;
@@ -394,6 +406,7 @@ impl EnvironmentLock {
             tools: &'a [LockedMiseTool],
             debian_packages: &'a [LockedDebianPackage],
             capabilities: EnvironmentCapabilities,
+            resources: EnvironmentResourceLimits,
         }
         let document = FingerprintDocument {
             schema_version: &self.schema_version,
@@ -406,6 +419,7 @@ impl EnvironmentLock {
             tools: &self.tools,
             debian_packages: &self.debian_packages,
             capabilities: self.capabilities,
+            resources: self.resources,
         };
         let bytes = serde_json::to_vec(&document)
             .map_err(|error| EnvironmentPlanError::Serialization(error.to_string()))?;
@@ -447,6 +461,10 @@ impl EnvironmentLock {
     #[must_use]
     pub const fn capabilities(&self) -> EnvironmentCapabilities {
         self.capabilities
+    }
+    #[must_use]
+    pub const fn resource_limits(&self) -> EnvironmentResourceLimits {
+        self.resources
     }
     #[must_use]
     pub fn provisioning_base(&self) -> &ProvisioningBase {
@@ -794,6 +812,7 @@ mod tests {
             tools: Vec::new(),
             debian_packages: Vec::new(),
             capabilities: EnvironmentCapabilities::default(),
+            resources: EnvironmentResourceLimits::default(),
             fingerprint: String::new(),
             schema_version: None,
         })
@@ -836,11 +855,19 @@ mod tests {
             docker: crate::DockerAccess::Socket,
             network: crate::NetworkAccess::Bridge,
         };
+        lock.resources = EnvironmentResourceLimits {
+            cpus: 6,
+            memory_mib: 12_288,
+            memory_swap_mib: 16_384,
+            pids: 4_096,
+            nofile: 16_384,
+        };
         let serialized = lock.canonical_json().expect("canonical lock");
         let parsed: EnvironmentLock = serde_json::from_str(&serialized).expect("round trip");
         assert_eq!(parsed.tools()[0].tool, "protoc");
         assert_eq!(parsed.debian_packages()[0].package, "libssl-dev");
         assert_eq!(parsed.capabilities(), lock.capabilities);
+        assert_eq!(parsed.resource_limits(), lock.resources);
     }
 
     #[test]
@@ -865,6 +892,7 @@ mod tests {
                 tools: Vec::new(),
                 debian_packages: Vec::new(),
                 capabilities: EnvironmentCapabilities::default(),
+                resources: EnvironmentResourceLimits::default(),
                 fingerprint: String::new(),
                 schema_version: None,
             })
@@ -905,6 +933,7 @@ mod tests {
                 tools: Vec::new(),
                 debian_packages: Vec::new(),
                 capabilities: EnvironmentCapabilities::default(),
+                resources: EnvironmentResourceLimits::default(),
                 fingerprint: String::new(),
                 schema_version: None,
             })

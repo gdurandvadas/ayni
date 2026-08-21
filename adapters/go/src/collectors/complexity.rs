@@ -194,6 +194,7 @@ mod tests {
                 ..Scope::default()
             },
             execution: ExecutionResolution::direct("go", PathBuf::from("/repo"), "go.mod", 100),
+            cancellation: Default::default(),
             debug: false,
         };
 

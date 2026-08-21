@@ -5,8 +5,8 @@
 //! embedding provider-specific commands in core.
 
 pub use crate::environment_provisioning::{
-    DebianPackageRequirement, DockerAccess, EnvironmentCapabilities, MiseToolRequirement,
-    NetworkAccess,
+    DebianPackageRequirement, DockerAccess, EnvironmentCapabilities, EnvironmentResourceLimits,
+    MiseToolRequirement, NetworkAccess,
 };
 use crate::environment_provisioning::{normalize_debian_packages, normalize_mise_tools};
 use crate::{Language, SignalKind};
@@ -15,7 +15,7 @@ use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
 /// Version of the clean-slate, explainable environment-plan document.
-pub const ENVIRONMENT_PLAN_SCHEMA_VERSION: &str = "0.2.0";
+pub const ENVIRONMENT_PLAN_SCHEMA_VERSION: &str = "0.3.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RepositoryIdentity {
@@ -273,6 +273,8 @@ pub struct EnvironmentPlan {
     debian_packages: Vec<DebianPackageRequirement>,
     #[serde(default)]
     capabilities: EnvironmentCapabilities,
+    #[serde(default)]
+    resources: EnvironmentResourceLimits,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<EnvironmentWarning>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -297,6 +299,8 @@ impl<'de> Deserialize<'de> for EnvironmentPlan {
             #[serde(default)]
             capabilities: EnvironmentCapabilities,
             #[serde(default)]
+            resources: EnvironmentResourceLimits,
+            #[serde(default)]
             warnings: Vec<EnvironmentWarning>,
             #[serde(default)]
             conflicts: Vec<EnvironmentConflict>,
@@ -319,6 +323,7 @@ impl<'de> Deserialize<'de> for EnvironmentPlan {
         .and_then(|plan| plan.with_tools(wire.tools))
         .and_then(|plan| plan.with_debian_packages(wire.debian_packages))
         .and_then(|plan| plan.with_capabilities(wire.capabilities))
+        .and_then(|plan| plan.with_resource_limits(wire.resources))
         .map_err(serde::de::Error::custom)
     }
 }
@@ -339,6 +344,7 @@ impl EnvironmentPlan {
             tools: Vec::new(),
             debian_packages: Vec::new(),
             capabilities: EnvironmentCapabilities::default(),
+            resources: EnvironmentResourceLimits::default(),
             warnings,
             conflicts,
         };
@@ -404,6 +410,20 @@ impl EnvironmentPlan {
     }
 
     #[must_use]
+    pub const fn resource_limits(&self) -> EnvironmentResourceLimits {
+        self.resources
+    }
+
+    pub fn with_resource_limits(
+        mut self,
+        resources: EnvironmentResourceLimits,
+    ) -> Result<Self, EnvironmentPlanError> {
+        self.resources = resources;
+        self.normalize_and_validate()?;
+        Ok(self)
+    }
+
+    #[must_use]
     pub fn warnings(&self) -> &[EnvironmentWarning] {
         &self.warnings
     }
@@ -454,6 +474,9 @@ impl EnvironmentPlan {
         }
         normalize_mise_tools(&mut self.tools)?;
         normalize_debian_packages(&mut self.debian_packages)?;
+        self.resources
+            .validate()
+            .map_err(EnvironmentPlanError::InvalidResourceLimits)?;
 
         normalize_warnings(&mut self.warnings, &self.targets)?;
         normalize_conflicts(&mut self.conflicts, &self.targets)
@@ -609,6 +632,7 @@ pub enum EnvironmentPlanError {
     UnsupportedLockSchema(String),
     FingerprintMismatch,
     MissingSourceDigest(String),
+    InvalidResourceLimits(String),
     Serialization(String),
 }
 

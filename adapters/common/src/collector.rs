@@ -189,6 +189,7 @@ mod tests {
                 file: Some(String::from("src/lib.rs")),
             },
             execution: ExecutionResolution::direct("tool", root, "test", 100),
+            cancellation: Default::default(),
             debug: false,
         }
     }
@@ -201,6 +202,8 @@ mod tests {
             status: None,
             stdout: Vec::new(),
             stderr: Vec::new(),
+            stdout_truncated_bytes: 0,
+            stderr_truncated_bytes: 0,
             timeout: Some(Duration::from_secs(12)),
             detail: String::new(),
         }))

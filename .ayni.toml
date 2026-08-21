@@ -12,6 +12,13 @@ enabled = ["rust"]
 [concurrency]
 amount = 1
 
+[environment.resources]
+cpus = 4
+memory_mib = 8192
+memory_swap_mib = 8192
+pids = 2048
+nofile = 8192
+
 [rust]
 roots = [
   ".",

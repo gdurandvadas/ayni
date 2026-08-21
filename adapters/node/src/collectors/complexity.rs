@@ -227,6 +227,7 @@ mod tests {
                 ..Scope::default()
             },
             execution: ExecutionResolution::direct("npm", PathBuf::from("/repo"), "lock", 100),
+            cancellation: Default::default(),
             debug: false,
         };
 

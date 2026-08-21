@@ -1,14 +1,15 @@
 use crate::policy::load_from_path;
 use ayni_core::{
-    AyniPolicy, DockerAccess, Language, NetworkAccess, PolicyEffectivenessFacts,
-    PolicyEffectivenessWarning, SignalKind, ThresholdFloat, ToolCommandOverride,
+    AyniPolicy, DockerAccess, EnvironmentResourceLimits, Language, NetworkAccess,
+    PolicyEffectivenessFacts, PolicyEffectivenessWarning, SignalKind, ThresholdFloat,
+    ToolCommandOverride,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 
-const CONTRACT_PROJECTION_VERSION: &str = "0.2.0";
+const CONTRACT_PROJECTION_VERSION: &str = "0.3.0";
 const SIGNALS: [SignalKind; 6] = [
     SignalKind::Test,
     SignalKind::Coverage,
@@ -32,6 +33,7 @@ struct EnvironmentProjection {
     debian_packages: Vec<String>,
     docker: DockerAccess,
     network: NetworkAccess,
+    resources: EnvironmentResourceLimits,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,6 +158,7 @@ fn project(
             debian_packages: policy.environment_debian_packages().to_vec(),
             docker: capabilities.docker,
             network: capabilities.network,
+            resources: policy.environment_resource_limits(),
         },
         languages,
         warnings: policy.effectiveness_warnings(adapter_facts),
@@ -258,6 +261,16 @@ fn render_human(projection: &ContractProjection) -> String {
         output,
         "  docker: {:?} | network: {:?}",
         projection.environment.docker, projection.environment.network
+    )
+    .expect("writing to String cannot fail");
+    writeln!(
+        output,
+        "  resources: cpus={} memory={}MiB memory+swap={}MiB pids={} nofile={}",
+        projection.environment.resources.cpus,
+        projection.environment.resources.memory_mib,
+        projection.environment.resources.memory_swap_mib,
+        projection.environment.resources.pids,
+        projection.environment.resources.nofile,
     )
     .expect("writing to String cannot fail");
     writeln!(output, "  tools:").expect("writing to String cannot fail");

@@ -1,6 +1,7 @@
 use std::env;
 use std::io::{self, IsTerminal};
 
+pub(crate) mod cancellation;
 pub mod fallback;
 pub mod layout;
 pub mod md_report;

@@ -41,10 +41,11 @@ pub(crate) fn build_plan(
 ) -> Result<EnvironmentPlan, ShowError> {
     let (repo_root, config, config_bytes, policy) = load_context(operation)?;
     let platforms = default_platforms();
-    let (targets, warnings, mut conflicts) =
+    let (targets, mut warnings, mut conflicts) =
         discover_targets(&repo_root, &policy, &platforms, registry)?;
     let tools = repository_tools(&repo_root, &config, &policy)?;
     let debian_packages = repository_debian_packages(&repo_root, &config, &policy)?;
+    warnings.extend(debian_package_warnings(&debian_packages));
     conflicts.extend(generic_tool_conflicts(&tools, &targets)?);
     EnvironmentPlan::new(
         repository_identity(&repo_root, &config_bytes)?,
@@ -56,12 +57,30 @@ pub(crate) fn build_plan(
     .and_then(|plan| plan.with_tools(tools))
     .and_then(|plan| plan.with_debian_packages(debian_packages))
     .and_then(|plan| plan.with_capabilities(policy.environment_capabilities()))
+    .and_then(|plan| plan.with_resource_limits(policy.environment_resource_limits()))
     .map_err(|error| {
         ShowError::environment(format!(
             "failed to aggregate environment plan from {}: {error}",
             config.display()
         ))
     })
+}
+
+fn debian_package_warnings(
+    packages: &[DebianPackageRequirement],
+) -> Vec<ayni_core::EnvironmentWarning> {
+    packages
+        .iter()
+        .filter(|package| !package.package.contains('='))
+        .map(|package| ayni_core::EnvironmentWarning {
+            code: String::from("environment.debian.unpinned"),
+            message: format!(
+                "Debian package {} is not version-pinned; the configured repository may resolve different content on a later build",
+                package.package
+            ),
+            target: None,
+        })
+        .collect()
 }
 
 fn load_context(
@@ -459,6 +478,17 @@ fn render_capabilities(output: &mut String, plan: &EnvironmentPlan) {
         )
         .expect("string write");
     }
+    let resources = plan.resource_limits();
+    writeln!(
+        output,
+        "runtime resources: cpus={} memory={}MiB memory+swap={}MiB pids={} nofile={}",
+        resources.cpus,
+        resources.memory_mib,
+        resources.memory_swap_mib,
+        resources.pids,
+        resources.nofile,
+    )
+    .expect("string write");
 }
 
 fn render_targets(output: &mut String, plan: &EnvironmentPlan) {
