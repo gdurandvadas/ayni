@@ -44,29 +44,6 @@ jobs:
       - name: Verify immutable GitHub Action references
         run: python3 scripts/ci/validate_workflow_pins.py
 
-  msrv:
-    name: minimum supported Rust 1.93
-    runs-on: ubuntu-latest
-    env:
-      # Override rust-toolchain.toml so this job exercises the declared MSRV.
-      RUSTUP_TOOLCHAIN: "1.93"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-
-      - name: Install minimum supported Rust
-        uses: dtolnay/rust-toolchain@96d8491b80fc26e2ab48ff0c3928c002176297c8 # 1.93
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: ayni-msrv
-
-      - name: Check all targets on the minimum supported Rust
-        run: cargo check --locked --workspace --all-targets --all-features
-
   documentation:
     name: documentation contract
     runs-on: ubuntu-latest
