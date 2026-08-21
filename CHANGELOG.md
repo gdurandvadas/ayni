@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/gdurandvadas/ayni/compare/ayni-v0.10.1...ayni-v0.10.2) (2026-08-21)
+
+
+### Bug Fixes
+
+* **release:** publish binaries independently of validation ([5607dbc](https://github.com/gdurandvadas/ayni/commit/5607dbcf3e728ad187e1de951cba8b55969d2d73))
+
 ## [0.10.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.10.0...ayni-v0.10.1) (2026-08-21)
 
 
