@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.10.2...ayni-v0.11.0) (2026-08-22)
+
+
+### Features
+
+* **environment:** optimize and harden managed execution ([97793fa](https://github.com/gdurandvadas/ayni/commit/97793fac4018f0997de5931311b9fd19f0cf3fa2))
+
+
+### Bug Fixes
+
+* **environment:** optimize and harden managed execution ([#56](https://github.com/gdurandvadas/ayni/issues/56)) ([97793fa](https://github.com/gdurandvadas/ayni/commit/97793fac4018f0997de5931311b9fd19f0cf3fa2))
+* **node:** preserve workspace dependencies with relative config ([#68](https://github.com/gdurandvadas/ayni/issues/68)) ([c5f7220](https://github.com/gdurandvadas/ayni/commit/c5f72208eb577e3220085592392fac48a0ccc6ec))
+
 ## [0.10.2](https://github.com/gdurandvadas/ayni/compare/ayni-v0.10.1...ayni-v0.10.2) (2026-08-21)
 
 
