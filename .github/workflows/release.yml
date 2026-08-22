@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing Ayni release tag whose managed image should be rebuilt
+        description: Existing Ayni release tag whose assets and managed image should be rebuilt
         required: true
         type: string
 
@@ -17,7 +17,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      contents: read
     outputs:
       release_created: ${{ steps.manual-release.outputs.release_created || steps.release.outputs.release_created }}
       release_tag: ${{ steps.manual-release.outputs.tag || steps.release.outputs.tag_name }}
@@ -50,6 +51,7 @@ jobs:
         id: manual-release
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         shell: bash
         run: |
@@ -58,6 +60,7 @@ jobs:
             echo "release_tag must match ayni-v<semver>" >&2
             exit 1
           fi
+          gh api --silent "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}"
           {
             echo "release_created=true"
             echo "tag=$RELEASE_TAG"
@@ -188,11 +191,11 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     # Release Please creates the public release before downstream jobs run.
-    # Keep validation independent so successful builds publish assets promptly.
+    # Existing-tag recovery overwrites the same assets without creating a release.
     needs:
       - release
       - build
-    if: ${{ github.event_name == 'push' && needs.release.outputs.release_created == 'true' }}
+    if: ${{ needs.release.outputs.release_created == 'true' }}
     permissions:
       contents: write
 
@@ -212,6 +215,7 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ needs.release.outputs.release_tag }}
+          overwrite_files: true
           files: |
             dist/**/*.tar.gz
             dist/SHA256SUMS
