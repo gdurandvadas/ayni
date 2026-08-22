@@ -1,6 +1,6 @@
 use super::{Error, GIT_TIMEOUT, ensure_not_cancelled};
 use ayni_adapters_common::exec::run_command_structured_cancellable;
-use ayni_core::{CancellationToken, ChangeKind, ChangedPath};
+use ayni_core::{CancellationToken, ChangeKind, ChangedPath, lower_hex};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Read;
@@ -178,7 +178,7 @@ fn candidate_fingerprint(
         ensure_not_cancelled(cancellation, "impact fingerprinting")?;
         hash_untracked_path(&mut hasher, &context.root, path, cancellation)?;
     }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(format!("sha256:{}", lower_hex(hasher.finalize())))
 }
 
 pub(super) fn hash_untracked_path(

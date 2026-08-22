@@ -1,10 +1,9 @@
 use ayni_adapters_common::repository::{read_optional_contained_bytes, repository_relative};
 use ayni_core::{
     AdapterError, EnvironmentResolutionCapability, EnvironmentResolutionRequest, Language,
-    RequirementConfidence, TargetEnvironment, VersionRequirement,
+    RequirementConfidence, TargetEnvironment, VersionRequirement, sha256_fingerprint,
 };
 use node_semver::{Range, Version};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -176,7 +175,7 @@ fn read_verified_project_lock(
     let bytes = read_optional_contained_bytes(request.repo_root(), &context.path)
         .map_err(error)?
         .ok_or_else(|| error(format!("missing {}", context.path.display())))?;
-    let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    let digest = sha256_fingerprint(&bytes);
     let recorded = request
         .target()
         .dependency_locks

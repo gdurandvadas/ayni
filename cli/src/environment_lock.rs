@@ -2,9 +2,8 @@ use crate::application::{EnvLockOperation, EnvShowOperation, OutputFormat};
 use crate::environment;
 use ayni_core::{
     AdapterRegistry, ENVIRONMENT_LOCK_SCHEMA_VERSION, EnvironmentLock, EnvironmentPlan,
-    EnvironmentResolutionRequest,
+    EnvironmentResolutionRequest, sha256_fingerprint,
 };
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
@@ -320,7 +319,7 @@ fn source_digests(
                         candidate.display()
                     ))
                 })?;
-        digests.insert(path, format!("sha256:{:x}", Sha256::digest(bytes)));
+        digests.insert(path, sha256_fingerprint(bytes));
     }
     for target in plan.targets() {
         for dependency in &target.dependency_locks {

@@ -95,19 +95,16 @@ command = {}
     }
 
     fn command(&self, subcommand: &str) -> Command {
+        self.command_with_config(subcommand, self.config.to_str().expect("config"))
+    }
+
+    fn command_with_config(&self, subcommand: &str, config: &str) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_ayni"));
         command.current_dir(&self.root).args(["impact", subcommand]);
         if subcommand == "run" {
             command.arg("--host");
         }
-        command.args([
-            "--base",
-            &self.base,
-            "--config",
-            self.config.to_str().expect("config"),
-            "--output",
-            "json",
-        ]);
+        command.args(["--base", &self.base, "--config", config, "--output", "json"]);
         command
     }
 }
@@ -172,6 +169,32 @@ fn show_explains_reverse_dependency_impact_without_writing_artifacts() {
                 .any(|reason| reason["kind"] == "reverse_dependency")
         })
     }));
+    assert!(!fixture.root.join(".ayni/impact").exists());
+}
+
+#[test]
+fn show_resolves_relative_and_absolute_config_paths_to_the_same_plan() {
+    let fixture = Fixture::new();
+    let relative = run(fixture.command_with_config("show", "./.ayni.toml"));
+    assert!(
+        relative.status.success(),
+        "{}",
+        String::from_utf8_lossy(&relative.stderr)
+    );
+    let relative: Value = serde_json::from_slice(&relative.stdout).expect("relative plan");
+
+    let canonical_config = fixture.config.canonicalize().expect("canonical config");
+    let absolute =
+        run(fixture
+            .command_with_config("show", canonical_config.to_str().expect("absolute config")));
+    assert!(
+        absolute.status.success(),
+        "{}",
+        String::from_utf8_lossy(&absolute.stderr)
+    );
+    let absolute: Value = serde_json::from_slice(&absolute.stdout).expect("absolute plan");
+
+    assert_eq!(relative, absolute);
     assert!(!fixture.root.join(".ayni/impact").exists());
 }
 

@@ -52,7 +52,7 @@ pub(crate) fn run(mut request: Request) -> Result<RunOutcome, Error> {
 }
 
 fn prepare_request(request: &mut Request) -> Result<(PathBuf, AyniPolicy), String> {
-    let workspace_root = workspace_root_from_config_path(&request.config_path);
+    let workspace_root = workspace_root_from_config_path(&request.config_path)?;
     let policy = load_from_path(&request.config_path)?;
     validate_configured_root_containment(&workspace_root, &policy)?;
     validate_signal_enabled(&policy, request.kind)?;

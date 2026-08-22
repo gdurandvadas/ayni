@@ -2,8 +2,8 @@ use crate::BackendError;
 use crate::runtime::{WORKSPACE, target_environment};
 use ayni_core::{
     DependencyPreparationPlan, EnvironmentLock, PreparationOutput, PreparationOutputMode,
+    sha256_fingerprint, sha256_hex,
 };
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -109,7 +109,7 @@ fn stage_locked_input(
             input.path
         ))
     })?;
-    let actual = format!("sha256:{:x}", Sha256::digest(&bytes));
+    let actual = sha256_fingerprint(&bytes);
     if actual != input.digest {
         return Err(BackendError::environment(format!(
             "dependency input {} changed; run `ayni env lock`",
@@ -206,7 +206,7 @@ pub(crate) fn resolved_execution_environment(
     plan: &DependencyPreparationPlan,
     state_home: &str,
 ) -> BTreeMap<String, String> {
-    let target_hash = format!("{:x}", Sha256::digest(target_key(&plan.target)));
+    let target_hash = sha256_hex(target_key(&plan.target));
     plan.execution_environment
         .iter()
         .map(|(name, value)| {
@@ -229,7 +229,7 @@ pub(crate) fn preparation_digest(
                 "failed to serialize dependency preparation: {error}"
             ))
         })?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+    Ok(sha256_fingerprint(bytes))
 }
 
 pub(crate) fn unique_outputs(plans: &[DependencyPreparationPlan]) -> Vec<PreparationOutput> {
@@ -241,10 +241,7 @@ pub(crate) fn unique_outputs(plans: &[DependencyPreparationPlan]) -> Vec<Prepara
 }
 
 pub(crate) fn output_key(output: &PreparationOutput) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(format!("{}\0{}", output.path, output.mount_path))
-    )
+    sha256_hex(format!("{}\0{}", output.path, output.mount_path))
 }
 
 pub(crate) fn target_key(target: &ayni_core::TargetIdentity) -> String {

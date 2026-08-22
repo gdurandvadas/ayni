@@ -32,11 +32,7 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome
     let total_started = Instant::now();
     let phase_started = Instant::now();
     let config_path = PathBuf::from(config_path);
-    let workspace_root = workspace_root_from_config_path(&config_path);
-    let policy = policy::load_from_path(&config_path).map_err(AnalyzeError::InvalidContract)?;
-    validate_configured_root_containment(&workspace_root, &policy)
-        .map_err(AnalyzeError::InvalidContract)?;
-    ensure_analyze_directories(&workspace_root)?;
+    let (workspace_root, policy) = prepare_contract(&config_path)?;
     profile_phase(options.debug, "contract_setup", phase_started.elapsed());
 
     let output_mode = options.output_mode;
@@ -91,6 +87,16 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome
     profile_phase(debug, "total", total_started.elapsed());
 
     Ok(artifact.outcome())
+}
+
+fn prepare_contract(config_path: &Path) -> Result<(PathBuf, AyniPolicy), AnalyzeError> {
+    let workspace_root =
+        workspace_root_from_config_path(config_path).map_err(AnalyzeError::InvalidContract)?;
+    let policy = policy::load_from_path(config_path).map_err(AnalyzeError::InvalidContract)?;
+    validate_configured_root_containment(&workspace_root, &policy)
+        .map_err(AnalyzeError::InvalidContract)?;
+    ensure_analyze_directories(&workspace_root)?;
+    Ok((workspace_root, policy))
 }
 
 fn profile_phase(debug: bool, phase: &str, elapsed: Duration) {

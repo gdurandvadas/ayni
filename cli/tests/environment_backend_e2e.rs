@@ -278,7 +278,7 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     assert!(managed_args.contains("AYNI_MANAGED_TARGET_ENVIRONMENTS="));
     assert!(managed_args.contains("rust:one"));
     assert!(managed_args.contains("rust:two"));
-    assert!(managed_args.ends_with("--output\nhuman\n"));
+    assert!(managed_args.ends_with("check\n--host\n--config\n./.ayni.toml\n--output\nhuman\n"));
     assert!(managed_args.contains("--entrypoint\n/bin/sh"));
     assert!(managed_args.contains(&format!(
         "type=bind,source={},target=/opt/ayni/checkout,readonly",

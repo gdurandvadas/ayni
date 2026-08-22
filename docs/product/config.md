@@ -461,12 +461,31 @@ migration posture.
 
 ## Dependency rules
 
-Forbidden edges use the same map style as size: keys and values are glob patterns describing crate or package paths.
+Forbidden edges use a map from source-endpoint globs to destination-endpoint
+globs. Each adapter defines the endpoint paths represented by its dependency
+graph.
 
 ```toml
 [rust.deps.forbidden]
 "core" = ["adapters/*", "cli"]
 ```
+
+For Node, the graph is built from the governing workspace `package.json` and
+the package manifests selected by its workspace patterns. Its endpoints are the
+complete, repository-relative directories of those packages, and its edges are
+workspace-package dependencies declared in package manifests. Match the package
+directory itself, not files beneath it:
+
+```toml
+[node.deps.forbidden]
+"apps/web" = ["packages/server"]
+"packages/browser-*" = ["packages/server"]
+```
+
+A trailing descendant pattern such as `apps/web/**` does not match the
+`apps/web` package endpoint. Node dependency rules also do not inspect
+JavaScript, TypeScript, or Svelte imports; source-level import direction remains
+the responsibility of a linter such as ESLint.
 
 ---
 

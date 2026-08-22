@@ -1,5 +1,6 @@
 use super::*;
 use ayni_adapters_common::workspace::is_generated_workspace_entry;
+use ayni_core::{lower_hex, sha256_fingerprint};
 use sha2::{Digest, Sha256};
 
 const MANAGED_LOCK_FINGERPRINT: &str = "AYNI_MANAGED_LOCK_FINGERPRINT";
@@ -84,7 +85,7 @@ pub(crate) fn build_artifact_metadata_for_command(
 fn file_fingerprint(path: &Path) -> Result<String, String> {
     let bytes = fs::read(path)
         .map_err(|error| format!("failed to fingerprint {}: {error}", path.display()))?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+    Ok(sha256_fingerprint(bytes))
 }
 
 fn source_fingerprint(root: &Path) -> Result<String, String> {
@@ -116,7 +117,7 @@ fn source_fingerprint(root: &Path) -> Result<String, String> {
             hash_field(&mut hasher, special_file_type(&metadata).as_bytes());
         }
     }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(format!("sha256:{}", lower_hex(hasher.finalize())))
 }
 
 fn collect_source_entries(
@@ -247,23 +248,56 @@ pub(crate) fn emit_analyze_outputs(
     Ok(())
 }
 
-pub(crate) fn workspace_root_from_config_path(config_path: &Path) -> PathBuf {
-    let Some(parent) = config_path.parent() else {
-        return PathBuf::from(".");
-    };
-    if parent.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        parent.to_path_buf()
-    }
+pub(crate) fn workspace_root_from_config_path(config_path: &Path) -> Result<PathBuf, String> {
+    let parent = config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    parent.canonicalize().map_err(|error| {
+        format!(
+            "failed to resolve repository root {} for contract {}: {error}",
+            parent.display(),
+            config_path.display()
+        )
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::source_fingerprint;
+    use super::{source_fingerprint, workspace_root_from_config_path};
     use ayni_adapters_common::workspace::GENERATED_WORKSPACE_ENTRY_NAMES;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    #[test]
+    fn default_relative_contract_resolves_a_canonical_operational_root() {
+        let expected = std::env::current_dir()
+            .expect("current directory")
+            .canonicalize()
+            .expect("canonical current directory");
+
+        let actual =
+            workspace_root_from_config_path(Path::new("./.ayni.toml")).expect("workspace root");
+
+        assert_eq!(actual, expected);
+        assert!(actual.is_absolute());
+    }
+
+    #[test]
+    fn absolute_and_relative_contract_spellings_resolve_the_same_root() {
+        let expected = std::env::current_dir()
+            .expect("current directory")
+            .canonicalize()
+            .expect("canonical current directory");
+        let absolute = expected.join(".ayni.toml");
+
+        assert_eq!(
+            workspace_root_from_config_path(Path::new("./.ayni.toml"))
+                .expect("relative workspace root"),
+            workspace_root_from_config_path(&absolute).expect("absolute workspace root")
+        );
+    }
 
     #[test]
     fn generated_workspace_entries_do_not_change_source_provenance() {

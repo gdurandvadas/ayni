@@ -5,7 +5,6 @@ use crate::signal::{
     SizeOffender, TestFailure,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 /// Adapter-owned, signal-neutral hint from which the CLI can render an exact
@@ -500,12 +499,7 @@ fn canonical_finding_key(
 }
 
 fn finding_id(canonical: &[u8]) -> String {
-    let digest = Sha256::digest(canonical);
-    let mut encoded = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write;
-        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
-    }
+    let encoded = crate::sha256_hex(canonical);
     format!("ayni:finding:v1:sha256:{encoded}")
 }
 
