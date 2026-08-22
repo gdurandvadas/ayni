@@ -13,6 +13,23 @@ Ayni is an open-source code-quality signal tool for AI agents.
 
 - Use PR titles in the format `<change-type>(<scope>): <description>`.
 
+## Release Workflows
+
+- Treat creation of the public GitHub release as a durable boundary. Every
+  downstream publication step—binary assets, checksums, OCI images, signatures,
+  and released-evidence validation—must be idempotent and manually recoverable
+  for an existing release tag.
+- Do not assume rerunning a failed workflow will use a later workflow fix;
+  GitHub reruns use the original event revision. Keep an explicit
+  `workflow_dispatch` recovery path on the default branch.
+- Recovery must verify that the release already exists, preserve provenance from
+  the tagged source commit, intentionally overwrite same-named assets, and fail
+  closed when any architecture, scan, signature, or validation evidence is
+  missing.
+- When changing release orchestration or upgrading a release action, validate
+  both initial publication and existing-tag recovery, including every supported
+  architecture.
+
 ## Documentation
 
 Read these before implementing anything. They are the source of truth for
