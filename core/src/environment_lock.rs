@@ -2,10 +2,9 @@ use crate::environment_provisioning::normalize_debian_package_spec;
 use crate::{
     EnvironmentCapabilities, EnvironmentPlanError, EnvironmentResourceLimits,
     RequirementConfidence, RequirementSource, ResolvedEnvironmentPlan, SignalKind, TargetIdentity,
-    TargetPlatform, ToolInstallationScope, VersionRequirement,
+    TargetPlatform, ToolInstallationScope, VersionRequirement, sha256_fingerprint,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
@@ -423,7 +422,7 @@ impl EnvironmentLock {
         };
         let bytes = serde_json::to_vec(&document)
             .map_err(|error| EnvironmentPlanError::Serialization(error.to_string()))?;
-        Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+        Ok(sha256_fingerprint(bytes))
     }
 
     #[must_use]

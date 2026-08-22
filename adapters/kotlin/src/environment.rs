@@ -13,9 +13,8 @@ use ayni_core::{
     EnvironmentContribution, EnvironmentDiscoveryRequest, EnvironmentWarning, Language,
     PackageManagerRequirement, ProvisioningSupport, RequirementConfidence, RequirementSource,
     RuntimeRequirement, SignalKind, SignalToolRequirement, TargetEnvironment,
-    ToolInstallationScope, VersionRequirement,
+    ToolInstallationScope, VersionRequirement, sha256_fingerprint,
 };
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -488,7 +487,7 @@ fn gradle_input(
     let kind = gradle_input_kind(&relative_path);
     lock(
         &relative_path,
-        format!("sha256:{:x}", Sha256::digest(bytes)),
+        sha256_fingerprint(bytes),
         owner_root,
         source(kind, &relative_path, None, RequirementConfidence::Exact)?,
     )

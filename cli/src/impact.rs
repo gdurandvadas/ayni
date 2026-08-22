@@ -555,7 +555,7 @@ mod tests {
     use super::{ExecutionMode, reconcile_signal_row};
     use ayni_core::{
         Budget, CancellationToken, ChangeKind, Language, Offenders, Scope, SelectedCheck,
-        SignalKind, SignalResult, SignalRow, TestBudget, TestResult,
+        SignalKind, SignalResult, SignalRow, TestBudget, TestResult, lower_hex,
     };
     use sha2::{Digest, Sha256};
 
@@ -619,7 +619,7 @@ mod tests {
     fn untracked_hash(root: &std::path::Path, path: &str) -> String {
         let mut hasher = Sha256::new();
         hash_untracked_path(&mut hasher, root, path, &CancellationToken::default()).expect("hash");
-        format!("{:x}", hasher.finalize())
+        lower_hex(hasher.finalize())
     }
     #[test]
     fn rejects_mismatched_adapter_row_as_completed_impact_evidence() {

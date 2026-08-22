@@ -4,9 +4,8 @@ use ayni_core::{
     AdapterRegistry, Architecture, AyniPolicy, DebianPackageRequirement, DockerAccess,
     EnvironmentConflict, EnvironmentPlan, Libc, MiseToolRequirement, OperatingSystem,
     RepositoryIdentity, RequirementConfidence, RequirementSource, TargetIdentity, TargetPlatform,
-    VersionRequirement,
+    VersionRequirement, sha256_hex,
 };
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::fs;
@@ -361,7 +360,7 @@ fn repository_identity(
         .to_owned();
     Ok(RepositoryIdentity {
         name,
-        contract_digest: format!("{:x}", Sha256::digest(config_bytes)),
+        contract_digest: sha256_hex(config_bytes),
     })
 }
 

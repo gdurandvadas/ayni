@@ -11,9 +11,9 @@ use ayni_core::{
     EnvironmentContribution, EnvironmentDiscoveryRequest, EnvironmentWarning, Language,
     ProvisioningSupport, RequirementConfidence, RequirementSource, RuntimeRequirement, SignalKind,
     SignalToolRequirement, TargetEnvironment, ToolInstallationScope, VersionRequirement,
+    sha256_fingerprint,
 };
 use glob::Pattern;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -834,7 +834,7 @@ fn dependency_locks(
             };
             Ok(DependencyLockRequirement {
                 path: path.clone(),
-                digest: format!("sha256:{:x}", Sha256::digest(content)),
+                digest: sha256_fingerprint(content),
                 owner_root: relative(repo_root, owner_root)?,
                 source: source(kind, &path, None, RequirementConfidence::Exact)?,
             })

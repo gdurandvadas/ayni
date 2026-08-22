@@ -10,9 +10,8 @@ use ayni_core::{
     EnvironmentContribution, EnvironmentDiscoveryRequest, EnvironmentWarning, Language,
     PackageManagerRequirement, ProvisioningSupport, RequirementConfidence, RequirementSource,
     RuntimeRequirement, SignalToolRequirement, TargetEnvironment, ToolInstallationScope,
-    VersionRequirement,
+    VersionRequirement, sha256_fingerprint,
 };
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -783,7 +782,7 @@ fn native_lock_inputs(
             let relative_path = relative(repo_root, &path)?;
             Ok(DependencyLockRequirement {
                 path: relative_path.clone(),
-                digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+                digest: sha256_fingerprint(bytes),
                 owner_root: relative(repo_root, owner)?,
                 source: source(
                     repo_root,
@@ -816,7 +815,7 @@ fn manifest_inputs(
             let path = relative(repo_root, &manifest)?;
             Ok(DependencyLockRequirement {
                 path: path.clone(),
-                digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+                digest: sha256_fingerprint(bytes),
                 owner_root: relative(repo_root, owner)?,
                 source: source(
                     repo_root,
@@ -849,7 +848,7 @@ fn package_manager_config_inputs(
             let input_path = relative(repo_root, &path)?;
             Ok(DependencyLockRequirement {
                 path: input_path.clone(),
-                digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+                digest: sha256_fingerprint(bytes),
                 owner_root: relative(repo_root, owner)?,
                 source: source(
                     repo_root,

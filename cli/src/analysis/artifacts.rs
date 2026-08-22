@@ -1,5 +1,6 @@
 use super::*;
 use ayni_adapters_common::workspace::is_generated_workspace_entry;
+use ayni_core::{lower_hex, sha256_fingerprint};
 use sha2::{Digest, Sha256};
 
 const MANAGED_LOCK_FINGERPRINT: &str = "AYNI_MANAGED_LOCK_FINGERPRINT";
@@ -84,7 +85,7 @@ pub(crate) fn build_artifact_metadata_for_command(
 fn file_fingerprint(path: &Path) -> Result<String, String> {
     let bytes = fs::read(path)
         .map_err(|error| format!("failed to fingerprint {}: {error}", path.display()))?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+    Ok(sha256_fingerprint(bytes))
 }
 
 fn source_fingerprint(root: &Path) -> Result<String, String> {
@@ -116,7 +117,7 @@ fn source_fingerprint(root: &Path) -> Result<String, String> {
             hash_field(&mut hasher, special_file_type(&metadata).as_bytes());
         }
     }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(format!("sha256:{}", lower_hex(hasher.finalize())))
 }
 
 fn collect_source_entries(

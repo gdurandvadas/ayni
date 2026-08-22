@@ -7,8 +7,8 @@ use ayni_core::{
     EnvironmentContribution, EnvironmentDiscoveryRequest, Language, PackageManagerRequirement,
     ProvisioningSupport, RequirementConfidence, RequirementSource, RuntimeRequirement,
     SignalToolRequirement, TargetEnvironment, ToolInstallationScope, VersionRequirement,
+    sha256_fingerprint,
 };
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 #[derive(Debug, Default)]
@@ -577,7 +577,7 @@ fn inputs(
             }
             Ok(DependencyLockRequirement {
                 path: rel(repo, &p)?,
-                digest: format!("sha256:{:x}", Sha256::digest(b)),
+                digest: sha256_fingerprint(b),
                 owner_root: own.clone(),
                 source: source(
                     repo,

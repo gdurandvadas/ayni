@@ -1,7 +1,8 @@
 use crate::{BackendError, concise_output};
 use ayni_adapters_common::exec::run_command;
-use ayni_core::{Architecture, EnvironmentLock, EnvironmentPlan, ProvisioningBase};
-use sha2::{Digest, Sha256};
+use ayni_core::{
+    Architecture, EnvironmentLock, EnvironmentPlan, ProvisioningBase, sha256_fingerprint,
+};
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
@@ -258,7 +259,7 @@ fn digest_contained_file(repo_root: &Path, path: &Path) -> Result<String, Backen
             path.display()
         ))
     })?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+    Ok(sha256_fingerprint(bytes))
 }
 
 pub(crate) fn host_architecture() -> Result<Architecture, BackendError> {

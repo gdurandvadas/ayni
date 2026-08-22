@@ -10,8 +10,8 @@ use ayni_core::{
     EnvironmentContribution, EnvironmentDiscoveryRequest, EnvironmentWarning, Language,
     ProvisioningSupport, RequirementConfidence, RequirementSource, RuntimeRequirement, SignalKind,
     SignalToolRequirement, TargetEnvironment, ToolInstallationScope, VersionRequirement,
+    sha256_fingerprint,
 };
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -774,7 +774,7 @@ fn dependency_locks(
                 let relative_path = relative(repo_root, &path)?;
                 Ok(DependencyLockRequirement {
                     path: relative_path.clone(),
-                    digest: format!("sha256:{:x}", Sha256::digest(&bytes)),
+                    digest: sha256_fingerprint(&bytes),
                     owner_root: relative(repo_root, repo_root)?,
                     source: source(
                         repo_root,
@@ -849,8 +849,8 @@ mod tests {
     #[test]
     fn digests_inputs_with_sha256() {
         assert_eq!(
-            format!("{:x}", Sha256::digest(b"abc")),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            sha256_fingerprint(b"abc"),
+            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
 

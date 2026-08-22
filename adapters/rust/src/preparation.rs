@@ -1,9 +1,8 @@
 use ayni_core::{
     AdapterError, DependencyPreparationCapability, DependencyPreparationPlan,
     DependencyPreparationRequest, Language, PreparationCommand, PreparationInput,
-    PreparationScaffold,
+    PreparationScaffold, sha256_hex,
 };
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -69,8 +68,8 @@ impl DependencyPreparationCapability for RustDependencyPreparationCapability {
 }
 
 fn cargo_target_directory(target_root: &str) -> String {
-    let digest = Sha256::digest(target_root.as_bytes());
-    format!("/home/ayni/.cache/cargo/targets/{digest:x}")
+    let digest = sha256_hex(target_root);
+    format!("/home/ayni/.cache/cargo/targets/{digest}")
 }
 
 fn cargo_scaffolds(

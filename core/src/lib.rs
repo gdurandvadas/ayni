@@ -10,6 +10,7 @@ pub mod environment_preparation;
 mod environment_provisioning;
 pub mod environment_resolution;
 pub mod finding;
+mod hash;
 pub mod impact;
 pub mod impact_result;
 pub mod language;
@@ -54,6 +55,7 @@ pub use environment_preparation::{
     PreparationScaffold,
 };
 pub use environment_resolution::{EnvironmentResolutionCapability, EnvironmentResolutionRequest};
+pub use hash::{lower_hex, sha256_fingerprint, sha256_hex};
 pub use impact::{
     ChangeKind, ChangedPath, ImpactCapability, ImpactConfidence, ImpactContribution, ImpactError,
     ImpactIdentity, ImpactIdentityKind, ImpactPlan, ImpactReason, ImpactReasonKind, ImpactRequest,
