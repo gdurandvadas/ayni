@@ -253,6 +253,196 @@ fn package_and_dependency_forms_select_one_rust_target() {
 }
 
 #[test]
+fn relative_config_preserves_nested_node_workspace_dependency_members() {
+    let tempdir = TempDir::new().expect("tempdir");
+    let root = tempdir.path();
+    let frontend = root.join("frontend");
+    fs::create_dir_all(frontend.join("apps/web")).expect("web package");
+    fs::create_dir_all(frontend.join("packages/bff")).expect("bff package");
+    fs::create_dir_all(frontend.join("packages/ui")).expect("ui package");
+    fs::write(
+        frontend.join("package.json"),
+        r#"{"name":"@fixture/frontend","private":true,"workspaces":["apps/*","packages/*"]}"#,
+    )
+    .expect("workspace manifest");
+    fs::write(
+        frontend.join("apps/web/package.json"),
+        r#"{"name":"@fixture/web","dependencies":{"@fixture/bff":"workspace:*","@fixture/ui":"workspace:*"}}"#,
+    )
+    .expect("web manifest");
+    fs::write(
+        frontend.join("packages/bff/package.json"),
+        r#"{"name":"@fixture/bff"}"#,
+    )
+    .expect("bff manifest");
+    fs::write(
+        frontend.join("packages/ui/package.json"),
+        r#"{"name":"@fixture/ui"}"#,
+    )
+    .expect("ui manifest");
+    let config = root.join(".ayni.toml");
+    fs::write(
+        &config,
+        format!(
+            "[checks]\n{}\n\n[languages]\nenabled = [\"node\"]\n\n[node]\nroots = [\"frontend\"]\n\n[node.deps.forbidden]\n\"frontend/apps/web\" = [\"frontend/packages/bff\"]\n",
+            all_checks("deps")
+        ),
+    )
+    .expect("policy");
+
+    let run = |config_path: &str| {
+        ayni()
+            .current_dir(root)
+            .args([
+                "verify",
+                "deps",
+                "--host",
+                "--language",
+                "node",
+                "--config",
+                config_path,
+                "--output",
+                "json",
+            ])
+            .output()
+            .expect("verify node dependencies")
+    };
+
+    let relative = run("./.ayni.toml");
+    assert_eq!(
+        relative.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&relative.stderr)
+    );
+    let relative: Value = serde_json::from_slice(&relative.stdout).expect("relative artifact");
+    assert_eq!(relative["config_path"], "./.ayni.toml");
+    assert_eq!(
+        relative["repository_root"],
+        root.canonicalize()
+            .expect("canonical fixture")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert_eq!(relative["rows"][0]["result"]["crate_count"], 4);
+    assert_eq!(relative["rows"][0]["result"]["edge_count"], 2);
+    assert_eq!(relative["rows"][0]["result"]["violation_count"], 1);
+    assert_eq!(relative["rows"][0]["pass"], false);
+
+    let canonical_config = config.canonicalize().expect("canonical config");
+    let absolute = run(canonical_config.to_str().expect("config path"));
+    assert_eq!(absolute.status.code(), Some(1));
+    let absolute: Value = serde_json::from_slice(&absolute.stdout).expect("absolute artifact");
+    assert_eq!(
+        absolute["config_path"],
+        canonical_config.to_string_lossy().as_ref()
+    );
+    assert_eq!(relative["repository_root"], absolute["repository_root"]);
+    assert_eq!(
+        relative["rows"][0]["scope"]["workspace_root"],
+        absolute["rows"][0]["scope"]["workspace_root"]
+    );
+    assert_eq!(relative["rows"][0]["result"], absolute["rows"][0]["result"]);
+    assert_eq!(relative["rows"][0]["pass"], absolute["rows"][0]["pass"]);
+    assert_eq!(
+        relative["rows"][0]["offenders"]["items"][0]["id"],
+        absolute["rows"][0]["offenders"]["items"][0]["id"]
+    );
+
+    let managed_lock_fingerprint = format!("sha256:{}", "1".repeat(64));
+    let managed = ayni()
+        .current_dir(root)
+        .env(
+            "AYNI_MANAGED_TARGET_ENVIRONMENTS",
+            r#"{"node:frontend":{}}"#,
+        )
+        .env("AYNI_MANAGED_LOCK_FINGERPRINT", &managed_lock_fingerprint)
+        .env(
+            "AYNI_MANAGED_TOOL_VERSIONS",
+            r#"[{"tool":"node:frontend:runtime:node","version":"24.14.0"}]"#,
+        )
+        .args([
+            "verify",
+            "deps",
+            "--host",
+            "--language",
+            "node",
+            "--config",
+            "./.ayni.toml",
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("managed inner Node dependency verification");
+    assert_eq!(
+        managed.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&managed.stderr)
+    );
+    let managed: Value = serde_json::from_slice(&managed.stdout).expect("managed artifact");
+    assert_eq!(managed["execution_mode"], "managed");
+    assert_eq!(managed["config_path"], "./.ayni.toml");
+    assert_eq!(
+        managed["repository_root"],
+        root.canonicalize()
+            .expect("canonical fixture")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert_eq!(
+        managed["environment_lock_fingerprint"],
+        managed_lock_fingerprint
+    );
+    assert_eq!(managed["completion"]["scope"], "requested");
+    assert_eq!(managed["completion"]["state"], "complete");
+    assert_eq!(managed["rows"][0]["result"]["crate_count"], 4);
+    assert_eq!(managed["rows"][0]["result"]["edge_count"], 2);
+    assert_eq!(managed["rows"][0]["result"]["violation_count"], 1);
+    assert_eq!(managed["rows"][0]["result"], relative["rows"][0]["result"]);
+
+    let run_check = |config_path: &str| {
+        ayni()
+            .current_dir(root)
+            .args([
+                "check",
+                "--host",
+                "--config",
+                config_path,
+                "--output",
+                "json",
+            ])
+            .output()
+            .expect("check node dependencies")
+    };
+    let relative_check = run_check("./.ayni.toml");
+    assert_eq!(relative_check.status.code(), Some(1));
+    let relative_check: Value =
+        serde_json::from_slice(&relative_check.stdout).expect("relative check artifact");
+    assert_eq!(relative_check["completion"]["scope"], "repository");
+    assert_eq!(relative_check["completion"]["state"], "complete");
+    assert_eq!(
+        relative_check["rows"][0]["result"],
+        relative["rows"][0]["result"]
+    );
+    assert!(
+        relative_check["rows"][0]["offenders"]["items"][0]["verification"]["command"]
+            .as_str()
+            .expect("verification command")
+            .contains("--config './.ayni.toml'")
+    );
+
+    let absolute_check = run_check(canonical_config.to_str().expect("config path"));
+    assert_eq!(absolute_check.status.code(), Some(1));
+    let absolute_check: Value =
+        serde_json::from_slice(&absolute_check.stdout).expect("absolute check artifact");
+    assert_eq!(
+        relative_check["rows"][0]["result"],
+        absolute_check["rows"][0]["result"]
+    );
+}
+
+#[test]
 fn ambiguous_language_and_unsafe_file_requests_fail_without_artifacts() {
     let fixture = RustFixture::new(&all_checks("size"), "");
     fs::write(fixture.root.join("package.json"), "{}\n").expect("node manifest");

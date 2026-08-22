@@ -67,9 +67,8 @@ fn prepare_plan(
     registry: &AdapterRegistry,
     cancellation: &CancellationToken,
 ) -> Result<(PathBuf, AyniPolicy, ImpactPlan, GitSnapshot), Error> {
-    let workspace_root = workspace_root_from_config_path(&operation.config)
-        .canonicalize()
-        .map_err(|error| Error::input(format!("failed to resolve repository root: {error}")))?;
+    let workspace_root =
+        workspace_root_from_config_path(&operation.config).map_err(Error::input)?;
     ensure_impact_artifact_ignored(&workspace_root, cancellation)?;
     let config = operation
         .config

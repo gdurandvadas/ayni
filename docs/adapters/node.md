@@ -26,7 +26,7 @@ use `--host` for those package managers.
 | `coverage` | `vitest`; `@vitest/coverage-v8` | managed: exact project versions from the native lockfile; host: no version enforced |
 | `size` | built-in JavaScript/TypeScript source scan | no external tool |
 | `complexity` | `eslint`; `@typescript-eslint/parser` | managed: exact project versions from the native lockfile; host: no version enforced |
-| `deps` | built-in package and workspace manifest graph | no external tool |
+| `deps` | built-in Node workspace package-manifest graph | no external tool |
 | `mutation` | unavailable | Ayni rejects Node mutation before invoking a tool; no override or managed tool is accepted |
 
 ## Focused verification
@@ -83,6 +83,20 @@ missing value produces a clear collector error. Coverage thresholds and
 dependency rules are optional: without `line_percent`, coverage has no policy
 threshold, and without `node.deps.forbidden`, no edges are forbidden.
 
+The dependency graph contains the governing workspace package and the declared
+workspace members matched from `package.json`. Edges come from workspace-package
+names declared in `dependencies`, `devDependencies`, `peerDependencies`, and
+`optionalDependencies`. Forbidden-edge globs match the complete,
+repository-relative package-directory endpoints in that graph. For example,
+use `apps/web` to match that package or `packages/*` to match package directories
+under `packages`; `apps/web/**` describes descendants and does not match the
+`apps/web` package endpoint itself.
+
+The dependency signal does not inspect JavaScript, TypeScript, or Svelte import
+statements. Keep source-level import boundaries in the owning linter, for example
+with ESLint `no-restricted-imports`; use Ayni dependency rules for relationships
+declared between workspace packages.
+
 Shared boundary rules are defined under [Threshold semantics](../product/config.md#threshold-semantics).
 Node line and branch coverage are independently enforced: a configured metric
 with missing or unparseable evidence fails the coverage row.
@@ -110,5 +124,5 @@ fn_cyclomatic = { warn = 10, fail = 20 }
 line_percent = { warn = 70, fail = 50 }
 
 [node.deps.forbidden]
-"apps/web/**" = ["apps/legacy/**"]
+"apps/web" = ["apps/legacy-*"]
 ```
