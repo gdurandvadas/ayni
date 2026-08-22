@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.0...ayni-v0.11.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **release:** recover environment image publishing ([#71](https://github.com/gdurandvadas/ayni/issues/71)) ([caaaed2](https://github.com/gdurandvadas/ayni/commit/caaaed273116721ef2ca90754757c43c9c99ecd2))
+
 ## [0.11.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.10.2...ayni-v0.11.0) (2026-08-22)
 
 
