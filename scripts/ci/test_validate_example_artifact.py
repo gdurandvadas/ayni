@@ -10,8 +10,7 @@ from validate_example_artifact import (
 )
 
 
-ROOT = "fixture"
-LEXICAL_ROOT = ROOT
+REPOSITORY_ROOT = "/workspace"
 
 
 def finding(level):
@@ -43,7 +42,7 @@ def artifact(*, language="python"):
             {
                 "kind": kind,
                 "language": language,
-                "scope": {"workspace_root": LEXICAL_ROOT},
+                "scope": {"workspace_root": REPOSITORY_ROOT},
                 "pass": not fails,
                 "result": result,
                 "budget": {"kind": kind},
@@ -59,7 +58,7 @@ def artifact(*, language="python"):
         "tool_versions": [
             {"tool": f"{language}:.:runtime:{language}", "version": "1.0.0"}
         ],
-        "repository_root": LEXICAL_ROOT,
+        "repository_root": REPOSITORY_ROOT,
         "invocation": {"command": "check", "languages": [language]},
         "completion": {
             "scope": "repository",
@@ -89,7 +88,7 @@ def validate(value, *, language="python", check_exit_code=None):
         value,
         language=language,
         expected_roots=["."],
-        repository_root=ROOT,
+        repository_root=REPOSITORY_ROOT,
         check_exit_code=check_exit_code,
     )
 
@@ -104,9 +103,9 @@ class ArtifactValidatorTests(unittest.TestCase):
             with self.subTest(language=language):
                 validate(artifact(language=language), language=language)
 
-    def test_relative_fixture_root_is_compared_lexically(self):
+    def test_managed_repository_root_is_canonical(self):
         value = artifact()
-        self.assertFalse(Path(value["repository_root"]).is_absolute())
+        self.assertTrue(Path(value["repository_root"]).is_absolute())
         validate(value)
 
     def test_wrong_check_exit_code(self):

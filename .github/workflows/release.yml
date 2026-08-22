@@ -464,7 +464,7 @@ jobs:
           python3 scripts/ci/validate_example_artifact.py \
             --artifact "$FIXTURE/.ayni/last/signals.json" \
             --language "$LANGUAGE" \
-            --repository-root . \
+            --repository-root /workspace \
             --check-exit-code "$check_code" \
             --expected-root .
 

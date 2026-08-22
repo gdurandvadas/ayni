@@ -146,9 +146,8 @@ def validate_artifact(
     if tool_names != sorted(set(tool_names)):
         fail("tool_versions must be sorted by unique tool name")
 
-    # Ayni preserves the normalized lexical parent of the supplied config path.
-    # Do not resolve this path: CI intentionally checks fixtures through a
-    # repository-relative config path, and the artifact records that same root.
+    # Managed quality runs record their canonical operational repository root.
+    # Configured target roots remain repository-relative and are validated below.
     expected_repository_root = repository_root
     if document.get("repository_root") != expected_repository_root:
         fail(
@@ -370,7 +369,7 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument(
         "--repository-root",
         required=True,
-        help="Normalized lexical fixture root supplied to check",
+        help="Canonical operational repository root recorded by check",
     )
     cli.add_argument(
         "--check-exit-code",
