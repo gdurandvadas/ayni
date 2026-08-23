@@ -17,6 +17,15 @@ pub(crate) const IMAGE_PREPARATION_LABEL: &str = "dev.ayni.environment.preparati
 pub(crate) const IMAGE_OWNER_LABEL: &str = "dev.ayni.environment.owner";
 pub(crate) const IMAGE_OWNER_VALUE: &str = "ayni";
 pub(crate) const IMAGE_SCHEMA_VERSION: &str = "0.5.0";
+pub(crate) const MISE_GITHUB_TOKEN_SECRET: &str = "MISE_GITHUB_TOKEN";
+
+const MISE_GITHUB_TOKEN_SECRET_MOUNT: &str =
+    "--mount=type=secret,id=MISE_GITHUB_TOKEN,uid=10001,gid=10001,mode=0400";
+const MISE_GITHUB_TOKEN_EXPORT: &str = concat!(
+    "if [ -r /run/secrets/MISE_GITHUB_TOKEN ]; then ",
+    "MISE_GITHUB_TOKEN=\"$(cat /run/secrets/MISE_GITHUB_TOKEN)\"; ",
+    "export MISE_GITHUB_TOKEN; fi; exec \"$@\""
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImagePlan {
@@ -315,24 +324,22 @@ fn mise_install_provisioning(inventory: &ProvisioningInventory) -> String {
     let mut output = String::new();
     for (_, experimental, coordinate) in coordinates {
         output.push_str("RUN ");
+        output.push_str(MISE_GITHUB_TOKEN_SECRET_MOUNT);
+        output.push(' ');
+        let mut argv = vec!["/bin/sh", "-eu", "-c", MISE_GITHUB_TOKEN_EXPORT, "--"];
         if experimental {
-            let argv = [
+            argv.extend([
                 "env",
                 "MISE_EXPERIMENTAL=1",
                 "mise",
                 "install",
                 "--yes",
                 coordinate.as_str(),
-            ];
-            output.push_str(
-                &serde_json::to_string(&argv)
-                    .expect("experimental Mise install argv serialization"),
-            );
+            ]);
         } else {
-            let argv = ["mise", "install", "--yes", coordinate.as_str()];
-            output
-                .push_str(&serde_json::to_string(&argv).expect("Mise install argv serialization"));
+            argv.extend(["mise", "install", "--yes", coordinate.as_str()]);
         }
+        output.push_str(&serde_json::to_string(&argv).expect("Mise install argv serialization"));
         output.push('\n');
     }
     output
@@ -491,7 +498,7 @@ mod tests {
         };
         let fragment = mise_install_provisioning(&inventory);
         let rust = fragment
-            .find("[\"mise\",\"install\",\"--yes\",\"rust\"]")
+            .find("\"mise\",\"install\",\"--yes\",\"rust\"")
             .expect("Rust config-backed layer");
         let node = fragment.find("node@24.14.0").expect("node layer");
         let nextest = fragment
@@ -504,9 +511,9 @@ mod tests {
         assert!(node < nextest);
         assert!(node < gocyclo);
         assert!(fragment.contains(
-            "[\"env\",\"MISE_EXPERIMENTAL=1\",\"mise\",\"install\",\"--yes\",\"go:github.com/fzipp/gocyclo/cmd/gocyclo@0.6.0\"]"
+            "\"env\",\"MISE_EXPERIMENTAL=1\",\"mise\",\"install\",\"--yes\",\"go:github.com/fzipp/gocyclo/cmd/gocyclo@0.6.0\""
         ));
-        assert_eq!(fragment.matches("RUN [").count(), 4);
+        assert_eq!(fragment.matches(MISE_GITHUB_TOKEN_SECRET_MOUNT).count(), 4);
     }
 
     #[test]
@@ -553,7 +560,14 @@ mod tests {
 
         assert_eq!(
             mise_install_provisioning(&inventory),
-            "RUN [\"mise\",\"install\",\"--yes\",\"rust\"]\n"
+            concat!(
+                "RUN --mount=type=secret,id=MISE_GITHUB_TOKEN,uid=10001,gid=10001,mode=0400 ",
+                "[\"/bin/sh\",\"-eu\",\"-c\",",
+                "\"if [ -r /run/secrets/MISE_GITHUB_TOKEN ]; then ",
+                "MISE_GITHUB_TOKEN=\\\"$(cat /run/secrets/MISE_GITHUB_TOKEN)\\\"; ",
+                "export MISE_GITHUB_TOKEN; fi; exec \\\"$@\\\"\",",
+                "\"--\",\"mise\",\"install\",\"--yes\",\"rust\"]\n"
+            )
         );
         let rustup = rustup_provisioning(&inventory);
         assert!(rustup.contains(
