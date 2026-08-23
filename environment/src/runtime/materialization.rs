@@ -224,6 +224,7 @@ fn materialize_preparation_outputs(
         cache_state,
         &pending,
     )?;
+    relocate_pending_output_links(&pending)?;
     publish_pending_outputs(root, image_plan, &mut pending)?;
     Ok(pending_destinations(pending))
 }
@@ -351,6 +352,176 @@ fn run_preparation_for_outputs(
         workspace_state: &workspace.path().join("repository"),
         output_states: &output_states,
     })
+}
+
+fn relocate_pending_output_links(outputs: &[PendingOutput<'_>]) -> Result<(), BackendError> {
+    for output in outputs.iter().filter(|output| !output.current) {
+        relocate_output_links(
+            output.output,
+            output.staging.as_ref().expect("staged output").path(),
+        )?;
+    }
+    Ok(())
+}
+
+// Managed launch stores each prepared output under a separate /opt tree. Keep
+// links within an output relative, but anchor links that cross an output
+// boundary at their logical workspace path so that isolation preserves the
+// topology in which the package manager created them.
+fn relocate_output_links(
+    output: &ayni_core::PreparationOutput,
+    state_root: &Path,
+) -> Result<(), BackendError> {
+    let logical_root = crate::preparation::workspace_mount(output);
+    let mut directories = vec![(state_root.to_path_buf(), logical_root.clone())];
+
+    while let Some((physical_directory, logical_directory)) = directories.pop() {
+        for entry in dependency_output_entries(&physical_directory)? {
+            if let Some(directory) =
+                relocate_output_entry(entry, &logical_directory, &logical_root)?
+            {
+                directories.push(directory);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn dependency_output_entries(directory: &Path) -> Result<Vec<fs::DirEntry>, BackendError> {
+    let inspect_error = |error| {
+        BackendError::execution(format!(
+            "failed to inspect managed dependency output {}: {error}",
+            directory.display()
+        ))
+    };
+    let mut entries = fs::read_dir(directory)
+        .map_err(inspect_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(inspect_error)?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+    Ok(entries)
+}
+
+fn relocate_output_entry(
+    entry: fs::DirEntry,
+    logical_directory: &str,
+    logical_root: &str,
+) -> Result<Option<(PathBuf, String)>, BackendError> {
+    let physical_path = entry.path();
+    let name = entry.file_name().into_string().map_err(|_| {
+        BackendError::execution(format!(
+            "managed dependency output contains a non-UTF-8 path: {}",
+            physical_path.display()
+        ))
+    })?;
+    let logical_path = format!("{logical_directory}/{name}");
+    let file_type = entry.file_type().map_err(|error| {
+        BackendError::execution(format!(
+            "failed to inspect managed dependency output {}: {error}",
+            physical_path.display()
+        ))
+    })?;
+    if file_type.is_dir() {
+        return Ok(Some((physical_path, logical_path)));
+    }
+    if !file_type.is_symlink() {
+        return Ok(None);
+    }
+
+    let target = fs::read_link(&physical_path).map_err(|error| {
+        BackendError::execution(format!(
+            "failed to read managed dependency symbolic link {logical_path}: {error}"
+        ))
+    })?;
+    let target = target.to_str().ok_or_else(|| {
+        BackendError::execution(format!(
+            "managed dependency symbolic link {logical_path} has a non-UTF-8 target"
+        ))
+    })?;
+    if target.starts_with('/') {
+        return Ok(None);
+    }
+
+    let resolved = resolve_workspace_link(&logical_path, target)?;
+    if !logical_path_within(&resolved, logical_root) {
+        replace_symbolic_link(&physical_path, &logical_path, &resolved)?;
+    }
+    Ok(None)
+}
+
+fn resolve_workspace_link(logical_link: &str, target: &str) -> Result<String, BackendError> {
+    let parent = logical_link
+        .rsplit_once('/')
+        .map_or("", |(parent, _)| parent);
+    if !logical_path_within(parent, WORKSPACE) {
+        return Err(BackendError::execution(format!(
+            "managed dependency symbolic link is outside {WORKSPACE}: {logical_link}"
+        )));
+    }
+
+    let mut components = parent
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    for component in target.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if components.len() <= 1 {
+                    return Err(BackendError::execution(format!(
+                        "managed dependency symbolic link {logical_link} escapes {WORKSPACE}: {target}"
+                    )));
+                }
+                components.pop();
+            }
+            component => components.push(component.to_owned()),
+        }
+    }
+    let resolved = format!("/{}", components.join("/"));
+    if logical_path_within(&resolved, WORKSPACE) {
+        Ok(resolved)
+    } else {
+        Err(BackendError::execution(format!(
+            "managed dependency symbolic link {logical_link} escapes {WORKSPACE}: {target}"
+        )))
+    }
+}
+
+fn logical_path_within(path: &str, root: &str) -> bool {
+    path == root
+        || path
+            .strip_prefix(root)
+            .is_some_and(|relative| relative.starts_with('/'))
+}
+
+#[cfg(unix)]
+fn replace_symbolic_link(
+    physical_path: &Path,
+    logical_path: &str,
+    target: &str,
+) -> Result<(), BackendError> {
+    fs::remove_file(physical_path).map_err(|error| {
+        BackendError::execution(format!(
+            "failed to relocate managed dependency symbolic link {logical_path}: {error}"
+        ))
+    })?;
+    std::os::unix::fs::symlink(target, physical_path).map_err(|error| {
+        BackendError::execution(format!(
+            "failed to relocate managed dependency symbolic link {logical_path}: {error}"
+        ))
+    })
+}
+
+#[cfg(not(unix))]
+fn replace_symbolic_link(
+    _physical_path: &Path,
+    logical_path: &str,
+    _target: &str,
+) -> Result<(), BackendError> {
+    Err(BackendError::execution(format!(
+        "managed dependency symbolic link {logical_path} crosses prepared outputs, but safe symbolic-link relocation is unsupported on this host"
+    )))
 }
 
 fn publish_pending_outputs(
@@ -932,10 +1103,125 @@ fn run_materialization_commands(request: MaterializationRequest<'_>) -> Result<(
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::COPY_IMAGE_TREE;
+    use super::{COPY_IMAGE_TREE, relocate_output_links};
+    use ayni_core::{PreparationOutput, PreparationOutputMode};
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::path::{Path, PathBuf};
     use std::process::Command;
+
+    fn test_directory(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "ayni-materialization-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).expect("test directory");
+        root
+    }
+
+    fn web_node_modules_output() -> PreparationOutput {
+        PreparationOutput {
+            path: String::from("frontend/apps/web/node_modules"),
+            mount_path: String::from("frontend/apps/web/node_modules"),
+            mode: PreparationOutputMode::Seeded,
+        }
+    }
+
+    fn root_node_modules_output() -> PreparationOutput {
+        PreparationOutput {
+            path: String::from("frontend/node_modules"),
+            mount_path: String::from("frontend/node_modules"),
+            mode: PreparationOutputMode::Seeded,
+        }
+    }
+
+    #[test]
+    fn relocates_child_link_to_root_node_modules_store() {
+        let root = test_directory("root-node-modules-link");
+        let state = root.join("state");
+        let plugin_parent = state.join("@sveltejs");
+        let bin = state.join(".bin");
+        fs::create_dir_all(&plugin_parent).expect("plugin scope");
+        fs::create_dir_all(&bin).expect("binary links");
+        let plugin = plugin_parent.join("vite-plugin-svelte");
+        let plugin_target = "../../../../node_modules/.pnpm/@sveltejs+vite-plugin-svelte@1/node_modules/@sveltejs/vite-plugin-svelte";
+        symlink(plugin_target, &plugin).expect("plugin link");
+        let internal = bin.join("vite");
+        symlink("../vite/bin/vite.js", &internal).expect("internal link");
+        let absolute = state.join("python");
+        symlink("/opt/ayni/python", &absolute).expect("absolute link");
+
+        relocate_output_links(&web_node_modules_output(), &state).expect("relocate links");
+
+        assert_eq!(
+            fs::read_link(plugin).expect("relocated plugin link"),
+            Path::new(
+                "/workspace/frontend/node_modules/.pnpm/@sveltejs+vite-plugin-svelte@1/node_modules/@sveltejs/vite-plugin-svelte"
+            )
+        );
+        assert_eq!(
+            fs::read_link(internal).expect("internal link"),
+            Path::new("../vite/bin/vite.js")
+        );
+        assert_eq!(
+            fs::read_link(absolute).expect("absolute link"),
+            Path::new("/opt/ayni/python")
+        );
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn relocates_root_and_child_links_to_workspace_source() {
+        let root = test_directory("sibling-workspace-link");
+        let child_state = root.join("child-state");
+        let scope = child_state.join("@guita");
+        fs::create_dir_all(&scope).expect("workspace scope");
+        let child_workspace = scope.join("ui");
+        symlink("../../../../packages/ui", &child_workspace).expect("child workspace link");
+
+        relocate_output_links(&web_node_modules_output(), &child_state)
+            .expect("relocate child links");
+
+        assert_eq!(
+            fs::read_link(child_workspace).expect("relocated child workspace link"),
+            Path::new("/workspace/frontend/packages/ui")
+        );
+
+        let root_state = root.join("root-state");
+        let root_scope = root_state.join(".pnpm/node_modules/@guita");
+        fs::create_dir_all(&root_scope).expect("root workspace scope");
+        let root_workspace = root_scope.join("ui");
+        symlink("../../../../packages/ui", &root_workspace).expect("root workspace link");
+
+        relocate_output_links(&root_node_modules_output(), &root_state)
+            .expect("relocate root links");
+
+        assert_eq!(
+            fs::read_link(root_workspace).expect("relocated root workspace link"),
+            Path::new("/workspace/frontend/packages/ui")
+        );
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn rejects_child_link_that_escapes_the_workspace() {
+        let root = test_directory("escaping-link");
+        let state = root.join("state");
+        fs::create_dir(&state).expect("output state");
+        let escape = state.join("escape");
+        symlink("../../../../../../etc/passwd", &escape).expect("escaping link");
+
+        let error = relocate_output_links(&web_node_modules_output(), &state)
+            .expect_err("escaping link must fail");
+
+        assert!(error.message.contains("escapes /workspace"));
+        assert_eq!(
+            fs::read_link(escape).expect("original escaping link"),
+            Path::new("../../../../../../etc/passwd")
+        );
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
 
     #[test]
     fn copy_image_tree_propagates_archive_producer_failure() {
