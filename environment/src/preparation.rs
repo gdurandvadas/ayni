@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const INPUT_ROOT: &str = "/tmp/ayni/repository";
 pub(crate) const SEED_ROOT: &str = "/opt/ayni/dependencies";
-const PREPARATION_IMPLEMENTATION_VERSION: &str = "7";
+const PREPARATION_IMPLEMENTATION_VERSION: &str = "8";
 const PREPARED_CACHE_COPY_FRAGMENT: &str = concat!(
     "FROM ayni-runtime\n",
     "COPY --from=ayni-preparation --chown=10001:10001 --chmod=0755 ",

@@ -70,6 +70,109 @@ fn all_checks(enabled: &str) -> String {
         .join("\n")
 }
 
+#[cfg(unix)]
+struct NodeStartupFailureFixture {
+    _tempdir: TempDir,
+    root: PathBuf,
+}
+
+#[cfg(unix)]
+impl NodeStartupFailureFixture {
+    fn new() -> Self {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tempdir = TempDir::new().expect("tempdir");
+        let root = tempdir.path().to_path_buf();
+        fs::write(root.join("package.json"), r#"{"name":"node-fixture"}"#).expect("Node manifest");
+        let runner = root.join("failing-vitest");
+        fs::write(
+            &runner,
+            "#!/bin/sh\nprintf \"Error: Cannot find module '@sveltejs/vite-plugin-svelte'\\n\" >&2\nexit 1\n",
+        )
+        .expect("failing Vitest fixture");
+        let mut permissions = fs::metadata(&runner)
+            .expect("runner metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&runner, permissions).expect("executable runner");
+        fs::write(
+            root.join(".ayni.toml"),
+            format!(
+                "[checks]\n{}\n\n[languages]\nenabled = [\"node\"]\n\n[node]\nroots = [\".\"]\n\n[node.tooling.test]\ncommand = \"{}\"\nargs = [\"run\"]\n",
+                all_checks("test"),
+                toml_string(&runner)
+            ),
+        )
+        .expect("policy");
+        Self {
+            _tempdir: tempdir,
+            root,
+        }
+    }
+
+    fn run(&self, operation: &[&str], selectors: &[&str]) -> Output {
+        ayni()
+            .current_dir(&self.root)
+            .args(operation)
+            .args(["--host", "--config", "./.ayni.toml", "--output", "json"])
+            .args(selectors)
+            .output()
+            .expect("run Node startup failure fixture")
+    }
+}
+
+#[cfg(unix)]
+fn assert_valid_node_startup_failure(output: &Output, persisted_path: &Path) {
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("failed to serialize artifact"));
+    let artifact: Value = serde_json::from_slice(&output.stdout).expect("valid failed artifact");
+    assert_eq!(artifact["completion"]["state"], "complete");
+    assert_eq!(artifact["rows"][0]["result"]["total_tests"], 0);
+    assert_eq!(artifact["rows"][0]["result"]["passed"], 0);
+    assert_eq!(artifact["rows"][0]["result"]["failed"], 0);
+    assert_eq!(
+        artifact["rows"][0]["result"]["failure"]["classification"],
+        "import_error"
+    );
+    assert!(
+        artifact["rows"][0]["result"]["failure"]["message"]
+            .as_str()
+            .expect("failure message")
+            .contains("@sveltejs/vite-plugin-svelte")
+    );
+    let persisted: Value =
+        serde_json::from_slice(&fs::read(persisted_path).expect("persisted artifact"))
+            .expect("persisted artifact JSON");
+    assert_eq!(persisted, artifact);
+}
+
+#[cfg(unix)]
+#[test]
+fn node_verify_startup_failure_writes_a_valid_failed_artifact() {
+    let fixture = NodeStartupFailureFixture::new();
+    let output = fixture.run(&["verify", "test"], &["--language", "node"]);
+
+    assert_valid_node_startup_failure(
+        &output,
+        &fixture.root.join(".ayni/verify/last/signals.json"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn node_check_startup_failure_writes_a_valid_repository_artifact() {
+    let fixture = NodeStartupFailureFixture::new();
+    let output = fixture.run(&["check"], &[]);
+
+    assert_valid_node_startup_failure(&output, &fixture.root.join(".ayni/last/signals.json"));
+}
+
 #[test]
 fn emitted_multi_root_command_is_reproducible() {
     let tempdir = TempDir::new().expect("tempdir");

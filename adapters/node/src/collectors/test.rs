@@ -36,41 +36,10 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     let status_ok = output.status.success();
     let stdout_text = String::from_utf8_lossy(&output.stdout);
     let stderr_text = String::from_utf8_lossy(&output.stderr);
-    let report = parse_vitest_report(&stdout_text).or_else(|| parse_vitest_report(&stderr_text));
-    let report_missing = report.is_none();
+    let mut summary = normalize_vitest_output(&stdout_text, &stderr_text);
 
-    let mut total_tests = 0_u64;
-    let mut passed = 0_u64;
-    let mut failed = if status_ok { 0_u64 } else { 1_u64 };
-    let mut duration_ms = None::<u64>;
-    let mut offenders = Vec::<TestFailure>::new();
-
-    if let Some(report) = report {
-        total_tests = report
-            .get("numTotalTests")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or(0);
-        passed = report
-            .get("numPassedTests")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or(0);
-        failed = report
-            .get("numFailedTests")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or(failed);
-        duration_ms = report
-            .get("testResults")
-            .and_then(JsonValue::as_array)
-            .map(|results| {
-                results
-                    .iter()
-                    .filter_map(|item| item.get("endTime").and_then(JsonValue::as_u64))
-                    .sum::<u64>()
-            })
-            .filter(|value| *value > 0);
-        offenders = extract_failures(&report);
-    } else if !status_ok {
-        offenders.push(TestFailure {
+    if summary.report_missing && !status_ok {
+        summary.offenders.push(TestFailure {
             file: None,
             line: None,
             message: stderr_text.trim().to_string(),
@@ -78,26 +47,35 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         });
     }
 
-    if status_ok && !report_missing && total_tests == 0 {
-        offenders.push(zero_tests_failure());
+    if status_ok && !summary.report_missing && summary.total_tests == 0 {
+        summary.offenders.push(zero_tests_failure());
     }
 
-    let pass = test_row_passes(status_ok, total_tests, failed, report_missing);
-    let execution_incomplete =
-        report_missing || test_execution_incomplete(status_ok, total_tests, failed);
+    let pass = test_row_passes(
+        status_ok,
+        summary.total_tests,
+        summary.failed,
+        summary.report_missing,
+    );
+    let execution_incomplete = summary.report_missing
+        || summary.suite_failure.is_some()
+        || test_execution_incomplete(status_ok, summary.total_tests, summary.failed);
     let failure = if execution_incomplete && !status_ok {
-        Some(command_failure_from_output(
-            context,
-            SignalKind::Test,
-            runner.split_whitespace().next().unwrap_or("node"),
-            &runner
-                .split_whitespace()
-                .skip(1)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            &output,
+        Some(prefer_suite_failure_message(
+            command_failure_from_output(
+                context,
+                SignalKind::Test,
+                runner.split_whitespace().next().unwrap_or("node"),
+                &runner
+                    .split_whitespace()
+                    .skip(1)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                &output,
+            ),
+            summary.suite_failure.as_deref(),
         ))
-    } else if report_missing {
+    } else if summary.report_missing {
         Some(setup_failure(
             context,
             runner.clone(),
@@ -118,15 +96,15 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         },
         pass,
         result: SignalResult::Test(TestResult {
-            total_tests,
-            passed,
-            failed,
-            duration_ms,
+            total_tests: summary.total_tests,
+            passed: summary.passed,
+            failed: summary.failed,
+            duration_ms: summary.duration_ms,
             runner,
             failure,
         }),
         budget: Budget::Test(TestBudget::default()),
-        offenders: Offenders::Test(offenders),
+        offenders: Offenders::Test(summary.offenders),
     })
 }
 
@@ -196,41 +174,19 @@ fn build_row_from_output(
     let status_ok = output.status.success();
     let stdout_text = String::from_utf8_lossy(&output.stdout);
     let stderr_text = String::from_utf8_lossy(&output.stderr);
-    let report = parse_vitest_report(&stdout_text).or_else(|| parse_vitest_report(&stderr_text));
-    let report_missing = report.is_none();
-    let mut total_tests = 0;
-    let mut passed = 0;
-    let mut failed = u64::from(!status_ok);
-    let mut offenders = Vec::new();
-    if let Some(report) = report {
-        total_tests = report
-            .get("numTotalTests")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or(0);
-        passed = report
-            .get("numPassedTests")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or(0);
-        failed = report
-            .get("numFailedTests")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or(failed);
-        offenders = extract_failures(&report);
+    let mut summary = normalize_vitest_output(&stdout_text, &stderr_text);
+    if status_ok && !summary.report_missing && summary.total_tests == 0 {
+        summary.offenders.push(zero_tests_failure());
     }
-    if status_ok && !report_missing && total_tests == 0 {
-        offenders.push(zero_tests_failure());
-    }
-    let execution_incomplete =
-        report_missing || test_execution_incomplete(status_ok, total_tests, failed);
+    let execution_incomplete = summary.report_missing
+        || summary.suite_failure.is_some()
+        || test_execution_incomplete(status_ok, summary.total_tests, summary.failed);
     let failure = if execution_incomplete && !status_ok {
-        Some(command_failure_from_output(
-            context,
-            SignalKind::Test,
-            &runner,
-            &[],
-            &output,
+        Some(prefer_suite_failure_message(
+            command_failure_from_output(context, SignalKind::Test, &runner, &[], &output),
+            summary.suite_failure.as_deref(),
         ))
-    } else if report_missing {
+    } else if summary.report_missing {
         Some(setup_failure(
             context,
             runner.clone(),
@@ -243,18 +199,90 @@ fn build_row_from_output(
         kind: SignalKind::Test,
         language: ayni_core::Language::Node,
         scope: context.scope.clone(),
-        pass: test_row_passes(status_ok, total_tests, failed, report_missing),
+        pass: test_row_passes(
+            status_ok,
+            summary.total_tests,
+            summary.failed,
+            summary.report_missing,
+        ),
         result: SignalResult::Test(TestResult {
-            total_tests,
-            passed,
-            failed,
+            total_tests: summary.total_tests,
+            passed: summary.passed,
+            failed: summary.failed,
             duration_ms: None,
             runner,
             failure,
         }),
         budget: Budget::Test(TestBudget::default()),
-        offenders: Offenders::Test(offenders),
+        offenders: Offenders::Test(summary.offenders),
     })
+}
+
+struct VitestSummary {
+    report_missing: bool,
+    total_tests: u64,
+    passed: u64,
+    failed: u64,
+    duration_ms: Option<u64>,
+    offenders: Vec<TestFailure>,
+    suite_failure: Option<String>,
+}
+
+fn prefer_suite_failure_message(
+    mut failure: ayni_core::CommandFailure,
+    suite_failure: Option<&str>,
+) -> ayni_core::CommandFailure {
+    if let Some(message) = suite_failure {
+        failure.message = message.to_string();
+    }
+    failure
+}
+
+fn normalize_vitest_output(stdout: &str, stderr: &str) -> VitestSummary {
+    let Some(report) = parse_vitest_report(stdout).or_else(|| parse_vitest_report(stderr)) else {
+        return missing_vitest_summary();
+    };
+    let Some((total_tests, passed, failed)) = valid_vitest_counts(&report) else {
+        return missing_vitest_summary();
+    };
+
+    VitestSummary {
+        report_missing: false,
+        total_tests,
+        passed,
+        failed,
+        duration_ms: report
+            .get("testResults")
+            .and_then(JsonValue::as_array)
+            .map(|results| {
+                results
+                    .iter()
+                    .filter_map(|item| item.get("endTime").and_then(JsonValue::as_u64))
+                    .sum::<u64>()
+            })
+            .filter(|value| *value > 0),
+        offenders: extract_failures(&report),
+        suite_failure: first_suite_failure(&report),
+    }
+}
+
+fn missing_vitest_summary() -> VitestSummary {
+    VitestSummary {
+        report_missing: true,
+        total_tests: 0,
+        passed: 0,
+        failed: 0,
+        duration_ms: None,
+        offenders: Vec::new(),
+        suite_failure: None,
+    }
+}
+
+fn valid_vitest_counts(report: &JsonValue) -> Option<(u64, u64, u64)> {
+    let total = report.get("numTotalTests").and_then(JsonValue::as_u64)?;
+    let passed = report.get("numPassedTests").and_then(JsonValue::as_u64)?;
+    let failed = report.get("numFailedTests").and_then(JsonValue::as_u64)?;
+    (passed.checked_add(failed)? <= total).then_some((total, passed, failed))
 }
 
 fn zero_tests_failure() -> TestFailure {
@@ -341,6 +369,35 @@ fn extract_failures(report: &JsonValue) -> Vec<TestFailure> {
         }
     }
     failures
+}
+
+fn first_suite_failure(report: &JsonValue) -> Option<String> {
+    report
+        .get("testResults")
+        .and_then(JsonValue::as_array)?
+        .iter()
+        .find_map(|suite| {
+            if suite.get("status").and_then(JsonValue::as_str) != Some("failed") {
+                return None;
+            }
+            let has_failed_assertion = suite
+                .get("assertionResults")
+                .and_then(JsonValue::as_array)
+                .is_some_and(|assertions| {
+                    assertions.iter().any(|assertion| {
+                        assertion.get("status").and_then(JsonValue::as_str) == Some("failed")
+                    })
+                });
+            if has_failed_assertion {
+                return None;
+            }
+            suite
+                .get("message")
+                .and_then(JsonValue::as_str)
+                .map(str::trim)
+                .filter(|message| !message.is_empty())
+                .map(ToString::to_string)
+        })
 }
 
 #[cfg(test)]
@@ -493,5 +550,167 @@ enabled = ["node"]
             panic!("test offenders");
         };
         assert!(offenders[0].message.contains("discovered zero tests"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vitest_startup_failure_without_report_emits_valid_command_failure_row() {
+        let context =
+            context_with_policy("[checks]\ntest = true\n[languages]\nenabled = [\"node\"]");
+        let output = Output {
+            status: ExitStatus::from_raw(1 << 8),
+            stdout: Vec::new(),
+            stderr: b"Error: Cannot find module '@sveltejs/vite-plugin-svelte'".to_vec(),
+        };
+        let row =
+            build_row_from_output(&context, output, String::from("vitest run")).expect("test row");
+
+        assert!(!row.pass);
+        let SignalResult::Test(result) = &row.result else {
+            panic!("test result");
+        };
+        assert_eq!(result.total_tests, 0);
+        assert_eq!(result.passed, 0);
+        assert_eq!(result.failed, 0);
+        let failure = result.failure.as_ref().expect("command failure");
+        assert_eq!(failure.classification, "import_error");
+        assert!(failure.message.contains("@sveltejs/vite-plugin-svelte"));
+        row.validate_payloads().expect("valid failed test row");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_vitest_reports_emit_valid_incomplete_evidence() {
+        let context =
+            context_with_policy("[checks]\ntest = true\n[languages]\nenabled = [\"node\"]");
+        for report in [
+            r#"{"numFailedTests":1}"#,
+            r#"{"numTotalTests":0,"numPassedTests":0,"numFailedTests":1}"#,
+        ] {
+            let output = Output {
+                status: ExitStatus::from_raw(1 << 8),
+                stdout: report.as_bytes().to_vec(),
+                stderr: b"Vitest exited before completing its report".to_vec(),
+            };
+            let row = build_row_from_output(&context, output, String::from("vitest run"))
+                .expect("test row");
+
+            assert!(!row.pass);
+            let SignalResult::Test(result) = &row.result else {
+                panic!("test result");
+            };
+            assert_eq!(result.total_tests, 0);
+            assert_eq!(result.passed, 0);
+            assert_eq!(result.failed, 0);
+            assert!(result.failure.is_some());
+            row.validate_payloads().expect("valid incomplete test row");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mixed_vitest_report_preserves_counts_and_surfaces_suite_startup_failure() {
+        let context =
+            context_with_policy("[checks]\ntest = true\n[languages]\nenabled = [\"node\"]");
+        let output = Output {
+            status: ExitStatus::from_raw(1 << 8),
+            stdout: br#"{
+                "numTotalTests": 103,
+                "numPassedTests": 97,
+                "numFailedTests": 6,
+                "testResults": [
+                    {
+                        "name": "apps/web/src/money.test.ts",
+                        "status": "failed",
+                        "message": "TSConfckParseError: Cannot find module './.svelte-kit/tsconfig.json'",
+                        "assertionResults": []
+                    },
+                    {
+                        "name": "packages/ui/tests/theme.test.ts",
+                        "status": "failed",
+                        "message": "",
+                        "assertionResults": [
+                            {
+                                "status": "failed",
+                                "fullName": "theme preserves contrast",
+                                "failureMessages": ["UI assertion failed"]
+                            }
+                        ]
+                    }
+                ]
+            }"#
+            .to_vec(),
+            stderr: Vec::new(),
+        };
+        let row =
+            build_row_from_output(&context, output, String::from("vitest run")).expect("test row");
+
+        assert!(!row.pass);
+        let SignalResult::Test(result) = &row.result else {
+            panic!("test result");
+        };
+        assert_eq!(result.total_tests, 103);
+        assert_eq!(result.passed, 97);
+        assert_eq!(result.failed, 6);
+        let failure = result.failure.as_ref().expect("suite command failure");
+        assert_eq!(failure.exit_code, Some(1));
+        assert_eq!(
+            failure.message,
+            "TSConfckParseError: Cannot find module './.svelte-kit/tsconfig.json'"
+        );
+        let Offenders::Test(offenders) = &row.offenders else {
+            panic!("test offenders");
+        };
+        assert_eq!(offenders.len(), 1);
+        assert_eq!(offenders[0].message, "UI assertion failed");
+        row.validate_payloads().expect("valid mixed test row");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn assertion_only_vitest_failure_does_not_add_command_failure() {
+        let context =
+            context_with_policy("[checks]\ntest = true\n[languages]\nenabled = [\"node\"]");
+        let output = Output {
+            status: ExitStatus::from_raw(1 << 8),
+            stdout: br#"{
+                "numTotalTests": 1,
+                "numPassedTests": 0,
+                "numFailedTests": 1,
+                "testResults": [
+                    {
+                        "name": "packages/ui/tests/theme.test.ts",
+                        "status": "failed",
+                        "message": "",
+                        "assertionResults": [
+                            {
+                                "status": "failed",
+                                "fullName": "theme preserves contrast",
+                                "failureMessages": ["UI assertion failed"]
+                            }
+                        ]
+                    }
+                ]
+            }"#
+            .to_vec(),
+            stderr: Vec::new(),
+        };
+        let row =
+            build_row_from_output(&context, output, String::from("vitest run")).expect("test row");
+
+        assert!(!row.pass);
+        let SignalResult::Test(result) = &row.result else {
+            panic!("test result");
+        };
+        assert_eq!(result.total_tests, 1);
+        assert_eq!(result.passed, 0);
+        assert_eq!(result.failed, 1);
+        assert!(result.failure.is_none());
+        let Offenders::Test(offenders) = &row.offenders else {
+            panic!("test offenders");
+        };
+        assert_eq!(offenders.len(), 1);
+        assert_eq!(offenders[0].message, "UI assertion failed");
+        row.validate_payloads().expect("valid assertion test row");
     }
 }
