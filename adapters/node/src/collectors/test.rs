@@ -58,18 +58,22 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         summary.report_missing,
     );
     let execution_incomplete = summary.report_missing
+        || summary.suite_failure.is_some()
         || test_execution_incomplete(status_ok, summary.total_tests, summary.failed);
     let failure = if execution_incomplete && !status_ok {
-        Some(command_failure_from_output(
-            context,
-            SignalKind::Test,
-            runner.split_whitespace().next().unwrap_or("node"),
-            &runner
-                .split_whitespace()
-                .skip(1)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            &output,
+        Some(prefer_suite_failure_message(
+            command_failure_from_output(
+                context,
+                SignalKind::Test,
+                runner.split_whitespace().next().unwrap_or("node"),
+                &runner
+                    .split_whitespace()
+                    .skip(1)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                &output,
+            ),
+            summary.suite_failure.as_deref(),
         ))
     } else if summary.report_missing {
         Some(setup_failure(
@@ -175,14 +179,12 @@ fn build_row_from_output(
         summary.offenders.push(zero_tests_failure());
     }
     let execution_incomplete = summary.report_missing
+        || summary.suite_failure.is_some()
         || test_execution_incomplete(status_ok, summary.total_tests, summary.failed);
     let failure = if execution_incomplete && !status_ok {
-        Some(command_failure_from_output(
-            context,
-            SignalKind::Test,
-            &runner,
-            &[],
-            &output,
+        Some(prefer_suite_failure_message(
+            command_failure_from_output(context, SignalKind::Test, &runner, &[], &output),
+            summary.suite_failure.as_deref(),
         ))
     } else if summary.report_missing {
         Some(setup_failure(
@@ -223,6 +225,17 @@ struct VitestSummary {
     failed: u64,
     duration_ms: Option<u64>,
     offenders: Vec<TestFailure>,
+    suite_failure: Option<String>,
+}
+
+fn prefer_suite_failure_message(
+    mut failure: ayni_core::CommandFailure,
+    suite_failure: Option<&str>,
+) -> ayni_core::CommandFailure {
+    if let Some(message) = suite_failure {
+        failure.message = message.to_string();
+    }
+    failure
 }
 
 fn normalize_vitest_output(stdout: &str, stderr: &str) -> VitestSummary {
@@ -249,6 +262,7 @@ fn normalize_vitest_output(stdout: &str, stderr: &str) -> VitestSummary {
             })
             .filter(|value| *value > 0),
         offenders: extract_failures(&report),
+        suite_failure: first_suite_failure(&report),
     }
 }
 
@@ -260,6 +274,7 @@ fn missing_vitest_summary() -> VitestSummary {
         failed: 0,
         duration_ms: None,
         offenders: Vec::new(),
+        suite_failure: None,
     }
 }
 
@@ -354,6 +369,35 @@ fn extract_failures(report: &JsonValue) -> Vec<TestFailure> {
         }
     }
     failures
+}
+
+fn first_suite_failure(report: &JsonValue) -> Option<String> {
+    report
+        .get("testResults")
+        .and_then(JsonValue::as_array)?
+        .iter()
+        .find_map(|suite| {
+            if suite.get("status").and_then(JsonValue::as_str) != Some("failed") {
+                return None;
+            }
+            let has_failed_assertion = suite
+                .get("assertionResults")
+                .and_then(JsonValue::as_array)
+                .is_some_and(|assertions| {
+                    assertions.iter().any(|assertion| {
+                        assertion.get("status").and_then(JsonValue::as_str) == Some("failed")
+                    })
+                });
+            if has_failed_assertion {
+                return None;
+            }
+            suite
+                .get("message")
+                .and_then(JsonValue::as_str)
+                .map(str::trim)
+                .filter(|message| !message.is_empty())
+                .map(ToString::to_string)
+        })
 }
 
 #[cfg(test)]
@@ -561,5 +605,112 @@ enabled = ["node"]
             assert!(result.failure.is_some());
             row.validate_payloads().expect("valid incomplete test row");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mixed_vitest_report_preserves_counts_and_surfaces_suite_startup_failure() {
+        let context =
+            context_with_policy("[checks]\ntest = true\n[languages]\nenabled = [\"node\"]");
+        let output = Output {
+            status: ExitStatus::from_raw(1 << 8),
+            stdout: br#"{
+                "numTotalTests": 103,
+                "numPassedTests": 97,
+                "numFailedTests": 6,
+                "testResults": [
+                    {
+                        "name": "apps/web/src/money.test.ts",
+                        "status": "failed",
+                        "message": "TSConfckParseError: Cannot find module './.svelte-kit/tsconfig.json'",
+                        "assertionResults": []
+                    },
+                    {
+                        "name": "packages/ui/tests/theme.test.ts",
+                        "status": "failed",
+                        "message": "",
+                        "assertionResults": [
+                            {
+                                "status": "failed",
+                                "fullName": "theme preserves contrast",
+                                "failureMessages": ["UI assertion failed"]
+                            }
+                        ]
+                    }
+                ]
+            }"#
+            .to_vec(),
+            stderr: Vec::new(),
+        };
+        let row =
+            build_row_from_output(&context, output, String::from("vitest run")).expect("test row");
+
+        assert!(!row.pass);
+        let SignalResult::Test(result) = &row.result else {
+            panic!("test result");
+        };
+        assert_eq!(result.total_tests, 103);
+        assert_eq!(result.passed, 97);
+        assert_eq!(result.failed, 6);
+        let failure = result.failure.as_ref().expect("suite command failure");
+        assert_eq!(failure.exit_code, Some(1));
+        assert_eq!(
+            failure.message,
+            "TSConfckParseError: Cannot find module './.svelte-kit/tsconfig.json'"
+        );
+        let Offenders::Test(offenders) = &row.offenders else {
+            panic!("test offenders");
+        };
+        assert_eq!(offenders.len(), 1);
+        assert_eq!(offenders[0].message, "UI assertion failed");
+        row.validate_payloads().expect("valid mixed test row");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn assertion_only_vitest_failure_does_not_add_command_failure() {
+        let context =
+            context_with_policy("[checks]\ntest = true\n[languages]\nenabled = [\"node\"]");
+        let output = Output {
+            status: ExitStatus::from_raw(1 << 8),
+            stdout: br#"{
+                "numTotalTests": 1,
+                "numPassedTests": 0,
+                "numFailedTests": 1,
+                "testResults": [
+                    {
+                        "name": "packages/ui/tests/theme.test.ts",
+                        "status": "failed",
+                        "message": "",
+                        "assertionResults": [
+                            {
+                                "status": "failed",
+                                "fullName": "theme preserves contrast",
+                                "failureMessages": ["UI assertion failed"]
+                            }
+                        ]
+                    }
+                ]
+            }"#
+            .to_vec(),
+            stderr: Vec::new(),
+        };
+        let row =
+            build_row_from_output(&context, output, String::from("vitest run")).expect("test row");
+
+        assert!(!row.pass);
+        let SignalResult::Test(result) = &row.result else {
+            panic!("test result");
+        };
+        assert_eq!(result.total_tests, 1);
+        assert_eq!(result.passed, 0);
+        assert_eq!(result.failed, 1);
+        assert!(result.failure.is_none());
+        let Offenders::Test(offenders) = &row.offenders else {
+            panic!("test offenders");
+        };
+        assert_eq!(offenders.len(), 1);
+        assert_eq!(offenders[0].message, "UI assertion failed");
+        row.validate_payloads().expect("valid assertion test row");
     }
 }
