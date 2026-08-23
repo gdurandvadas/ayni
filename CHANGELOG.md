@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.1...ayni-v0.11.2) (2026-08-23)
+
+
+### Bug Fixes
+
+* **environment:** preserve managed pnpm workspace dependencies ([#73](https://github.com/gdurandvadas/ayni/issues/73)) ([92d6f64](https://github.com/gdurandvadas/ayni/commit/92d6f64b55ae8283f37162f3659a0949863885cc))
+
 ## [0.11.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.0...ayni-v0.11.1) (2026-08-22)
 
 
