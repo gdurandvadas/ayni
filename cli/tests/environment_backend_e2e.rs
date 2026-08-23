@@ -70,6 +70,7 @@ fn command(root: &TempDir, args: &[&str]) -> Command {
     ))
     .unwrap();
     command.env("PATH", path);
+    command.env_remove("MISE_GITHUB_TOKEN");
     command
 }
 #[test]
@@ -136,6 +137,7 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     );
     let build = command(&root, &["env", "build", "--repo-root"])
         .arg(root.path())
+        .env("MISE_GITHUB_TOKEN", "fixture-secret-must-not-leak")
         .output()
         .unwrap();
     assert!(
@@ -143,6 +145,9 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         "{}",
         String::from_utf8_lossy(&build.stderr)
     );
+    let build_arguments = fs::read_to_string(&record).unwrap();
+    assert!(build_arguments.contains("--secret\nid=MISE_GITHUB_TOKEN,env=MISE_GITHUB_TOKEN"));
+    assert!(!build_arguments.contains("fixture-secret-must-not-leak"));
     let doctor = command(&root, &["env", "doctor", "--repo-root"])
         .arg(root.path())
         .output()
@@ -153,6 +158,11 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         String::from_utf8_lossy(&doctor.stderr)
     );
     let dockerfile = fs::read_to_string(format!("{}.dockerfile", record.display())).unwrap();
+    assert!(
+        dockerfile
+            .contains("RUN --mount=type=secret,id=MISE_GITHUB_TOKEN,uid=10001,gid=10001,mode=0400")
+    );
+    assert!(!dockerfile.contains("fixture-secret-must-not-leak"));
     assert!(dockerfile.contains("MISE_AUTO_INSTALL=0"));
     assert!(dockerfile.contains(
         "RUN [\"rustup\",\"component\",\"add\",\"--toolchain\",\"1.92.0\",\"llvm-tools-preview\"]"

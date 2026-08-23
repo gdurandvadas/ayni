@@ -2,7 +2,7 @@ use super::canonical_root;
 use crate::image::{
     IMAGE_AYNI_LABEL, IMAGE_BASE_LABEL, IMAGE_LOCK_LABEL, IMAGE_MISE_LABEL, IMAGE_OWNER_LABEL,
     IMAGE_OWNER_VALUE, IMAGE_PLATFORM_LABEL, IMAGE_PREPARATION_LABEL, IMAGE_SCHEMA_LABEL,
-    IMAGE_SCHEMA_VERSION, ImagePlan, image_plan_with_preparation,
+    IMAGE_SCHEMA_VERSION, ImagePlan, MISE_GITHUB_TOKEN_SECRET, image_plan_with_preparation,
 };
 use crate::{BackendError, concise_output, read_lock};
 use ayni_adapters_common::exec::{
@@ -207,16 +207,19 @@ pub fn build_prepared(
         return Ok(format!("current {}", plan.tag));
     }
     let input = BuildInput::create(&root, &plan, preparations)?;
-    let args = vec![
+    let mut args = vec![
         "build".to_owned(),
         "--tag".to_owned(),
         plan.tag.clone(),
         "--platform".to_owned(),
         plan.platform.clone(),
+    ];
+    args.extend(mise_github_token_secret_args());
+    args.extend([
         "--file".to_owned(),
         input.path.join("Dockerfile").to_string_lossy().into_owned(),
         input.path.to_string_lossy().into_owned(),
-    ];
+    ]);
     let captured = run_command_streaming_truncated(
         &input.path,
         engine_name(engine),
@@ -246,6 +249,16 @@ pub fn build_prepared(
     }
     validate_image(engine, &plan, &lock)?;
     Ok(format!("built {}", plan.tag))
+}
+
+fn mise_github_token_secret_args() -> Vec<String> {
+    if env::var_os(MISE_GITHUB_TOKEN_SECRET).is_none_or(|value| value.is_empty()) {
+        return Vec::new();
+    }
+    vec![
+        "--secret".to_owned(),
+        format!("id={MISE_GITHUB_TOKEN_SECRET},env={MISE_GITHUB_TOKEN_SECRET}"),
+    ]
 }
 
 struct BuildInput {

@@ -174,6 +174,12 @@ credentials are not copied into that context. The build installs the locked
 runtime and analysis tooling, warms provider caches, and retains only declared
 dependency outputs.
 
+When `MISE_GITHUB_TOKEN` is set, `env build` forwards it only as an ephemeral
+OCI build secret to the `mise install` layers. The credential is not written to
+the lock, build context, generated Dockerfile, image metadata, or image layers.
+Without it, Mise's GitHub release lookups remain subject to anonymous API rate
+limits.
+
 Project tools for npm, pnpm, uv, and Gradle must already be represented in
 their native project inputs. Cargo and Go analysis tools may be provisioned from
 exact adapter-owned provider coordinates. Repository-wide tools and Debian
