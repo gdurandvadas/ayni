@@ -41,7 +41,7 @@ jobs:
       - name: Run release
         id: release
         if: ${{ github.event_name == 'push' }}
-        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
@@ -102,7 +102,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Install pinned Mise
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           version: 2026.6.14
           install: false
@@ -462,7 +462,7 @@ jobs:
           "$binary" --version
 
       - name: Install pinned Mise
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           version: 2026.6.14
           install: false
