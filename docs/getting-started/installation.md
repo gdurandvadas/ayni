@@ -4,7 +4,7 @@ Install the Ayni CLI first. Managed environments are provisioned separately for 
 
 ## Install the latest release
 
-The installer detects your operating system and architecture, downloads the matching release archive and `SHA256SUMS`, verifies the archive when `sha256sum` or `shasum` is available, and installs `ayni` into `~/.local/bin`.
+The installer detects your operating system and architecture, downloads the matching release archive and `SHA256SUMS`, requires `sha256sum` or `shasum` to verify the archive, validates the archive layout, and installs `ayni` into `~/.local/bin`.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL \

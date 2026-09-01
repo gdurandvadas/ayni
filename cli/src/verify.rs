@@ -1,15 +1,16 @@
 use crate::analysis::{
     AnalyzePlanning, OutputArg, VERIFY_SIGNALS_ARTIFACT, build_analyze_targets,
-    build_artifact_metadata_for_command, emit_analyze_outputs, managed_execution_active,
-    persist_artifact_at, serialize_artifact, signal_kind_slug, workspace_root_from_config_path,
+    build_artifact_metadata_for_command, emit_analyze_outputs, invalidate_artifact_at,
+    managed_execution_active, persist_artifact_at, serialize_artifact, signal_kind_slug,
+    workspace_root_from_config_path,
 };
 use crate::policy::load_from_path;
 use crate::ui::cancellation::SignalCancellation;
 use crate::{build_registry, verification_command};
 use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
-    AdapterRegistry, AyniPolicy, CompletionScope, Language, RunArtifact, RunOutcome, SignalKind,
-    SignalRow, VerificationSelection,
+    AdapterRegistry, AyniPolicy, CompletionScope, CompletionStage, Language, RunArtifact,
+    RunArtifactMetadata, RunOutcome, SignalKind, SignalRow, VerificationSelection,
 };
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
@@ -42,17 +43,33 @@ pub(crate) fn run(mut request: Request) -> Result<RunOutcome, Error> {
     for target in &mut planning.targets {
         target.run_context.cancellation = signal_cancellation.token();
     }
-    let artifact = build_verification_artifact(&workspace_root, &registry, &planning, &request)
-        .map_err(Error::execution)?;
+    let artifact =
+        match build_verification_artifact(&workspace_root, &registry, &planning, &request) {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                invalidate_artifact_at(&workspace_root, VERIFY_SIGNALS_ARTIFACT)
+                    .map_err(Error::execution)?;
+                return Err(Error::execution(error));
+            }
+        };
     if signal_cancellation.interrupted() {
         return Err(Error::execution("verification aborted by Ctrl-C"));
     }
-    persist_and_emit_verification(artifact, &workspace_root, &policy, &registry, &request)
-        .map_err(Error::execution)
+    persist_and_emit_verification(
+        artifact,
+        &workspace_root,
+        &policy,
+        &registry,
+        &planning,
+        &request,
+    )
+    .map_err(Error::execution)
 }
 
 fn prepare_request(request: &mut Request) -> Result<(PathBuf, AyniPolicy), String> {
     let workspace_root = workspace_root_from_config_path(&request.config_path)?;
+    // A focused artifact is current only after this invocation completes.
+    invalidate_artifact_at(&workspace_root, VERIFY_SIGNALS_ARTIFACT)?;
     let policy = load_from_path(&request.config_path)?;
     validate_configured_root_containment(&workspace_root, &policy)?;
     validate_signal_enabled(&policy, request.kind)?;
@@ -122,18 +139,57 @@ fn persist_and_emit_verification(
     workspace_root: &Path,
     policy: &AyniPolicy,
     registry: &AdapterRegistry,
+    planning: &AnalyzePlanning,
     request: &Request,
 ) -> Result<RunOutcome, String> {
-    verification_command::materialize_finding_commands(
+    if let Err(error) = verification_command::materialize_finding_commands(
         &mut artifact,
         registry,
         !managed_execution_active(),
-    )?;
-    let serialized = serialize_artifact(&artifact)?;
+    ) {
+        persist_incomplete_verification_artifact(
+            workspace_root,
+            planning,
+            &artifact.metadata,
+            &error,
+        )?;
+        return Err(error);
+    }
+    let serialized = match serialize_artifact(&artifact) {
+        Ok(serialized) => serialized,
+        Err(error) => {
+            persist_incomplete_verification_artifact(
+                workspace_root,
+                planning,
+                &artifact.metadata,
+                &error,
+            )?;
+            return Err(error);
+        }
+    };
     persist_artifact_at(workspace_root, VERIFY_SIGNALS_ARTIFACT, &serialized)?;
     emit_analyze_outputs(request.output_mode, policy, &artifact, &serialized)?;
 
     Ok(artifact.outcome())
+}
+
+fn persist_incomplete_verification_artifact(
+    workspace_root: &Path,
+    planning: &AnalyzePlanning,
+    metadata: &RunArtifactMetadata,
+    message: &str,
+) -> Result<(), String> {
+    let artifact = RunArtifact::new(
+        metadata.clone(),
+        planning.completion(
+            CompletionScope::Requested,
+            0,
+            planning.runnable_failure_issues(CompletionStage::Collection, message),
+        ),
+        Vec::new(),
+    )?;
+    let serialized = serialize_artifact(&artifact)?;
+    persist_artifact_at(workspace_root, VERIFY_SIGNALS_ARTIFACT, &serialized)
 }
 
 fn validate_signal_enabled(policy: &AyniPolicy, kind: SignalKind) -> Result<(), String> {

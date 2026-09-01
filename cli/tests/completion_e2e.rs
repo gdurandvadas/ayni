@@ -245,6 +245,40 @@ roots = ["good"]
     assert_eq!(artifact["aggregate"]["status"], "fail");
 }
 
+#[test]
+fn invalid_contract_removes_stale_repository_evidence_before_target_planning() {
+    let fixture = Fixture::new(&["good"], true);
+    fixture.add_rust_root("good");
+    let artifact_path = fixture.root.join(".ayni/last/signals.json");
+    fs::create_dir_all(artifact_path.parent().expect("artifact parent")).expect("artifact dir");
+    fs::write(&artifact_path, "stale-success\n").expect("stale artifact");
+    fs::write(
+        &fixture.config,
+        r#"[checks]
+coverage = true
+
+[languages]
+enabled = ["rust"]
+
+[rust.coverage]
+line_percent = { warn = 101, fail = 70 }
+"#,
+    )
+    .expect("invalid policy");
+
+    let output = fixture.run(&["check", "--host", "--output", "json"]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("rust.coverage.line_percent.warn must be finite and between 0 and 100"),
+        "{stderr}"
+    );
+    assert!(
+        !artifact_path.exists(),
+        "invalid contracts must not leave stale evidence as current"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn configured_root_escape_is_rejected_by_analyze_before_artifact_writes() {

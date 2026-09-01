@@ -17,8 +17,10 @@ pub use lock::{
     resolve_provisioning_base,
 };
 pub use runtime::{
-    Engine, LaunchAuthorization, TargetSelection, build, build_prepared, detect_engine, doctor,
-    doctor_prepared, launch, launch_prepared, launch_repository, launch_repository_prepared,
+    CapturedLaunch, Engine, LaunchAuthorization, ReadOnlyInput, TargetSelection, build,
+    build_prepared, detect_engine, doctor, doctor_prepared, launch, launch_prepared,
+    launch_repository, launch_repository_prepared, launch_repository_prepared_with_inputs,
+    launch_repository_prepared_with_inputs_captured,
 };
 pub use storage::{
     StorageImage, StorageImageOwnership, StorageImagePruneScope, StoragePruneFailure,

@@ -644,3 +644,63 @@ command = "cargo"
     assert_eq!(warnings[0].policy_path, "checks.test");
     assert_eq!(warnings[5].policy_path, "checks.mutation");
 }
+
+#[test]
+fn policy_validation_rejects_invalid_thresholds_empty_commands_and_duplicate_languages() {
+    for (document, expected) in [
+        (
+            r#"
+[languages]
+enabled = ["rust"]
+[rust.coverage]
+line_percent = { warn = 101, fail = 70 }
+"#,
+            "rust.coverage.line_percent.warn must be finite and between 0 and 100",
+        ),
+        (
+            r#"
+[languages]
+enabled = ["rust"]
+[rust.coverage]
+line_percent = { warn = nan, fail = 70 }
+"#,
+            "rust.coverage.line_percent.warn must be finite and between 0 and 100",
+        ),
+        (
+            r#"
+[languages]
+enabled = ["rust"]
+[rust.complexity]
+fn_cyclomatic = { warn = -1, fail = 20 }
+"#,
+            "rust.complexity.fn_cyclomatic.warn must be finite and at least 0",
+        ),
+        (
+            r#"
+[languages]
+enabled = ["rust"]
+[rust.tooling.test]
+"#,
+            "rust.tooling.test.command must be a non-empty command",
+        ),
+        (
+            r#"
+[languages]
+enabled = ["rust", "rust"]
+"#,
+            "languages.enabled contains duplicate language 'rust'",
+        ),
+        (
+            r#"
+[environment.tools]
+node = "latest"
+[languages]
+enabled = ["rust"]
+"#,
+            "environment.tools.node must declare a non-floating exact version",
+        ),
+    ] {
+        let error = AyniPolicy::parse(document).expect_err("invalid policy");
+        assert_eq!(error, expected);
+    }
+}

@@ -20,7 +20,10 @@ advisory effectiveness warnings with stable codes; warnings do not make a valid
 policy fail. It does not discover
 projects, inspect or invoke tools, run adapters, analyze code, or write
 artifacts. Use `ayni check` for managed measured results and completion
-evidence, or `ayni check --host` for the explicit host path.
+evidence, or `ayni check --host` for the explicit host path. At the start of a
+`check` or `verify` invocation, Ayni removes that command's prior artifact rather
+than leaving older evidence available as current if validation or later work
+fails; fix the error and rerun to produce fresh evidence.
 
 For the signal vocabulary and schema selection, see [`signals.md`](signals.md);
 for current JSON artifact fields, see [schema v4](signals/v4.md).
@@ -236,6 +239,8 @@ line_percent = { warn = 70, fail = 50 }
 
 Note: Ayni uses Rust `glob` matching. Brace expansion like `*.{ts,tsx}` is not supported; use separate entries per extension.
 
+Coverage threshold values must be finite percentages from `0` through `100`; complexity threshold values must be finite and non-negative. Ayni rejects invalid ranges and warn/fail ordering while loading the policy, before discovery or tool invocation.
+
 ## Tool command overrides
 
 For high-variance tooling, adapters accept command and argument overrides only
@@ -269,7 +274,7 @@ args = ["run", "pytest", "--json-report", "--json-report-file", ".ayni/pytest-re
 
 Notes:
 
-- `command` is required inside each override table.
+- `command` is required inside each override table and must be non-empty; an empty table is invalid policy rather than a command with an empty executable.
 - `args` is optional; when omitted, Ayni uses signal-specific defaults for that language.
 - Overrides are command execution overrides only; result parsing still expects the signal collector’s native output shape.
 - Mutation is unavailable for Rust, Node, and Go. Those adapters reject the
@@ -305,6 +310,7 @@ Rules:
 - Roots are repository-relative paths.
 - Default is `["."]` when omitted.
 - `auto` is not supported in `languages.enabled` in v0.
+- Each enabled language may appear only once; duplicates are rejected rather than silently changing target accounting.
 - Paths are canonicalized to POSIX style: backslashes become `/`, trailing `/` is removed.
 - Absolute, rooted, Windows drive-prefixed, and any parent-component (`..`) roots are rejected during policy validation.
 - Before operational commands inspect adapters, root containment is checked three

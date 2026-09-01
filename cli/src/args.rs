@@ -557,6 +557,8 @@ impl ImpactShowOptions {
             execution_mode: ExecutionMode::Managed,
             debug: false,
             authorization: CapabilityAuthorization::default(),
+            managed_handoff: None,
+            managed_result: None,
         }
     }
 }
@@ -573,6 +575,10 @@ struct ImpactRunOptions {
     debug: bool,
     #[command(flatten)]
     authorization: CapabilityAuthorizationOptions,
+    #[arg(long, hide = true)]
+    managed_handoff: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    managed_result: Option<PathBuf>,
 }
 
 impl ImpactRunOptions {
@@ -581,6 +587,8 @@ impl ImpactRunOptions {
         operation.execution_mode = execution_mode(self.host);
         operation.debug = self.debug;
         operation.authorization = self.authorization.into_authorization();
+        operation.managed_handoff = self.managed_handoff;
+        operation.managed_result = self.managed_result;
         operation
     }
 }

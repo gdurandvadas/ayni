@@ -141,6 +141,10 @@ pub(crate) struct ImpactOperation {
     pub execution_mode: ExecutionMode,
     pub debug: bool,
     pub authorization: CapabilityAuthorization,
+    /// Internal immutable host-produced impact plan for managed execution.
+    pub managed_handoff: Option<PathBuf>,
+    /// Internal provisional artifact path promoted by the managed outer process.
+    pub managed_result: Option<PathBuf>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

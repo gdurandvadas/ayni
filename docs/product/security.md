@@ -9,8 +9,8 @@ consequences of choosing an execution mode or capability.
 
 Ayni's managed environment is designed for reproducibility and damage
 containment; it is not a security boundary for hostile repository code. Under
-the default profile, quality commands run with networking disabled, a
-read-only host checkout, a read-only container root filesystem, all Linux
+the default profile, quality commands run with networking disabled, a private
+read-only source snapshot, a read-only container root filesystem, all Linux
 capabilities dropped, and privilege escalation disabled. `env shell`, `env
 run`, and `--host` intentionally relax these boundaries for development
 workflows. Requesting and authorizing Docker-socket access grants effective
@@ -25,7 +25,7 @@ without host credentials or daemon access.
 
 | Mode or capability | Host checkout | Network and host authority | Intended trust level |
 | --- | --- | --- | --- |
-| Managed `check`, `verify`, and `impact run` with default capabilities | Mounted read-only as input; execution uses an ephemeral writable copy | Container network disabled; no daemon socket | Trusted repository code where reproducibility and containment are required |
+| Managed `check`, `verify`, and `impact run` with default capabilities | The live checkout is not mounted; a bounded private snapshot feeds an ephemeral writable copy | Container network disabled; no daemon socket | Trusted repository code where reproducibility and containment are required |
 | `env shell` and `env run` | Mounted read-write at `/workspace` | Locked capabilities still apply and require operator authorization; arbitrary commands can edit the checkout | Trusted interactive development only |
 | `--host` | Commands operate directly on host files | Host identity, network, environment, and installed tools apply; there is no container boundary | Trusted code on a host prepared for direct execution |
 | Bridge networking | Depends on the selected execution mode | Locked policy request plus `--allow-network` permits container network access and possible data exfiltration | Trusted code that has a documented network requirement |
@@ -38,9 +38,10 @@ workload that consumes the resulting lock.
 
 ## Default managed quality execution
 
-For managed quality commands, Ayni mounts the canonical host checkout
-read-only, copies it into an ephemeral writable `/workspace`, and discards
-workspace source changes when the container exits. It keeps `.ayni/` writable
+For managed quality commands, Ayni creates a bounded private snapshot of the
+canonical host checkout, mounts that snapshot read-only, copies it into an
+ephemeral writable `/workspace`, and discards workspace source changes when the
+container exits. It keeps the checkout's `.ayni/` writable
 so evidence and prepared environment state can persist.
 
 The runtime uses `--read-only`, drops all Linux capabilities, applies
@@ -99,8 +100,10 @@ that is absent from the lock. This check applies to managed `check`, `verify`,
 `impact run`, `env shell`, and `env run`; it does not turn `--host` into an
 isolated mode.
 
-Docker socket access mounts the selected engine's Unix socket. This is socket
-sharing rather than a privileged Docker-in-Docker container, but the security
+Docker socket access resolves the selected engine endpoint, rejects non-Unix
+endpoints and non-socket filesystem objects, and mounts the canonical Unix
+socket path. This is socket sharing rather than a privileged Docker-in-Docker
+container, but the security
 consequence is still substantial: code that can call the daemon can generally
 create containers, mount paths visible to that daemon, and exercise the
 daemon's authority. Capability dropping and `no-new-privileges` inside the Ayni
@@ -158,8 +161,9 @@ cosign verify \
 
 The workflow pushes architecture images by digest without persistent
 architecture tags, scans the same immutable digests used to assemble the
-index, signs the index digest under a staging reference, and only then promotes
-that signed digest to the release tag. Rust dependencies are audited with an
+index, signs the index digest under a staging reference, promotes that exact
+digest to the release tag, and verifies the promoted digest against the expected
+main-branch workflow identity and GitHub OIDC issuer. Rust dependencies are audited with an
 exact cargo-audit version in the pull-request quality workflow and in a weekly
 default-branch workflow, so newly published RustSec advisories do not have to
 wait for another code change. Dependabot maintains Cargo and GitHub Action
@@ -170,10 +174,13 @@ digests/checksums before merging.
 
 ## Secrets and diagnostics
 
-Managed quality execution can read the entire checkout, including untracked
-files. A read-only mount prevents modification; it does not prevent disclosure
-to a process with network or daemon access. Keep credentials outside the
-repository tree and do not rely on `.gitignore` as a secrecy boundary.
+Managed quality execution snapshots tracked files and unignored untracked files
+from the checkout according to a host-produced Git manifest. Ignored build and
+dependency trees are omitted to bound Docker workspace materialization. The
+live checkout is not mounted into the quality container, but every selected
+file is present in its private snapshot, so `.gitignore` should not be treated
+as the only secrecy control: keep credentials outside the repository tree and
+review any process granted network or daemon access.
 
 Ayni does not wholesale mount the host home directory or forward the complete
 host environment into managed containers. Explicitly mounted engine sockets,

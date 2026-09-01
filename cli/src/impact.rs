@@ -1,6 +1,6 @@
 use crate::analysis::{
-    build_analyze_targets, enabled_signal_kinds, managed_execution_active, persist_artifact_at,
-    signal_kind_slug, workspace_root_from_config_path,
+    build_analyze_targets, enabled_signal_kinds, invalidate_artifact_at, managed_execution_active,
+    persist_artifact_at, signal_kind_slug, workspace_root_from_config_path,
 };
 use crate::application::{ExecutionMode, ImpactOperation, OutputFormat};
 use crate::build_registry;
@@ -9,12 +9,15 @@ use crate::ui::cancellation::SignalCancellation;
 use ayni_adapters_common::exec::run_command_structured_cancellable;
 use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
-    AdapterRegistry, AyniPolicy, CancellationToken, ChangedPath, Findings, IMPACT_SCHEMA_VERSION,
-    ImpactArtifact, ImpactConfidence, ImpactExecutionIssue, ImpactIdentity, ImpactIdentityKind,
-    ImpactPlan, ImpactReason, ImpactReasonKind, ImpactRequest, ImpactUncertainty,
-    ImpactUncertaintyKind, RunOutcome, SelectedCheck, SignalRow, VerificationSelection,
+    AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, AyniPolicy, CancellationToken, ChangedPath,
+    Findings, IMPACT_SCHEMA_VERSION, ImpactArtifact, ImpactConfidence, ImpactExecution,
+    ImpactExecutionIssue, ImpactIdentity, ImpactIdentityKind, ImpactPlan, ImpactReason,
+    ImpactReasonKind, ImpactRequest, ImpactUncertainty, ImpactUncertaintyKind, RunOutcome,
+    SelectedCheck, SignalRow, VerificationSelection,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -45,6 +48,12 @@ pub(crate) fn show(operation: ImpactOperation) -> ExitCode {
 }
 
 pub(crate) fn run(operation: ImpactOperation) -> ExitCode {
+    if let Err(error) = invalidate_run_artifact(&operation) {
+        return fail(Error::execution(error));
+    }
+    if operation.managed_handoff.is_some() {
+        return run_managed_handoff(operation);
+    }
     let registry = build_registry();
     let cancellation = match SignalCancellation::install() {
         Ok(cancellation) => cancellation,
@@ -56,6 +65,442 @@ pub(crate) fn run(operation: ImpactOperation) -> ExitCode {
         Ok((false, false)) => ExitCode::SUCCESS,
         Err(error) => fail(error),
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ManagedImpactHandoff {
+    plan: ImpactPlan,
+    source_fingerprint: String,
+    config_path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedImpactDocument {
+    schema_version: String,
+    signal_schema_version: String,
+    generated_at: String,
+    execution_mode: String,
+    plan: ImpactPlan,
+    execution: ImpactExecution,
+    repository_completion: serde_json::Value,
+    aggregate: serde_json::Value,
+    rows: Vec<SignalRow>,
+    findings: Vec<Findings>,
+}
+
+pub(crate) fn invalidate_run_artifact(operation: &ImpactOperation) -> Result<(), String> {
+    let workspace_root = workspace_root_from_config_path(&operation.config)?;
+    invalidate_artifact_at(&workspace_root, IMPACT_ARTIFACT)
+}
+
+pub(crate) struct ManagedImpactSession {
+    handoff: tempfile::NamedTempFile,
+    result: tempfile::NamedTempFile,
+    result_relative: String,
+}
+
+impl ManagedImpactSession {
+    pub(crate) fn handoff_path(&self) -> &Path {
+        self.handoff.path()
+    }
+
+    pub(crate) fn result_relative(&self) -> &str {
+        &self.result_relative
+    }
+}
+
+fn managed_result_directory(workspace_root: &Path) -> Result<PathBuf, String> {
+    let mut directory = workspace_root.to_path_buf();
+    for component in [".ayni", "impact", "pending"] {
+        directory.push(component);
+        match std::fs::symlink_metadata(&directory) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Err(format!(
+                    "managed impact result path {} must be a real directory",
+                    directory.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&directory).map_err(|error| {
+                    format!(
+                        "failed to create managed impact result directory {}: {error}",
+                        directory.display()
+                    )
+                })?;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect managed impact result directory {}: {error}",
+                    directory.display()
+                ));
+            }
+        }
+    }
+    Ok(directory)
+}
+
+/// Create the immutable host-side plan and private provisional result slot used
+/// by a managed inner execution.
+pub(crate) fn prepare_managed_handoff(
+    operation: &ImpactOperation,
+    registry: &AdapterRegistry,
+    prepared_outputs: &[String],
+    managed_config_path: &str,
+) -> Result<ManagedImpactSession, String> {
+    let cancellation = CancellationToken::default();
+    let (workspace_root, _, plan, _) =
+        prepare_plan(operation, registry, &cancellation).map_err(|error| error.message)?;
+    let source_fingerprint =
+        crate::analysis::source_fingerprint_excluding(&workspace_root, prepared_outputs)?;
+    let mut handoff = tempfile::NamedTempFile::new()
+        .map_err(|error| format!("failed to create managed impact handoff: {error}"))?;
+    serde_json::to_writer(
+        &mut handoff,
+        &ManagedImpactHandoff {
+            plan,
+            source_fingerprint,
+            config_path: managed_config_path.to_owned(),
+        },
+    )
+    .map_err(|error| format!("failed to serialize managed impact handoff: {error}"))?;
+    handoff
+        .flush()
+        .map_err(|error| format!("failed to flush managed impact handoff: {error}"))?;
+
+    let pending = managed_result_directory(&workspace_root)?;
+    let result = tempfile::Builder::new()
+        .prefix("impact-")
+        .suffix(".json")
+        .tempfile_in(&pending)
+        .map_err(|error| format!("failed to create managed impact result: {error}"))?;
+    let result_relative = result
+        .path()
+        .strip_prefix(&workspace_root)
+        .map_err(|_| String::from("managed impact result escaped the repository"))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    Ok(ManagedImpactSession {
+        handoff,
+        result,
+        result_relative,
+    })
+}
+
+fn read_managed_handoff(session: &ManagedImpactSession) -> Result<ManagedImpactHandoff, String> {
+    let bytes = std::fs::read(session.handoff.path())
+        .map_err(|error| format!("failed to read managed impact handoff: {error}"))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse managed impact handoff: {error}"))
+}
+
+/// Recompute the host candidate after managed execution so concurrent checkout
+/// edits remain a fail-closed condition even though the container has no Git.
+pub(crate) fn managed_handoff_is_stable(
+    operation: &ImpactOperation,
+    registry: &AdapterRegistry,
+    session: &ManagedImpactSession,
+) -> Result<bool, String> {
+    let handoff = read_managed_handoff(session)?;
+    let cancellation = CancellationToken::default();
+    let (_, _, plan, _) =
+        prepare_plan(operation, registry, &cancellation).map_err(|error| error.message)?;
+    Ok(plan == handoff.plan)
+}
+
+pub(crate) fn promote_managed_result(
+    operation: &ImpactOperation,
+    session: &ManagedImpactSession,
+    exit_code: i32,
+    captured_stdout: &[u8],
+) -> Result<(), String> {
+    let serialized = std::fs::read_to_string(session.result.path())
+        .map_err(|error| format!("managed impact did not produce provisional evidence: {error}"))?;
+    let handoff = read_managed_handoff(session)?;
+    let expected = validate_managed_document(&serialized, &handoff)?;
+    validate_managed_findings(&expected, Path::new(&handoff.config_path))?;
+    validate_managed_result_transport(
+        operation.output,
+        &serialized,
+        &expected,
+        exit_code,
+        captured_stdout,
+    )?;
+    let workspace_root = workspace_root_from_config_path(&operation.config)?;
+    persist_artifact_at(&workspace_root, IMPACT_ARTIFACT, &serialized)
+}
+
+fn validate_managed_document(
+    serialized: &str,
+    handoff: &ManagedImpactHandoff,
+) -> Result<ImpactArtifact, String> {
+    let document: serde_json::Value = serde_json::from_str(serialized).map_err(|error| {
+        format!("managed impact produced invalid provisional evidence: {error}")
+    })?;
+    let parsed: ManagedImpactDocument =
+        serde_json::from_value(document.clone()).map_err(|error| {
+            format!("managed impact evidence does not match the artifact schema: {error}")
+        })?;
+    validate_managed_document_identity(&parsed, handoff)?;
+    parsed.plan.validate().map_err(|error| error.to_string())?;
+    for row in &parsed.rows {
+        row.validate_payloads()?;
+    }
+    validate_managed_rows(&parsed.plan, &parsed.rows)?;
+    validate_managed_issues(&parsed.plan, &parsed.execution)?;
+    let expected = ImpactArtifact::new(
+        parsed.generated_at,
+        parsed.execution_mode,
+        parsed.plan,
+        parsed.execution.issues,
+        parsed.rows,
+        parsed.findings,
+    );
+    let expected_document = serde_json::to_value(&expected)
+        .map_err(|error| format!("failed to validate managed impact evidence: {error}"))?;
+    let _reported_derived_views = (parsed.repository_completion, parsed.aggregate);
+    if document != expected_document {
+        return Err(String::from(
+            "managed impact provisional evidence has inconsistent execution or aggregate accounting",
+        ));
+    }
+    Ok(expected)
+}
+
+fn validate_managed_document_identity(
+    document: &ManagedImpactDocument,
+    handoff: &ManagedImpactHandoff,
+) -> Result<(), String> {
+    let valid = document.schema_version == IMPACT_SCHEMA_VERSION
+        && document.signal_schema_version == AYNI_SIGNAL_SCHEMA_VERSION
+        && document.execution_mode == "managed"
+        && document.plan == handoff.plan;
+    if valid {
+        Ok(())
+    } else {
+        Err(String::from(
+            "managed impact provisional evidence does not match its immutable handoff",
+        ))
+    }
+}
+
+fn validate_managed_issues(plan: &ImpactPlan, execution: &ImpactExecution) -> Result<(), String> {
+    let invalid = execution.issues.iter().any(|issue| {
+        issue
+            .check
+            .as_ref()
+            .is_some_and(|check| !plan.selected_checks.contains(check))
+    });
+    if invalid {
+        Err(String::from(
+            "managed impact evidence contains an issue for an unplanned check",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_managed_rows(plan: &ImpactPlan, rows: &[SignalRow]) -> Result<(), String> {
+    let mut matched = vec![false; plan.selected_checks.len()];
+    for row in rows {
+        let Some(index) = plan
+            .selected_checks
+            .iter()
+            .enumerate()
+            .position(|(index, check)| {
+                !matched[index] && signal_row_matches(check, row, "/workspace")
+            })
+        else {
+            return Err(String::from(
+                "managed impact evidence contains a duplicate or unplanned signal row",
+            ));
+        };
+        matched[index] = true;
+    }
+    Ok(())
+}
+
+fn validate_managed_findings(artifact: &ImpactArtifact, config_path: &Path) -> Result<(), String> {
+    let registry = build_registry();
+    let expected = materialize_findings(&artifact.rows, &registry, config_path, false)
+        .map_err(|error| error.message)?;
+    if expected == artifact.findings {
+        Ok(())
+    } else {
+        Err(String::from(
+            "managed impact findings do not match their signal-row offenders",
+        ))
+    }
+}
+
+fn validate_managed_result_transport(
+    output: OutputFormat,
+    serialized: &str,
+    artifact: &ImpactArtifact,
+    exit_code: i32,
+    captured_stdout: &[u8],
+) -> Result<(), String> {
+    let expected_exit_code = impact_exit_code(artifact.outcome());
+    if exit_code != expected_exit_code {
+        return Err(format!(
+            "managed impact exited with {exit_code}, but its provisional evidence requires exit code {expected_exit_code}"
+        ));
+    }
+    if output == OutputFormat::Json && captured_stdout != serialized.as_bytes() {
+        return Err(String::from(
+            "managed impact JSON output does not match its provisional evidence",
+        ));
+    }
+    Ok(())
+}
+
+fn impact_exit_code(outcome: RunOutcome) -> i32 {
+    match outcome {
+        RunOutcome::Passed => 0,
+        RunOutcome::QualityFailed => 1,
+        RunOutcome::ExecutionIncomplete => 4,
+    }
+}
+
+fn managed_result_relative_path(operation: &ImpactOperation) -> Result<String, Error> {
+    let path = operation.managed_result.as_ref().ok_or_else(|| {
+        Error::input("managed impact execution requires a provisional result path")
+    })?;
+    if path.is_absolute() {
+        return Err(Error::input(
+            "managed impact result must be a repository-relative path",
+        ));
+    }
+    let components = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let valid = components.len() == 4
+        && components[0] == ".ayni"
+        && components[1] == "impact"
+        && components[2] == "pending"
+        && components[3].starts_with("impact-")
+        && components[3].ends_with(".json");
+    if !valid {
+        return Err(Error::input(
+            "managed impact result must be a normalized private impact path",
+        ));
+    }
+    Ok(components.join("/"))
+}
+
+struct ManagedHandoffContext {
+    result_path: String,
+    handoff: ManagedImpactHandoff,
+    workspace_root: PathBuf,
+    policy: AyniPolicy,
+}
+
+fn run_managed_handoff(operation: ImpactOperation) -> ExitCode {
+    match run_managed_handoff_inner(&operation) {
+        Ok(outcome) => ExitCode::from(impact_exit_code(outcome) as u8),
+        Err(error) => fail(error),
+    }
+}
+
+fn run_managed_handoff_inner(operation: &ImpactOperation) -> Result<RunOutcome, Error> {
+    let context = load_managed_handoff_context(operation)?;
+    let cancellation = CancellationToken::default();
+    let before =
+        crate::analysis::source_fingerprint(&context.workspace_root).map_err(Error::execution)?;
+    if before != context.handoff.source_fingerprint {
+        return Err(Error::execution(
+            "managed workspace snapshot does not match the immutable host candidate",
+        ));
+    }
+    let registry = build_registry();
+    let mut collected = execute_checks(
+        &context.workspace_root,
+        &context.policy,
+        &context.handoff.plan,
+        &registry,
+        operation,
+        &cancellation,
+    )?;
+    record_managed_candidate_drift(&context.workspace_root, &before, &mut collected)?;
+    let findings = materialize_findings(&collected.rows, &registry, &operation.config, false)?;
+    let artifact = build_artifact(context.handoff.plan, collected, findings, operation)?;
+    let serialized = serialize_impact_artifact(&artifact)?;
+    ensure_not_cancelled(&cancellation, "impact execution")?;
+    persist_artifact_at(&context.workspace_root, &context.result_path, &serialized)
+        .map_err(Error::execution)?;
+    emit_artifact(&artifact, &serialized, operation.output)?;
+    Ok(artifact.outcome())
+}
+
+fn load_managed_handoff_context(
+    operation: &ImpactOperation,
+) -> Result<ManagedHandoffContext, Error> {
+    validate_managed_handoff_invocation(operation)?;
+    let result_path = managed_result_relative_path(operation)?;
+    let path = operation
+        .managed_handoff
+        .as_ref()
+        .expect("validated managed handoff path");
+    let bytes = std::fs::read(path)
+        .map_err(|error| Error::input(format!("failed to read managed impact handoff: {error}")))?;
+    let handoff: ManagedImpactHandoff = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::input(format!("failed to parse managed impact handoff: {error}"))
+    })?;
+    if operation.config != Path::new(&handoff.config_path) {
+        return Err(Error::input(
+            "managed impact contract does not match its immutable handoff",
+        ));
+    }
+    handoff
+        .plan
+        .validate()
+        .map_err(|error| Error::input(error.to_string()))?;
+    let workspace_root =
+        workspace_root_from_config_path(&operation.config).map_err(Error::input)?;
+    let config = operation
+        .config
+        .canonicalize()
+        .map_err(|error| Error::input(format!("failed to resolve impact contract: {error}")))?;
+    let policy = load_from_path(&config).map_err(Error::input)?;
+    validate_configured_root_containment(&workspace_root, &policy).map_err(Error::input)?;
+    Ok(ManagedHandoffContext {
+        result_path,
+        handoff,
+        workspace_root,
+        policy,
+    })
+}
+
+fn validate_managed_handoff_invocation(operation: &ImpactOperation) -> Result<(), Error> {
+    if std::env::var_os("AYNI_MANAGED_LOCK_FINGERPRINT").is_none() {
+        return Err(Error::input(
+            "--managed-handoff is reserved for managed environment execution",
+        ));
+    }
+    let path = operation
+        .managed_handoff
+        .as_ref()
+        .expect("managed handoff selected");
+    if path != Path::new("/opt/ayni/inputs/impact-plan.json") {
+        return Err(Error::input(
+            "managed impact handoff must use the reserved read-only input path",
+        ));
+    }
+    Ok(())
+}
+
+fn record_managed_candidate_drift(
+    workspace_root: &Path,
+    before: &str,
+    collected: &mut CollectedImpact,
+) -> Result<(), Error> {
+    let after = crate::analysis::source_fingerprint(workspace_root).map_err(Error::execution)?;
+    if before != after {
+        collected.issues.push(candidate_drift_issue());
+    }
+    Ok(())
 }
 
 fn fail(error: Error) -> ExitCode {
@@ -294,7 +739,12 @@ fn execute_impact_candidate(
         cancellation,
     )?;
     ensure_not_cancelled(cancellation, "impact execution")?;
-    let findings = materialize_findings(&collected.rows, registry, operation)?;
+    let findings = materialize_findings(
+        &collected.rows,
+        registry,
+        &operation.config,
+        !managed_execution_active(),
+    )?;
     let (_, _, recomputed_plan, after) = prepare_plan(operation, registry, cancellation)?;
     ensure_not_cancelled(cancellation, "impact execution")?;
     if after != before || recomputed_plan != plan {
@@ -442,22 +892,29 @@ fn ensure_not_cancelled(cancellation: &CancellationToken, operation: &str) -> Re
     }
 }
 
+fn signal_row_matches(
+    check: &SelectedCheck,
+    row: &SignalRow,
+    expected_workspace_root: &str,
+) -> bool {
+    let expected_path = (check.configured_root != ".").then_some(check.configured_root.as_str());
+    row.language == check.language
+        && row.kind == check.signal
+        && row.scope.workspace_root == expected_workspace_root
+        && row.scope.path.as_deref() == expected_path
+        && row.scope.package == check.package
+        && row.scope.file == check.file
+}
+
 fn reconcile_signal_row(
     check: &SelectedCheck,
     row: &SignalRow,
     expected_workspace_root: &str,
 ) -> Result<(), String> {
-    let expected_path = (check.configured_root != ".").then_some(check.configured_root.as_str());
-    let actual_path = row.scope.path.as_deref();
-    if row.language == check.language
-        && row.kind == check.signal
-        && row.scope.workspace_root == expected_workspace_root
-        && actual_path == expected_path
-        && row.scope.package == check.package
-        && row.scope.file == check.file
-    {
+    if signal_row_matches(check, row, expected_workspace_root) {
         return Ok(());
     }
+    let actual_path = row.scope.path.as_deref();
     Err(format!(
         "impact execution returned a row that does not match its selected check (expected language={}, signal={}, workspace_root={}, root={}, package={:?}, file={:?}; got language={}, signal={}, workspace_root={}, root={:?}, package={:?}, file={:?})",
         check.language,
@@ -515,7 +972,8 @@ fn build_artifact(
 fn materialize_findings(
     rows: &[SignalRow],
     registry: &AdapterRegistry,
-    operation: &ImpactOperation,
+    config_path: &Path,
+    host_execution: bool,
 ) -> Result<Vec<Findings>, Error> {
     let mut result = Vec::with_capacity(rows.len());
     for row in rows {
@@ -534,12 +992,12 @@ fn materialize_findings(
                     .verification_selector_support(row.kind)
                     .validate_target(row.kind, target)?;
                 Ok(crate::verification_command::render_verification_command(
-                    &operation.config.to_string_lossy(),
+                    &config_path.to_string_lossy(),
                     row.kind,
                     row.language,
                     configured_root,
                     target,
-                    !managed_execution_active(),
+                    host_execution,
                 ))
             })
             .map_err(|error| Error::execution(error.to_string()))?;
@@ -552,10 +1010,15 @@ fn materialize_findings(
 mod tests {
     use super::git::{hash_untracked_path, parse_name_status};
     use super::render::effective_execution_mode_when;
-    use super::{ExecutionMode, reconcile_signal_row};
+    use super::{
+        ExecutionMode, ManagedImpactHandoff, OutputFormat, reconcile_signal_row,
+        validate_managed_document, validate_managed_findings, validate_managed_result_transport,
+        validate_managed_rows,
+    };
     use ayni_core::{
-        Budget, CancellationToken, ChangeKind, Language, Offenders, Scope, SelectedCheck,
-        SignalKind, SignalResult, SignalRow, TestBudget, TestResult, lower_hex,
+        Budget, CancellationToken, ChangeKind, ImpactArtifact, ImpactIdentity, ImpactIdentityKind,
+        ImpactPlan, Language, Offenders, Scope, SelectedCheck, SignalKind, SignalResult, SignalRow,
+        TestBudget, TestResult, lower_hex,
     };
     use sha2::{Digest, Sha256};
 
@@ -564,6 +1027,81 @@ mod tests {
         assert_eq!(
             effective_execution_mode_when(ExecutionMode::Host, true),
             ExecutionMode::Managed
+        );
+    }
+
+    fn empty_managed_plan() -> ImpactPlan {
+        ImpactPlan {
+            base: ImpactIdentity {
+                kind: ImpactIdentityKind::Revision,
+                revision: String::from("base-commit"),
+                requested: Some(String::from("main")),
+                fingerprint: None,
+            },
+            candidate: ImpactIdentity {
+                kind: ImpactIdentityKind::WorkingTree,
+                revision: String::from("candidate-commit"),
+                requested: None,
+                fingerprint: Some(String::from("sha256:candidate")),
+            },
+            changes: Vec::new(),
+            selected_checks: Vec::new(),
+            uncertainties: Vec::new(),
+            repository_completion_required: true,
+        }
+    }
+
+    #[test]
+    fn managed_result_validation_rejects_derived_accounting_and_transport_drift() {
+        let plan = empty_managed_plan();
+        let handoff = ManagedImpactHandoff {
+            plan: plan.clone(),
+            source_fingerprint: String::from("sha256:source"),
+            config_path: String::from("./.ayni.toml"),
+        };
+        let artifact = ImpactArtifact::new(
+            String::from("2026-09-01T00:00:00Z"),
+            "managed",
+            plan,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let serialized = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&artifact).expect("artifact serialization")
+        );
+        let validated = validate_managed_document(&serialized, &handoff).expect("valid evidence");
+        assert!(
+            validate_managed_result_transport(
+                OutputFormat::Json,
+                &serialized,
+                &validated,
+                0,
+                serialized.as_bytes(),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_managed_result_transport(
+                OutputFormat::Json,
+                &serialized,
+                &validated,
+                137,
+                serialized.as_bytes(),
+            )
+            .is_err()
+        );
+
+        let mut inconsistent: serde_json::Value =
+            serde_json::from_str(&serialized).expect("artifact JSON");
+        inconsistent["aggregate"]["passing_rows"] = serde_json::json!(1);
+        assert!(
+            validate_managed_document(
+                &serde_json::to_string_pretty(&inconsistent).expect("inconsistent JSON"),
+                &handoff,
+            )
+            .is_err()
         );
     }
 
@@ -654,6 +1192,28 @@ mod tests {
             budget: Budget::Test(TestBudget::default()),
             offenders: Offenders::Test(Vec::new()),
         };
+
+        let mut plan = empty_managed_plan();
+        plan.selected_checks.push(check.clone());
+        assert!(validate_managed_rows(&plan, std::slice::from_ref(&row)).is_err());
+
+        let mut matching_row = row.clone();
+        matching_row.language = Language::Rust;
+        matching_row.scope.workspace_root = String::from("/workspace");
+        matching_row.scope.file = None;
+        assert!(validate_managed_rows(&plan, &[matching_row.clone()]).is_ok());
+        let missing_findings = ImpactArtifact::new(
+            String::from("2026-09-01T00:00:00Z"),
+            "managed",
+            plan,
+            Vec::new(),
+            vec![matching_row],
+            Vec::new(),
+        );
+        assert!(
+            validate_managed_findings(&missing_findings, std::path::Path::new("./.ayni.toml"))
+                .is_err()
+        );
 
         let error = reconcile_signal_row(&check, &row, ".").expect_err("mismatched row");
 

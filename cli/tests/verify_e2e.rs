@@ -557,10 +557,18 @@ fn ambiguous_language_and_unsafe_file_requests_fail_without_artifacts() {
         ),
     )
     .expect("polyglot policy");
+    let stale_artifact = fixture.root.join(".ayni/verify/last/signals.json");
+    fs::create_dir_all(stale_artifact.parent().expect("artifact parent"))
+        .expect("artifact directory");
+    fs::write(&stale_artifact, "stale-success\n").expect("stale artifact");
 
     let ambiguous = fixture.run(&["size"]);
     assert_eq!(ambiguous.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("--language is required"));
+    assert!(
+        !stale_artifact.exists(),
+        "a rejected request must not leave prior focused evidence current"
+    );
     for file in ["../outside.rs", "/tmp/outside.rs"] {
         let output = fixture.run(&["size", "--file", file]);
         assert_eq!(output.status.code(), Some(2));

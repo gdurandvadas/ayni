@@ -47,8 +47,9 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 ```
 
 The installer detects the current platform, installs `ayni` into
-`~/.local/bin` by default, and verifies checksums when possible. A piped install
-is non-interactive and prints the required `PATH` line when needed; download
+`~/.local/bin` by default, and requires `sha256sum` or `shasum` to verify the
+release checksum before installation. A piped install is non-interactive and
+prints the required `PATH` line when needed; download
 and run `install.sh` directly if you want its interactive prompts.
 
 Pin a specific release:

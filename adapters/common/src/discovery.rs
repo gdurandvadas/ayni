@@ -1,47 +1,74 @@
 //! Marker-file root discovery shared by adapter `discovery` modules.
 
+use crate::workspace::is_universal_workspace_state;
+
 use crate::paths::canonicalize_relative_posix;
 use std::fs;
 use std::path::Path;
 
 /// Walks the repository for directories containing `file_name` and returns
-/// their canonical repo-relative paths, sorted and deduplicated. Directories
-/// whose repo-relative path components match `exclude` are skipped entirely.
+/// their canonical repo-relative paths, sorted and deduplicated. Symlinked
+/// directories, universal Ayni/VCS state, and directories whose repo-relative
+/// path components match `exclude` are skipped entirely.
 pub fn discover_file_parent_roots<F>(repo_root: &Path, file_name: &str, exclude: F) -> Vec<String>
 where
     F: Fn(&[&str]) -> bool,
 {
     let mut found = Vec::new();
-    let mut stack = vec![repo_root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(value) => value,
-            Err(_) => continue,
+    visit_directory(repo_root, repo_root, file_name, &exclude, &mut found);
+    dedupe_and_sort_roots(found)
+}
+
+fn visit_directory<F>(
+    repo_root: &Path,
+    directory: &Path,
+    file_name: &str,
+    exclude: &F,
+    found: &mut Vec<String>,
+) where
+    F: Fn(&[&str]) -> bool,
+{
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Ok(relative) = path.strip_prefix(repo_root) {
-                    let text = canonicalize_relative_posix(&relative.to_string_lossy());
-                    let parts: Vec<&str> = text.split('/').collect();
-                    if exclude(&parts) {
-                        continue;
-                    }
-                }
-                stack.push(path);
-                continue;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            if !directory_is_excluded(repo_root, &path, exclude) {
+                visit_directory(repo_root, &path, file_name, exclude, found);
             }
-            if path.file_name().and_then(|v| v.to_str()) != Some(file_name) {
-                continue;
-            }
-            if let Some(parent) = path.parent()
-                && let Ok(relative) = parent.strip_prefix(repo_root)
-            {
-                found.push(canonicalize_relative_posix(&relative.to_string_lossy()));
-            }
+        } else if path.file_name().and_then(|value| value.to_str()) == Some(file_name) {
+            record_marker_parent(repo_root, &path, found);
         }
     }
-    dedupe_and_sort_roots(found)
+}
+
+fn directory_is_excluded<F>(repo_root: &Path, path: &Path, exclude: &F) -> bool
+where
+    F: Fn(&[&str]) -> bool,
+{
+    let Ok(relative) = path.strip_prefix(repo_root) else {
+        return true;
+    };
+    let text = canonicalize_relative_posix(&relative.to_string_lossy());
+    let parts = text.split('/').collect::<Vec<_>>();
+    is_universal_excluded_dir(&parts) || exclude(&parts)
+}
+
+fn record_marker_parent(repo_root: &Path, path: &Path, found: &mut Vec<String>) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let Ok(relative) = parent.strip_prefix(repo_root) else {
+        return;
+    };
+    found.push(canonicalize_relative_posix(&relative.to_string_lossy()));
 }
 
 /// Sorts and deduplicates discovered roots.
@@ -51,16 +78,14 @@ pub fn dedupe_and_sort_roots(mut roots: Vec<String>) -> Vec<String> {
     roots
 }
 
-/// Component names that should never be descended into for any language.
-pub fn is_vcs_or_vendor_dir(parts: &[&str]) -> bool {
-    parts
-        .iter()
-        .any(|part| matches!(*part, ".git" | "node_modules" | ".ayni"))
+/// Component names that should never be descended into for every language.
+pub fn is_universal_excluded_dir(parts: &[&str]) -> bool {
+    parts.iter().any(|part| is_universal_workspace_state(part))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{dedupe_and_sort_roots, discover_file_parent_roots, is_vcs_or_vendor_dir};
+    use super::{dedupe_and_sort_roots, discover_file_parent_roots};
     use std::fs;
     use tempfile::TempDir;
 
@@ -74,8 +99,24 @@ mod tests {
         fs::write(dir.path().join("node_modules/dep/go.mod"), "module dep\n")
             .expect("vendor marker");
 
-        let roots = discover_file_parent_roots(dir.path(), "go.mod", is_vcs_or_vendor_dir);
+        let roots = discover_file_parent_roots(dir.path(), "go.mod", |parts| {
+            parts.contains(&"node_modules")
+        });
         assert_eq!(roots, vec![String::from("."), String::from("services/api")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skips_symlinked_directories_that_escape_the_repository() {
+        use std::os::unix::fs::symlink;
+
+        let repo = TempDir::new().expect("repository");
+        let outside = TempDir::new().expect("outside");
+        fs::write(outside.path().join("go.mod"), "module escaped\n").expect("outside marker");
+        symlink(outside.path(), repo.path().join("escape")).expect("directory symlink");
+        symlink(outside.path().join("go.mod"), repo.path().join("go.mod")).expect("marker symlink");
+
+        assert!(discover_file_parent_roots(repo.path(), "go.mod", |_| false).is_empty());
     }
 
     #[test]

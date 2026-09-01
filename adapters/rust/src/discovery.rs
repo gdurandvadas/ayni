@@ -1,3 +1,4 @@
+use ayni_adapters_common::discovery::discover_file_parent_roots;
 use ayni_core::{DiscoveredRoot, ProjectDiscovery, ProjectLayout};
 use std::fs;
 use std::path::Path;
@@ -8,7 +9,7 @@ pub fn discover_roots(repo_root: &Path) -> Vec<String> {
 
 pub fn discover_project_roots(repo_root: &Path) -> ProjectDiscovery {
     let roots = discover_file_parent_roots(repo_root, "Cargo.toml", |parts| {
-        parts.contains(&"target") || parts.contains(&".git") || parts.contains(&"node_modules")
+        parts.contains(&"target") || parts.contains(&"node_modules")
     });
     let root_manifest = repo_root.join("Cargo.toml");
     let controlled = cargo_manifest_has_table(&root_manifest, "workspace");
@@ -42,67 +43,53 @@ fn cargo_manifest_has_table(path: &Path, table: &str) -> bool {
     value.get(table).is_some()
 }
 
-fn discover_file_parent_roots<F>(repo_root: &Path, file_name: &str, exclude: F) -> Vec<String>
-where
-    F: Fn(&[&str]) -> bool,
-{
-    let mut found = Vec::new();
-    let mut stack = vec![repo_root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Ok(relative) = path.strip_prefix(repo_root) {
-                    let text = canonicalize_relative_posix(&relative.to_string_lossy());
-                    let parts: Vec<&str> = text.split('/').collect();
-                    if exclude(&parts) {
-                        continue;
-                    }
-                }
-                stack.push(path);
-                continue;
-            }
-            if path.file_name().and_then(|v| v.to_str()) != Some(file_name) {
-                continue;
-            }
-            if let Some(parent) = path.parent()
-                && let Ok(relative) = parent.strip_prefix(repo_root)
-            {
-                found.push(canonicalize_relative_posix(&relative.to_string_lossy()));
-            }
-        }
-    }
-    dedupe_and_sort_roots(found)
-}
-
-fn dedupe_and_sort_roots(mut roots: Vec<String>) -> Vec<String> {
-    roots.sort();
-    roots.dedup();
-    roots
-}
-
-fn canonicalize_relative_posix(value: &str) -> String {
-    let mut normalized = value.trim().replace('\\', "/");
-    while normalized.ends_with('/') {
-        normalized.pop();
-    }
-    if normalized.is_empty() {
-        String::from(".")
-    } else {
-        normalized
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{discover_project_roots, discover_roots};
     use ayni_core::ProjectLayout;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn excludes_manifests_in_universal_state_directories() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::create_dir_all(dir.path().join("crates/live")).expect("live directory");
+        fs::write(
+            dir.path().join("crates/live/Cargo.toml"),
+            "[package]\nname = \"live\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("live manifest");
+        for state in [".ayni", ".git"] {
+            fs::create_dir_all(dir.path().join(state).join("nested")).expect("state directory");
+            fs::write(
+                dir.path().join(state).join("nested/Cargo.toml"),
+                "[package]\nname = \"hidden\"\nversion = \"0.1.0\"\n",
+            )
+            .expect("state manifest");
+        }
+
+        assert_eq!(
+            discover_roots(dir.path()),
+            vec![String::from("crates/live")]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skips_symlinked_directories_that_escape_the_repository() {
+        use std::os::unix::fs::symlink;
+
+        let repo = TempDir::new().expect("repository");
+        let outside = TempDir::new().expect("outside");
+        fs::write(
+            outside.path().join("Cargo.toml"),
+            "[package]\nname = \"escaped\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("outside manifest");
+        symlink(outside.path(), repo.path().join("escape")).expect("directory symlink");
+
+        assert!(discover_roots(repo.path()).is_empty());
+    }
 
     #[test]
     fn workspace_controller_only_root_excludes_workspace_root() {

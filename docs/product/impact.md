@@ -73,8 +73,17 @@ selected checks and reasons, uncertainties, typed signal rows, and execution
 issues. It explicitly states that repository completion is still required.
 Impact evidence never overwrites `.ayni/last/signals.json` or focused verification
 evidence. Ayni refuses impact planning unless this generated slot is ignored by
-Git, and recomputes the plan immediately before persistence so candidate drift
-fails closed.
+Git. Managed runs resolve and fingerprint the complete local-Git candidate on
+the host, then create a bounded source snapshot and hand the container an
+immutable, read-only serialized plan; the copied managed workspace therefore
+does not need Git metadata. Before checks, the inner run proves the snapshot
+fingerprint matches the host handoff. It fingerprints the same manifest again
+after checks, while the host recomputes the Git plan after the managed launch.
+The inner artifact and output remain provisional until those checks and full
+artifact/exit validation pass; copy mutation, process interruption, or host
+drift therefore cannot publish evidence for a different candidate. `impact run` also
+removes prior impact evidence when a new invocation starts, preventing an
+earlier result from remaining current after setup or execution failure.
 
 A successful impact run means only that its selected plan passed. Before calling
 work complete, always run:

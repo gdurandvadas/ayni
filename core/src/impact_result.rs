@@ -1,23 +1,23 @@
 use crate::{Findings, ImpactPlan, RunOutcome, SelectedCheck, SignalRow};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const IMPACT_SCHEMA_VERSION: &str = "0.1.0";
 
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ImpactExecutionState {
     Complete,
     Incomplete,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImpactExecutionIssue {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub check: Option<SelectedCheck>,
     pub message: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImpactExecution {
     pub state: ImpactExecutionState,
     pub planned_jobs: u64,

@@ -15,7 +15,88 @@ permissions:
   contents: read
 
 jobs:
+  validate-release-dispatch:
+    name: require main recovery dispatch
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    permissions: {}
+    steps:
+      - name: Require recovery from main
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$WORKFLOW_REF" = "refs/heads/main"
+
+  quality:
+    name: release quality prerequisite
+    needs: validate-release-dispatch
+    if: ${{ always() && (github.event_name == 'push' || needs.validate-release-dispatch.result == 'success') }}
+    uses: ./.github/workflows/ayni-quality.yml
+
+  managed-quality:
+    name: release managed quality prerequisite
+    needs: validate-release-dispatch
+    if: ${{ always() && (github.event_name == 'push' || needs.validate-release-dispatch.result == 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ayni-release-managed-quality
+
+      - name: Install pinned Mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          version: 2026.6.14
+          install: false
+          cache: false
+
+      - name: Build checkout Ayni CLI
+        run: cargo build --locked -p ayni-cli
+
+      - name: Build pullable checkout-local managed environment base
+        id: base
+        uses: ./.github/actions/build-local-environment-base
+
+      - name: Verify lock inputs and run the managed repository contract
+        env:
+          BASE: ${{ steps.base.outputs.reference }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .ayni.lock "$RUNNER_TEMP/ayni-lock.committed.json"
+          ./target/debug/ayni env lock --config ./.ayni.toml --base "$BASE"
+          jq --sort-keys \
+            'del(.provisioning_base.reference, .provisioning_base.digest, .fingerprint)' \
+            "$RUNNER_TEMP/ayni-lock.committed.json" \
+            > "$RUNNER_TEMP/ayni-lock.committed.normalized.json"
+          jq --sort-keys \
+            'del(.provisioning_base.reference, .provisioning_base.digest, .fingerprint)' \
+            .ayni.lock \
+            > "$RUNNER_TEMP/ayni-lock.generated.normalized.json"
+          diff --unified \
+            "$RUNNER_TEMP/ayni-lock.committed.normalized.json" \
+            "$RUNNER_TEMP/ayni-lock.generated.normalized.json"
+          ./target/debug/ayni env build
+          ./target/debug/ayni env doctor
+          ./target/debug/ayni check --config ./.ayni.toml
+
   release:
+    needs:
+      - quality
+      - managed-quality
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -23,6 +104,7 @@ jobs:
       release_created: ${{ steps.manual-release.outputs.release_created || steps.release.outputs.release_created }}
       release_tag: ${{ steps.manual-release.outputs.tag || steps.release.outputs.tag_name }}
       release_version: ${{ steps.manual-release.outputs.version || steps.release.outputs.version }}
+      release_commit: ${{ steps.release-source.outputs.commit }}
       release_pr_created: ${{ steps.release.outputs.prs_created }}
       release_pr_branch: ${{ steps.release-pr.outputs.branch }}
 
@@ -60,12 +142,47 @@ jobs:
             echo "release_tag must match ayni-v<semver>" >&2
             exit 1
           fi
-          gh api --silent "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}"
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          test "$(jq --raw-output '.draft' <<<"$release")" = "false"
+          test "$(jq --raw-output '.tag_name' <<<"$release")" = "$RELEASE_TAG"
           {
             echo "release_created=true"
             echo "tag=$RELEASE_TAG"
             echo "version=${RELEASE_TAG#ayni-v}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve immutable release source commit
+        id: release-source
+        if: ${{ steps.manual-release.outputs.release_created == 'true' || steps.release.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.manual-release.outputs.tag || steps.release.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type + " " + .object.sha')"
+          read -r type sha <<< "$object"
+          depth=0
+          while [[ "$type" == "tag" ]]; do
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.type + " " + .object.sha')"
+            read -r type sha <<< "$object"
+            depth=$((depth + 1))
+            test "$depth" -le 5
+          done
+          test "$type" = "commit"
+          test "$sha" != ""
+          echo "commit=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release tag and version identity
+        if: ${{ steps.manual-release.outputs.release_created == 'true' || steps.release.outputs.release_created == 'true' }}
+        env:
+          TAG: ${{ steps.manual-release.outputs.tag || steps.release.outputs.tag_name }}
+          VERSION: ${{ steps.manual-release.outputs.version || steps.release.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VERSION"
+          test "$TAG" = "ayni-v${VERSION}"
 
       - name: Resolve release pull request branch
         id: release-pr
@@ -100,6 +217,7 @@ jobs:
         with:
           ref: ${{ needs.release.outputs.release_pr_branch }}
           token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
 
       - name: Install pinned Mise
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
@@ -108,6 +226,9 @@ jobs:
           install: false
           cache: false
 
+      # Follow-up: checkout-local bases remain isolated per checkout. Reusing a
+      # base artifact across release branches needs provenance and compatibility
+      # validation, so this workflow intentionally does not share one yet.
       - name: Build pullable checkout-local managed environment base
         id: base
         uses: ./.github/actions/build-local-environment-base
@@ -120,6 +241,7 @@ jobs:
       - name: Commit managed lock
         env:
           BRANCH: ${{ needs.release.outputs.release_pr_branch }}
+          GIT_TOKEN: ${{ steps.app-token.outputs.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -130,7 +252,7 @@ jobs:
           git config user.email "282289292+ayni-release[bot]@users.noreply.github.com"
           git add -- .ayni.lock
           git commit -m "chore(release): refresh managed lock"
-          git push origin "HEAD:$BRANCH"
+          git push "https://x-access-token:${GIT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:$BRANCH"
 
   build:
     needs: release
@@ -155,7 +277,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.release.outputs.release_tag }}
+          ref: ${{ needs.release.outputs.release_commit }}
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
@@ -165,8 +288,17 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - name: Build ayni
-        run: cargo build --locked -p ayni-cli --release --target ${{ matrix.target }}
+      - name: Build and verify tagged Ayni version
+        env:
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(cargo metadata --locked --no-deps --format-version 1 | jq --raw-output '.packages[] | select(.name == "ayni-cli") | .version')"
+          test "$package_version" = "$EXPECTED_VERSION"
+          cargo build --locked -p ayni-cli --release --target "$TARGET"
+          test "$("target/${TARGET}/release/ayni" --version)" = "ayni ${EXPECTED_VERSION}"
 
       - name: Package binary
         env:
@@ -200,6 +332,26 @@ jobs:
       contents: write
 
     steps:
+      - name: Verify release tag still identifies the resolved source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type + " " + .object.sha')"
+          read -r type sha <<< "$object"
+          depth=0
+          while [[ "$type" == "tag" ]]; do
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.type + " " + .object.sha')"
+            read -r type sha <<< "$object"
+            depth=$((depth + 1))
+            test "$depth" -le 5
+          done
+          test "$type" = "commit"
+          test "$sha" = "$EXPECTED_COMMIT"
+
       - name: Download build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -209,7 +361,33 @@ jobs:
       - name: Build checksum manifest
         run: |
           set -euo pipefail
-          find dist -type f -name "*.sha256" -print0 | sort -z | xargs -0 cat > dist/SHA256SUMS
+          : > dist/SHA256SUMS
+          while IFS= read -r -d '' archive; do
+            digest="$(sha256sum "$archive" | awk '{print $1}')"
+            printf '%s  %s\n' "$digest" "$(basename "$archive")" >> dist/SHA256SUMS
+          done < <(find dist -type f -name "*.tar.gz" -print0 | sort -z)
+          test "$(wc -l < dist/SHA256SUMS)" -eq 4
+          test "$(awk '{print $2}' dist/SHA256SUMS | sort -u | wc -l)" -eq 4
+
+      - name: Re-verify release tag immediately before asset promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type + " " + .object.sha')"
+          read -r type sha <<< "$object"
+          depth=0
+          while [[ "$type" == "tag" ]]; do
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.type + " " + .object.sha')"
+            read -r type sha <<< "$object"
+            depth=$((depth + 1))
+            test "$depth" -le 5
+          done
+          test "$type" = "commit"
+          test "$sha" = "$EXPECTED_COMMIT"
 
       - name: Upload release artifacts
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
@@ -244,12 +422,17 @@ jobs:
       - name: Checkout release
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.release.outputs.release_tag }}
+          ref: ${{ needs.release.outputs.release_commit }}
+          persist-credentials: false
 
       - name: Build Bookworm-compatible Ayni binary
+        env:
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
         shell: bash
         run: |
           set -euo pipefail
+          package_version="$(cargo metadata --locked --no-deps --format-version 1 | jq --raw-output '.packages[] | select(.name == "ayni-cli") | .version')"
+          test "$package_version" = "$EXPECTED_VERSION"
           source .github/docker/ayni-env.versions
           docker run --rm \
             --user "$(id -u):$(id -g)" \
@@ -258,6 +441,7 @@ jobs:
             --workdir /workspace \
             "$RUST_BUILDER_IMAGE" \
             cargo build --locked -p ayni-cli --release
+          test "$(target/release/ayni --version)" = "ayni ${EXPECTED_VERSION}"
           cp target/release/ayni .github/docker/ayni
 
       - name: Prepare image context
@@ -303,6 +487,23 @@ jobs:
             MISE_SHA256_AMD64=${{ steps.versions.outputs.mise_sha256_amd64 }}
             MISE_SHA256_ARM64=${{ steps.versions.outputs.mise_sha256_arm64 }}
 
+      - name: Verify architecture image version and source revision
+        env:
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
+          IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/gdurandvadas/ayni-env@${IMAGE_DIGEST}"
+          docker pull --platform "$PLATFORM" "$image"
+          revision="$(docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          version="$(docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+          test "$revision" = "$EXPECTED_COMMIT"
+          test "$version" = "$EXPECTED_VERSION"
+          test "$(docker run --rm --platform "$PLATFORM" "$image" --version)" = "ayni ${EXPECTED_VERSION}"
+
       - name: Record immutable architecture digest
         env:
           IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
@@ -343,10 +544,31 @@ jobs:
       - environment-image
     if: ${{ needs.release.outputs.release_created == 'true' }}
     permissions:
+      contents: read
       id-token: write
       packages: write
 
     steps:
+      - name: Verify release tag still identifies the resolved source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type + " " + .object.sha')"
+          read -r type sha <<< "$object"
+          depth=0
+          while [[ "$type" == "tag" ]]; do
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.type + " " + .object.sha')"
+            read -r type sha <<< "$object"
+            depth=$((depth + 1))
+            test "$depth" -le 5
+          done
+          test "$type" = "commit"
+          test "$sha" = "$EXPECTED_COMMIT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
@@ -404,19 +626,182 @@ jobs:
       - name: Promote signed image to the release tag
         id: promote-manifest
         env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
           VERSION: ${{ needs.release.outputs.release_version }}
           REPOSITORY: ${{ steps.assemble-manifest.outputs.repository }}
           IMMUTABLE_IMAGE: ${{ steps.assemble-manifest.outputs.immutable }}
           SIGNED_DIGEST: ${{ steps.assemble-manifest.outputs.digest }}
         run: |
           set -euo pipefail
+          object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type + " " + .object.sha')"
+          read -r type sha <<< "$object"
+          depth=0
+          while [[ "$type" == "tag" ]]; do
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.type + " " + .object.sha')"
+            read -r type sha <<< "$object"
+            depth=$((depth + 1))
+            test "$depth" -le 5
+          done
+          test "$type" = "commit"
+          test "$sha" = "$EXPECTED_COMMIT"
           image="${REPOSITORY}:${VERSION}-debian"
           docker buildx imagetools create --tag "$image" "$IMMUTABLE_IMAGE"
           inspection="$(docker buildx imagetools inspect "$image")"
           printf '%s\n' "$inspection"
           digest="$(printf '%s\n' "$inspection" | sed -n 's/^Digest:[[:space:]]*//p' | head -n1)"
           test "$digest" = "$SIGNED_DIGEST"
+          cosign verify \
+            --certificate-identity 'https://github.com/gdurandvadas/ayni/.github/workflows/release.yml@refs/heads/main' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "${REPOSITORY}@${digest}"
           echo "base=${image}@${digest}" >> "$GITHUB_OUTPUT"
+
+  release-assets:
+    name: validate public release assets
+    runs-on: ubuntu-latest
+    needs:
+      - release
+      - publish
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Verify public asset inventory and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type + " " + .object.sha')"
+          read -r type sha <<< "$object"
+          depth=0
+          while [[ "$type" == "tag" ]]; do
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.type + " " + .object.sha')"
+            read -r type sha <<< "$object"
+            depth=$((depth + 1))
+            test "$depth" -le 5
+          done
+          test "$type" = "commit"
+          test "$sha" = "$EXPECTED_COMMIT"
+
+          targets=(
+            aarch64-apple-darwin
+            x86_64-apple-darwin
+            x86_64-unknown-linux-gnu
+            aarch64-unknown-linux-gnu
+          )
+          expected_assets=(SHA256SUMS)
+          for target in "${targets[@]}"; do
+            expected_assets+=("ayni-${TAG}-${target}.tar.gz")
+          done
+          printf '%s\n' "${expected_assets[@]}" | sort > expected-assets
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+            --jq '.assets[].name' | sort > actual-assets
+          diff --unified expected-assets actual-assets
+
+          mkdir release-assets
+          gh release download "$TAG" --dir release-assets --pattern SHA256SUMS
+          for target in "${targets[@]}"; do
+            archive="ayni-${TAG}-${target}.tar.gz"
+            gh release download "$TAG" --dir release-assets --pattern "$archive"
+          done
+          (cd release-assets && sha256sum --check SHA256SUMS)
+
+  release-smoke:
+    name: smoke public release binary (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs:
+      - release
+      - release-assets
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout tagged installer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.release.outputs.release_commit }}
+          persist-credentials: false
+
+      - name: Install and smoke-test matching public binary
+        env:
+          VERSION: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
+          INSTALL_DIR: ${{ runner.temp }}/released-bin
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./install.sh
+          test "$("$INSTALL_DIR/ayni" --version)" = "ayni ${EXPECTED_VERSION}"
+
+  environment-image-smoke:
+    name: smoke public environment image (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    needs:
+      - release
+      - environment-manifest
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            os: ubuntu-latest
+            platform: linux/amd64
+            uname: x86_64
+          - arch: arm64
+            os: ubuntu-24.04-arm
+            platform: linux/arm64
+            uname: aarch64
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Exercise native architecture image
+        env:
+          BASE: ${{ needs.environment-manifest.outputs.base }}
+          PLATFORM: ${{ matrix.platform }}
+          EXPECTED_UNAME: ${{ matrix.uname }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull --platform "$PLATFORM" "$BASE"
+          revision="$(docker image inspect "$BASE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          version="$(docker image inspect "$BASE" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+          test "$revision" = "$EXPECTED_COMMIT"
+          test "$version" = "$EXPECTED_VERSION"
+          actual="$(docker run --rm --platform "$PLATFORM" --entrypoint uname "$BASE" -m)"
+          test "$actual" = "$EXPECTED_UNAME"
+          test "$(docker run --rm --platform "$PLATFORM" "$BASE" --version)" = "ayni ${EXPECTED_VERSION}"
+          docker run --rm --platform "$PLATFORM" --entrypoint mise "$BASE" --version
 
   release-validation:
     name: validate released managed evidence (${{ matrix.language }})
@@ -424,7 +809,11 @@ jobs:
     needs:
       - release
       - build
+      - publish
+      - release-assets
+      - release-smoke
       - environment-manifest
+      - environment-image-smoke
     if: ${{ needs.release.outputs.release_created == 'true' }}
     strategy:
       fail-fast: false
@@ -438,28 +827,23 @@ jobs:
       - name: Checkout release
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.release.outputs.release_tag }}
+          ref: ${{ needs.release.outputs.release_commit }}
           persist-credentials: false
 
-      - name: Download released Linux binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-x86_64-unknown-linux-gnu
-          path: release-artifact
-
-      - name: Extract released Ayni
+      - name: Install released Linux binary from public assets
         id: binary
+        env:
+          VERSION: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
+          INSTALL_DIR: ${{ runner.temp }}/released-bin
         shell: bash
         run: |
           set -euo pipefail
-          archive="$(find release-artifact -type f -name '*.tar.gz' -print -quit)"
-          test -n "$archive"
-          mkdir -p released
-          tar -xzf "$archive" -C released
-          binary="$(find released -type f -name ayni -print -quit)"
+          ./install.sh
+          binary="$INSTALL_DIR/ayni"
           test -x "$binary"
+          test "$("$binary" --version)" = "ayni ${EXPECTED_VERSION}"
           echo "path=$binary" >> "$GITHUB_OUTPUT"
-          "$binary" --version
 
       - name: Install pinned Mise
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3

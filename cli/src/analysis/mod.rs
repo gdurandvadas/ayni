@@ -1,10 +1,10 @@
 use crate::{discovery, policy, ui, verification_command};
 use ayni_adapters_common::paths::validate_configured_root_containment;
 use ayni_core::{
-    AYNI_SIGNAL_SCHEMA_VERSION, AdapterRegistry, ArtifactToolVersion, AyniPolicy, Budget,
-    CompletionIssue, CompletionScope, CompletionStage, CompletionState, ConcurrencyPolicy,
-    ExecutionMode, InvocationContext, Language, OutputContext, RunArtifact, RunArtifactMetadata,
-    RunCompletion, RunContext, RunOutcome, Scope, SignalKind, SignalResult, SignalRow,
+    AdapterRegistry, ArtifactToolVersion, AyniPolicy, Budget, CompletionIssue, CompletionScope,
+    CompletionStage, CompletionState, ConcurrencyPolicy, ExecutionMode, InvocationContext,
+    Language, OutputContext, RunArtifact, RunArtifactMetadata, RunCompletion, RunContext,
+    RunOutcome, Scope, SignalKind, SignalResult, SignalRow,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
@@ -20,7 +20,8 @@ mod reconciliation;
 use artifacts::build_artifact_metadata;
 pub(crate) use artifacts::{
     SIGNALS_ARTIFACT, VERIFY_SIGNALS_ARTIFACT, build_artifact_metadata_for_command,
-    emit_analyze_outputs, persist_artifact_at, serialize_artifact, workspace_root_from_config_path,
+    emit_analyze_outputs, invalidate_artifact_at, persist_artifact_at, serialize_artifact,
+    source_fingerprint, source_fingerprint_excluding, workspace_root_from_config_path,
 };
 pub(crate) use check::analyze;
 pub(crate) use execution::AnalyzeOptions;
@@ -100,7 +101,7 @@ pub(crate) struct AnalyzePlanning {
 }
 
 impl AnalyzePlanning {
-    fn completion(
+    pub(crate) fn completion(
         &self,
         scope: CompletionScope,
         completed_targets: u64,
@@ -124,7 +125,7 @@ impl AnalyzePlanning {
         }
     }
 
-    fn runnable_failure_issues(
+    pub(crate) fn runnable_failure_issues(
         &self,
         stage: CompletionStage,
         message: &str,

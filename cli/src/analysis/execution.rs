@@ -114,13 +114,7 @@ pub(super) fn run_collect_with_ui(
         .unwrap_or_default();
     let rows = collect_targets_with_ui(ctx, &planning.targets, &concurrency, registry)?;
     let (completion, rows) = reconcile(planning, scope, None, rows);
-    Ok(RunArtifact {
-        schema_version: String::from(AYNI_SIGNAL_SCHEMA_VERSION),
-        metadata: Default::default(),
-        completion,
-        findings: Vec::new(),
-        rows,
-    })
+    RunArtifact::new(Default::default(), completion, rows)
 }
 
 fn collect_targets_with_ui(

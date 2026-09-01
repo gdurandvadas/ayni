@@ -300,11 +300,21 @@ ayni impact run --base origin/main
 ```
 
 They select locked targets, run adapter-owned signal commands, normalize the
-result, and apply `.ayni.toml` policy. The host checkout is mounted as read-only
-input and copied into an ephemeral writable workspace; source changes inside the
-quality run are discarded. If the lock requests bridge networking or Docker
-socket access, pass the corresponding per-invocation authorization described
-above.
+result, and apply `.ayni.toml` policy. The host first creates a private, bounded source snapshot and mounts that
+snapshot as read-only input. The container copies it into an ephemeral writable
+workspace using its accompanying manifest. In Git workspaces the snapshot
+includes tracked files and unignored untracked files, so checked-in source is
+preserved even under names such as `build` or `target`, while ignored
+dependency/build trees are not streamed into Docker. Ayni/VCS state plus exact
+adapter-declared prepared-output mount paths are also excluded. Size and
+file-count limits are enforced while the snapshot bytes are copied, before any
+container launch, rather than allowing workspace input to exhaust the 4 GiB
+tmpfs. In a non-Git directory,
+managed quality enumerates the filesystem instead and applies the same limits;
+because no ignore index is available, use `--host` or remove generated trees if
+the bounded preflight rejects that input. Source changes inside the quality run
+are discarded. If the lock requests bridge networking or Docker socket access, pass
+the corresponding per-invocation authorization described above.
 
 ## Advanced development access
 
