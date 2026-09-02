@@ -97,6 +97,10 @@ jobs:
     needs:
       - quality
       - managed-quality
+    # The dispatch validation job is intentionally skipped on pushes. Override
+    # the implicit success() guard so that skipped transitive dependency does
+    # not prevent Release Please after both direct quality gates succeed.
+    if: ${{ always() && needs.quality.result == 'success' && needs.managed-quality.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
