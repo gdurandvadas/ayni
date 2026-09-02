@@ -12,7 +12,68 @@ permissions:
   contents: read
 
 jobs:
+  lock-consistency:
+    name: managed lock consistency
+    if: >-
+      ${{
+        github.event.pull_request.user.login != 'dependabot[bot]' ||
+        !contains(github.event.pull_request.labels.*.name, 'dependencies')
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ayni-lock-consistency
+
+      - name: Install pinned Mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.6.14
+          install: false
+          cache: false
+
+      - name: Build checkout Ayni CLI
+        run: cargo build --locked -p ayni-cli
+
+      - name: Verify committed managed lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          committed="$RUNNER_TEMP/ayni-lock.committed.json"
+          cp .ayni.lock "$committed"
+          base="$(jq --raw-output '.provisioning_base.reference + "@" + .provisioning_base.digest' "$committed")"
+          if [[ ! "$base" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]; then
+            echo "Committed managed lock has an invalid provisioning base: $base" >&2
+            exit 1
+          fi
+
+          ./target/debug/ayni env lock --config ./.ayni.toml --base "$base"
+          if cmp -s "$committed" .ayni.lock; then
+            exit 0
+          fi
+
+          jq --sort-keys . "$committed" > "$RUNNER_TEMP/ayni-lock.committed.sorted.json"
+          jq --sort-keys . .ayni.lock > "$RUNNER_TEMP/ayni-lock.generated.sorted.json"
+          diff --unified \
+            "$RUNNER_TEMP/ayni-lock.committed.sorted.json" \
+            "$RUNNER_TEMP/ayni-lock.generated.sorted.json" || true
+          echo "The committed .ayni.lock is stale; regenerate it with the checkout Ayni CLI." >&2
+          exit 1
+
   repository:
+    needs: lock-consistency
     if: >-
       ${{
         github.event.pull_request.user.login != 'dependabot[bot]' ||
@@ -24,6 +85,7 @@ jobs:
     uses: ./.github/workflows/ayni-rust.yml
 
   quality:
+    needs: lock-consistency
     if: >-
       ${{
         github.event.pull_request.user.login != 'dependabot[bot]' ||
@@ -32,6 +94,7 @@ jobs:
     uses: ./.github/workflows/ayni-quality.yml
 
   go:
+    needs: lock-consistency
     if: >-
       ${{
         github.event.pull_request.user.login != 'dependabot[bot]' ||
@@ -40,6 +103,7 @@ jobs:
     uses: ./.github/workflows/ayni-go.yml
 
   kotlin:
+    needs: lock-consistency
     if: >-
       ${{
         github.event.pull_request.user.login != 'dependabot[bot]' ||
@@ -48,6 +112,7 @@ jobs:
     uses: ./.github/workflows/ayni-kotlin.yml
 
   node:
+    needs: lock-consistency
     if: >-
       ${{
         github.event.pull_request.user.login != 'dependabot[bot]' ||
@@ -56,6 +121,7 @@ jobs:
     uses: ./.github/workflows/ayni-node.yml
 
   python:
+    needs: lock-consistency
     if: >-
       ${{
         github.event.pull_request.user.login != 'dependabot[bot]' ||
@@ -67,6 +133,7 @@ jobs:
     name: status
     if: ${{ always() }}
     needs:
+      - lock-consistency
       - repository
       - quality
       - go
@@ -80,6 +147,7 @@ jobs:
           github.event.pull_request.user.login == 'dependabot[bot]' &&
           contains(github.event.pull_request.labels.*.name, 'dependencies')
         }}
+      LOCK_CONSISTENCY_RESULT: ${{ needs.lock-consistency.result }}
       REPOSITORY_RESULT: ${{ needs.repository.result }}
       QUALITY_RESULT: ${{ needs.quality.result }}
       GO_RESULT: ${{ needs.go.result }}
@@ -99,7 +167,7 @@ jobs:
 
           failed=0
           for result_name in \
-            REPOSITORY_RESULT QUALITY_RESULT GO_RESULT \
+            LOCK_CONSISTENCY_RESULT REPOSITORY_RESULT QUALITY_RESULT GO_RESULT \
             KOTLIN_RESULT NODE_RESULT PYTHON_RESULT
           do
             result="${!result_name}"

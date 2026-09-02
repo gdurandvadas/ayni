@@ -204,7 +204,12 @@ jobs:
     name: synchronize release managed lock
     runs-on: ubuntu-latest
     needs: release
-    if: ${{ needs.release.outputs.release_pr_created == 'true' }}
+    if: >-
+      ${{
+        always() &&
+        needs.release.result == 'success' &&
+        needs.release.outputs.release_pr_created == 'true'
+      }}
     permissions: {}
 
     steps:
