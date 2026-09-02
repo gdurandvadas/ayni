@@ -300,10 +300,13 @@ ayni impact run --base origin/main
 ```
 
 They select locked targets, run adapter-owned signal commands, normalize the
-result, and apply `.ayni.toml` policy. The host first creates a private, bounded source snapshot and mounts that
-snapshot as read-only input. The container copies it into an ephemeral writable
-workspace using its accompanying manifest. In Git workspaces the snapshot
-includes tracked files and unignored untracked files, so checked-in source is
+result, and apply `.ayni.toml` policy. The host first creates a private, bounded
+source snapshot and mounts that snapshot as read-only input. The container copies
+it into an ephemeral writable workspace using its accompanying manifest. The
+runtime scopes that manifest to the mounted workspace root, so tools that inspect
+a separate temporary repository do not accidentally reuse the outer workspace's
+source index. In Git workspaces the snapshot includes tracked files and unignored
+untracked files, so checked-in source is
 preserved even under names such as `build` or `target`, while ignored
 dependency/build trees are not streamed into Docker. Ayni/VCS state plus exact
 adapter-declared prepared-output mount paths are also excluded. Size and

@@ -399,6 +399,8 @@ fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, 
         "--env".into(),
         format!("AYNI_MANAGED_WORKSPACE_MANIFEST={WORKSPACE_MANIFEST}"),
         "--env".into(),
+        format!("AYNI_MANAGED_WORKSPACE_ROOT={WORKSPACE}"),
+        "--env".into(),
         format!("AYNI_MANAGED_LOCK_FINGERPRINT={}", request.lock_fingerprint),
         "--env".into(),
         format!("AYNI_MANAGED_TOOL_VERSIONS={}", request.tool_versions),
@@ -1394,6 +1396,10 @@ mod tests {
         }
         assert!(workspace_init.contains("--files-from=/opt/ayni/inputs/workspace-files"));
         assert!(workspace_init.contains("${destination#/workspace/}"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "AYNI_MANAGED_WORKSPACE_ROOT=/workspace")
+        );
         assert!(
             args.iter()
                 .any(|arg| arg == "AYNI_MANAGED_LOCK_FINGERPRINT=sha256:test")

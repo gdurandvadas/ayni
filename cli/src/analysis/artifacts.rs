@@ -9,6 +9,7 @@ use std::time::Duration;
 
 const MANAGED_LOCK_FINGERPRINT: &str = "AYNI_MANAGED_LOCK_FINGERPRINT";
 const MANAGED_TOOL_VERSIONS: &str = "AYNI_MANAGED_TOOL_VERSIONS";
+const MANAGED_WORKSPACE_ROOT: &str = "AYNI_MANAGED_WORKSPACE_ROOT";
 
 pub(crate) const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
 pub(crate) const VERIFY_SIGNALS_ARTIFACT: &str = ".ayni/verify/last/signals.json";
@@ -93,7 +94,7 @@ fn file_fingerprint(path: &Path) -> Result<String, String> {
 }
 
 pub(crate) fn source_fingerprint(root: &Path) -> Result<String, String> {
-    let files = if let Some(files) = managed_workspace_manifest_entries()? {
+    let files = if let Some(files) = managed_workspace_manifest_entries(root)? {
         files
     } else if has_git_ancestor(root) {
         collect_git_source_entries(root)?
@@ -179,13 +180,28 @@ fn fingerprint_source_entries(root: &Path, mut files: Vec<PathBuf>) -> Result<St
     Ok(format!("sha256:{}", lower_hex(hasher.finalize())))
 }
 
-fn managed_workspace_manifest_entries() -> Result<Option<Vec<PathBuf>>, String> {
-    if std::env::var_os("AYNI_MANAGED_LOCK_FINGERPRINT").is_none() {
+fn managed_workspace_manifest_entries(root: &Path) -> Result<Option<Vec<PathBuf>>, String> {
+    if std::env::var_os(MANAGED_LOCK_FINGERPRINT).is_none() {
         return Ok(None);
     }
     let Some(path) = std::env::var_os("AYNI_MANAGED_WORKSPACE_MANIFEST") else {
         return Ok(None);
     };
+    let managed_root = std::env::var_os(MANAGED_WORKSPACE_ROOT)
+        .ok_or_else(|| String::from("managed execution is missing workspace-root provenance"))?;
+    let managed_root = PathBuf::from(managed_root);
+    let managed_root = managed_root.canonicalize().map_err(|error| {
+        format!(
+            "failed to resolve managed workspace root {}: {error}",
+            managed_root.display()
+        )
+    })?;
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve source root {}: {error}", root.display()))?;
+    if root != managed_root {
+        return Ok(None);
+    }
     let bytes = fs::read(&path).map_err(|error| {
         format!(
             "failed to read managed workspace manifest {}: {error}",
