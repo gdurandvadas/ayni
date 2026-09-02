@@ -91,9 +91,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          expected_result=success
           if [[ "$DEPENDABOT_DEPENDENCY_PR" == "true" ]]; then
             echo "Dependabot dependency PR detected; expensive Ayni validation is deferred to release work."
-            exit 0
+            expected_result=skipped
           fi
 
           failed=0
@@ -102,12 +103,12 @@ jobs:
             KOTLIN_RESULT NODE_RESULT PYTHON_RESULT
           do
             result="${!result_name}"
-            echo "${result_name}=${result}"
-            if [[ "$result" != "success" ]]; then
+            echo "${result_name}=${result} expected=${expected_result}"
+            if [[ "$result" != "$expected_result" ]]; then
               failed=1
             fi
           done
           if [[ "$failed" != "0" ]]; then
-            echo "At least one required Ayni validation workflow did not succeed" >&2
+            echo "At least one Ayni validation workflow did not report the expected result" >&2
             exit 1
           fi
