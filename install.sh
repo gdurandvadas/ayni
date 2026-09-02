@@ -81,13 +81,13 @@ resolve_latest_version() {
   if have_cmd curl; then
     resolved="$(curl --proto '=https' --tlsv1.2 -fsSL -o /dev/null -w '%{url_effective}' "$latest_url")"
   elif have_cmd wget; then
-    resolved="$(wget -qO- --max-redirect=0 "$latest_url" 2>&1 | sed -n 's/.*Location: .*\/tag\/\(v[0-9][^[:space:]]*\).*/\1/p' | tail -n 1)"
+    wget_output="$(wget --spider --max-redirect=0 "$latest_url" 2>&1 || true)"
+    resolved="$(printf '%s\n' "$wget_output" | sed -n 's/^[[:space:]]*[Ll]ocation:[[:space:]]*\([^[:space:]]*\).*$/\1/p' | sed -n 's#^.*/releases/tag/\(ayni-v[0-9][0-9A-Za-z.-]*\)$#\1#p' | tail -n 1)"
   else
     fail "curl or wget is required"
   fi
 
   version="${resolved##*/}"
-  [ -n "$version" ] || fail "could not resolve the latest release version"
   printf '%s\n' "$version"
 }
 
@@ -124,6 +124,12 @@ ensure_install_dir() {
   mkdir -p "$INSTALL_DIR"
 }
 
+validate_version() {
+  version="$1"
+  printf '%s\n' "$version" | grep -Eq '^ayni-v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$' \
+    || fail "release version must match ayni-v<semver>"
+}
+
 checksum_verify() {
   archive_path="$1"
   checksums_path="$2"
@@ -148,11 +154,32 @@ checksum_verify() {
   elif have_cmd shasum; then
     actual="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
   else
-    warn "sha256sum/shasum not found; skipping checksum verification"
-    return
+    fail "sha256sum or shasum is required to verify release checksums"
   fi
 
   [ "$expected" = "$actual" ] || fail "checksum verification failed for ${archive_name}"
+}
+
+validate_archive_layout() {
+  archive_path="$1"
+  archive_root="$2"
+  entries="$(tar -tzf "$archive_path")" || fail "could not inspect release archive"
+
+  [ -n "$entries" ] || fail "release archive is empty"
+  while IFS= read -r entry; do
+    case "$entry" in
+      "$archive_root/"|"$archive_root/ayni"|"$archive_root/LICENSE"|"$archive_root/NOTICE") ;;
+      *) fail "release archive has an unexpected path: $entry" ;;
+    esac
+  done <<EOF
+$entries
+EOF
+
+  for required in "$archive_root/" "$archive_root/ayni" "$archive_root/LICENSE" "$archive_root/NOTICE"; do
+    count="$(printf '%s\n' "$entries" | grep -Fxc "$required" || true)"
+    [ "$count" = "1" ] \
+      || fail "release archive must contain exactly one $required entry"
+  done
 }
 
 append_path() {
@@ -217,6 +244,7 @@ main() {
     VERSION="$(resolve_latest_version)"
   fi
 
+  validate_version "$VERSION"
   target="$(detect_target)"
   archive="ayni-${VERSION}-${target}.tar.gz"
   base_url="https://github.com/$REPO/releases/download/$VERSION"
@@ -224,7 +252,8 @@ main() {
   ensure_install_dir
 
   tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+  install_tmp="$INSTALL_DIR/.${BIN_NAME}.install.$"
+  trap 'rm -rf "$tmp_dir"; rm -f "$install_tmp"' EXIT INT TERM
 
   archive_path="$tmp_dir/$archive"
   checksums_path="$tmp_dir/SHA256SUMS"
@@ -234,10 +263,14 @@ main() {
   download "$base_url/SHA256SUMS" "$checksums_path"
   checksum_verify "$archive_path" "$checksums_path" "$archive"
 
-  tar -xzf "$archive_path" -C "$tmp_dir"
-  binary_path="$(find "$tmp_dir" -type f -name "$BIN_NAME" | head -n 1)"
-  [ -n "$binary_path" ] || fail "could not find $BIN_NAME in the release archive"
-  install -m 0755 "$binary_path" "$INSTALL_DIR/$BIN_NAME"
+  archive_root="ayni-${VERSION}-${target}"
+  validate_archive_layout "$archive_path" "$archive_root"
+  binary_path="$tmp_dir/$BIN_NAME"
+  tar -xOzf "$archive_path" "$archive_root/$BIN_NAME" > "$binary_path" \
+    || fail "could not extract $BIN_NAME from the release archive"
+  [ -s "$binary_path" ] || fail "release archive contains an invalid $BIN_NAME binary"
+  install -m 0755 "$binary_path" "$install_tmp"
+  mv -f "$install_tmp" "$INSTALL_DIR/$BIN_NAME"
 
   say
   say "Installed $BIN_NAME to $INSTALL_DIR/$BIN_NAME"

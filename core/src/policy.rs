@@ -503,7 +503,13 @@ fn validate_enabled_languages(enabled: &[String]) -> Result<(), String> {
             "languages.enabled must be an explicit non-empty list (for example: [\"rust\"])",
         ));
     }
+    let mut seen = std::collections::BTreeSet::new();
     for value in enabled {
+        if !seen.insert(value) {
+            return Err(format!(
+                "languages.enabled contains duplicate language '{value}'"
+            ));
+        }
         if value == "auto" {
             return Err(String::from(
                 "languages.enabled value 'auto' is not supported in v0; use an explicit list like [\"rust\"]",
@@ -552,6 +558,9 @@ fn normalize_environment_tools(tools: &mut BTreeMap<String, String>) -> Result<(
                 "environment.tools.{tool} must declare a non-empty exact version"
             ));
         }
+        crate::environment::reject_floating_version(&version).map_err(|_| {
+            format!("environment.tools.{tool} must declare a non-floating exact version")
+        })?;
         if tools.insert(tool.clone(), version).is_some() {
             return Err(format!(
                 "environment.tools contains duplicate normalized tool '{tool}'"
@@ -575,6 +584,7 @@ fn normalize_debian_packages(packages: &mut Vec<String>) -> Result<(), String> {
 }
 
 fn validate_language_thresholds(language: &str, tooling: &LanguageTooling) -> Result<(), String> {
+    validate_tool_command_overrides(language, &tooling.tooling)?;
     for (pattern, rule) in &tooling.size {
         if rule.warn > rule.fail {
             return Err(format!(
@@ -588,13 +598,17 @@ fn validate_language_thresholds(language: &str, tooling: &LanguageTooling) -> Re
             ("fn_cyclomatic", complexity.fn_cyclomatic),
             ("fn_cognitive", complexity.fn_cognitive),
         ] {
-            if let Some(threshold) = threshold
-                && threshold.warn > threshold.fail
-            {
-                return Err(format!(
-                    "{language}.complexity.{name}: warn ({}) must not exceed fail ({})",
-                    threshold.warn, threshold.fail
-                ));
+            if let Some(threshold) = threshold {
+                validate_nonnegative_finite_threshold(
+                    &format!("{language}.complexity.{name}"),
+                    threshold,
+                )?;
+                if threshold.warn > threshold.fail {
+                    return Err(format!(
+                        "{language}.complexity.{name}: warn ({}) must not exceed fail ({})",
+                        threshold.warn, threshold.fail
+                    ));
+                }
             }
         }
     }
@@ -603,14 +617,56 @@ fn validate_language_thresholds(language: &str, tooling: &LanguageTooling) -> Re
             ("line_percent", coverage.line_percent),
             ("branch_percent", coverage.branch_percent),
         ] {
-            if let Some(threshold) = threshold
-                && threshold.warn < threshold.fail
-            {
-                return Err(format!(
-                    "{language}.coverage.{name}: warn ({}) must be at least fail ({}) because coverage thresholds are minimums",
-                    threshold.warn, threshold.fail
-                ));
+            if let Some(threshold) = threshold {
+                validate_percentage_threshold(&format!("{language}.coverage.{name}"), threshold)?;
+                if threshold.warn < threshold.fail {
+                    return Err(format!(
+                        "{language}.coverage.{name}: warn ({}) must be at least fail ({}) because coverage thresholds are minimums",
+                        threshold.warn, threshold.fail
+                    ));
+                }
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_tool_command_overrides(
+    language: &str,
+    overrides: &LanguageToolingOverrides,
+) -> Result<(), String> {
+    for (signal, override_command) in [
+        ("test", overrides.test.as_ref()),
+        ("coverage", overrides.coverage.as_ref()),
+        ("mutation", overrides.mutation.as_ref()),
+    ] {
+        if override_command
+            .is_some_and(|override_command| override_command.command.trim().is_empty())
+        {
+            return Err(format!(
+                "{language}.tooling.{signal}.command must be a non-empty command"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_nonnegative_finite_threshold(
+    key: &str,
+    threshold: ThresholdFloat,
+) -> Result<(), String> {
+    for (name, value) in [("warn", threshold.warn), ("fail", threshold.fail)] {
+        if !value.is_finite() || value < 0.0 {
+            return Err(format!("{key}.{name} must be finite and at least 0"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_percentage_threshold(key: &str, threshold: ThresholdFloat) -> Result<(), String> {
+    for (name, value) in [("warn", threshold.warn), ("fail", threshold.fail)] {
+        if !value.is_finite() || !(0.0..=100.0).contains(&value) {
+            return Err(format!("{key}.{name} must be finite and between 0 and 100"));
         }
     }
     Ok(())

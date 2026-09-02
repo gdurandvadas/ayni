@@ -48,7 +48,7 @@ access = "socket"
 network = "bridge"
 
 [languages]
-enabled = ["node", "rust", "node"]
+enabled = ["node", "rust"]
 
 [rust]
 roots = ["./", "crates\\api//", "crates/api"]

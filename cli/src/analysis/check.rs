@@ -45,7 +45,14 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome
     let plan = build_analyze_plan(&planning.targets);
     profile_phase(debug, "target_planning", phase_started.elapsed());
     let phase_started = Instant::now();
-    let metadata = build_artifact_metadata(&config_path, &workspace_root, &planning, output_mode)?;
+    let metadata =
+        match build_artifact_metadata(&config_path, &workspace_root, &planning, output_mode) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                invalidate_artifact_at(&workspace_root, SIGNALS_ARTIFACT)?;
+                return Err(error.into());
+            }
+        };
     profile_phase(debug, "artifact_metadata", phase_started.elapsed());
     let artifact_slot = Arc::new(Mutex::new(None));
     let phase_started = Instant::now();
@@ -63,35 +70,110 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome
         return Err(AnalyzeError::Incomplete(String::from("check aborted")));
     }
 
-    let phase_started = Instant::now();
-    let mut artifact = take_collected_artifact_or_persist_failure(
+    let outcome = finalize_analysis(
         &workspace_root,
+        &policy,
         &planning,
         &metadata,
         artifact_slot,
-    )?;
-    artifact.metadata = metadata;
-    verification_command::materialize_finding_commands(
-        &mut artifact,
         &registry,
-        !managed_execution_active(),
+        output_mode,
+        debug,
+    )?;
+    profile_phase(debug, "total", total_started.elapsed());
+    Ok(outcome)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finalize_analysis(
+    workspace_root: &Path,
+    policy: &AyniPolicy,
+    planning: &AnalyzePlanning,
+    metadata: &RunArtifactMetadata,
+    artifact_slot: Arc<Mutex<Option<RunArtifact>>>,
+    registry: &AdapterRegistry,
+    output_mode: OutputArg,
+    debug: bool,
+) -> Result<RunOutcome, AnalyzeError> {
+    let phase_started = Instant::now();
+    let mut artifact = take_collected_artifact_or_persist_failure(
+        workspace_root,
+        planning,
+        metadata,
+        artifact_slot,
+    )?;
+    artifact.metadata = metadata.clone();
+    materialize_findings_or_persist_failure(
+        workspace_root,
+        planning,
+        metadata,
+        registry,
+        &mut artifact,
     )?;
     profile_phase(debug, "finding_materialization", phase_started.elapsed());
-    let phase_started = Instant::now();
-    let serialized = serialize_artifact(&artifact)?;
-    persist_artifact_at(&workspace_root, SIGNALS_ARTIFACT, &serialized)?;
-    profile_phase(debug, "artifact_persistence", phase_started.elapsed());
-    let phase_started = Instant::now();
-    emit_analyze_outputs(output_mode, &policy, &artifact, &serialized)?;
-    profile_phase(debug, "output_rendering", phase_started.elapsed());
-    profile_phase(debug, "total", total_started.elapsed());
 
+    let phase_started = Instant::now();
+    let serialized = serialize_or_persist_failure(workspace_root, planning, metadata, &artifact)?;
+    persist_artifact_at(workspace_root, SIGNALS_ARTIFACT, &serialized)?;
+    profile_phase(debug, "artifact_persistence", phase_started.elapsed());
+
+    let phase_started = Instant::now();
+    emit_analyze_outputs(output_mode, policy, &artifact, &serialized)?;
+    profile_phase(debug, "output_rendering", phase_started.elapsed());
     Ok(artifact.outcome())
+}
+
+fn materialize_findings_or_persist_failure(
+    workspace_root: &Path,
+    planning: &AnalyzePlanning,
+    metadata: &RunArtifactMetadata,
+    registry: &AdapterRegistry,
+    artifact: &mut RunArtifact,
+) -> Result<(), AnalyzeError> {
+    let result = verification_command::materialize_finding_commands(
+        artifact,
+        registry,
+        !managed_execution_active(),
+    );
+    if let Err(error) = result {
+        persist_incomplete_execution_artifact(
+            workspace_root,
+            metadata.clone(),
+            planning,
+            CompletionStage::Collection,
+            &error,
+        )?;
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+fn serialize_or_persist_failure(
+    workspace_root: &Path,
+    planning: &AnalyzePlanning,
+    metadata: &RunArtifactMetadata,
+    artifact: &RunArtifact,
+) -> Result<String, AnalyzeError> {
+    match serialize_artifact(artifact) {
+        Ok(serialized) => Ok(serialized),
+        Err(error) => {
+            persist_incomplete_execution_artifact(
+                workspace_root,
+                metadata.clone(),
+                planning,
+                CompletionStage::Collection,
+                &error,
+            )?;
+            Err(error.into())
+        }
+    }
 }
 
 fn prepare_contract(config_path: &Path) -> Result<(PathBuf, AyniPolicy), AnalyzeError> {
     let workspace_root =
         workspace_root_from_config_path(config_path).map_err(AnalyzeError::InvalidContract)?;
+    // Tombstone the prior run before any current invocation work can fail.
+    invalidate_artifact_at(&workspace_root, SIGNALS_ARTIFACT)?;
     let policy = policy::load_from_path(config_path).map_err(AnalyzeError::InvalidContract)?;
     validate_configured_root_containment(&workspace_root, &policy)
         .map_err(AnalyzeError::InvalidContract)?;

@@ -72,6 +72,12 @@ def require_array(value: Any, location: str) -> list[Any]:
     return value
 
 
+def require_nonempty_string(value: Any, location: str) -> str:
+    if not isinstance(value, str) or not value:
+        fail(f"{location} must be a non-empty string")
+    return value
+
+
 def require_count(value: Any, location: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         fail(f"{location} must be a non-negative integer")
@@ -124,6 +130,12 @@ def validate_artifact(
     reject_non_finite(document)
     if document.get("schema_version") != SCHEMA_VERSION:
         fail(f"schema_version must be {SCHEMA_VERSION!r}")
+    require_nonempty_string(document.get("generated_at"), "generated_at")
+    require_nonempty_string(document.get("ayni_version"), "ayni_version")
+    output = require_object(document.get("output"), "output")
+    require_nonempty_string(output.get("format"), "output.format")
+    require_nonempty_string(output.get("destination"), "output.destination")
+    require_nonempty_string(document.get("config_path"), "config_path")
     if document.get("execution_mode") != "managed":
         fail("execution_mode must identify managed evidence")
     require_sha256(document.get("contract_digest"), "contract_digest")
@@ -194,6 +206,8 @@ def validate_artifact(
     failing_kinds: set[str] = set()
     warning_kinds: set[str] = set()
     coverage_percent: float | None = None
+    expected_applied_thresholds: list[dict[str, Any]] = []
+    expected_offender_summaries: list[dict[str, Any]] = []
     for index, raw_row in enumerate(rows):
         row = require_object(raw_row, f"rows[{index}]")
         kind = row.get("kind")
@@ -229,6 +243,14 @@ def validate_artifact(
             fail(
                 f"rows[{index}] typed result, budget, and offenders must match kind {kind!r}"
             )
+        expected_applied_thresholds.append(
+            {
+                "kind": kind,
+                "language": row_language,
+                "scope": scope,
+                "budget": budget,
+            }
+        )
         if "failure" in result:
             fail(f"rows[{index}].result.failure reports a collector command failure")
         if kind == "coverage":
@@ -246,6 +268,7 @@ def validate_artifact(
             fail(f"rows[{index}] fails without a typed policy finding")
         else:
             failing_kinds.add(kind)
+        row_warning_offenders = 0
         row_failing_offenders = 0
         for item_index, raw_item in enumerate(items):
             item = require_object(
@@ -271,6 +294,7 @@ def validate_artifact(
             level = "fail" if kind == "test" else item.get("level")
             if level == "warn":
                 warning_offenders += 1
+                row_warning_offenders += 1
                 warning_kinds.add(kind)
             elif level == "fail":
                 failing_offenders += 1
@@ -279,6 +303,17 @@ def validate_artifact(
                 fail(f"rows[{index}].offenders.items[{item_index}].level is invalid")
         if row_pass == (row_failing_offenders > 0):
             fail(f"rows[{index}].pass is inconsistent with its typed fail findings")
+        if items:
+            expected_offender_summaries.append(
+                {
+                    "kind": kind,
+                    "language": row_language,
+                    "scope": scope,
+                    "total": len(items),
+                    "warning_count": row_warning_offenders,
+                    "failing_count": row_failing_offenders,
+                }
+            )
 
     if set(kinds_by_target) != expected_targets:
         fail("rows do not represent exactly the configured language/root targets")
@@ -287,6 +322,17 @@ def validate_artifact(
             fail(
                 f"target {target[0]}/{target[1]} does not contain the exact five enabled kinds"
             )
+
+    applied_thresholds = require_array(
+        document.get("applied_thresholds"), "applied_thresholds"
+    )
+    if applied_thresholds != expected_applied_thresholds:
+        fail("applied_thresholds must be the canonical row-order budget projection")
+    offender_summaries = require_array(
+        document.get("offender_summaries"), "offender_summaries"
+    )
+    if offender_summaries != expected_offender_summaries:
+        fail("offender_summaries must match canonical row-order offender counts")
 
     failure_summaries = document.get("failure_summaries", [])
     if require_array(failure_summaries, "failure_summaries"):

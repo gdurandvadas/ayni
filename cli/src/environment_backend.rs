@@ -294,6 +294,7 @@ pub(crate) fn check(operation: CheckOperation, registry: &AdapterRegistry) -> Ex
     managed_quality_result(
         "check",
         (|| {
+            invalidate_managed_artifact(&operation.config, crate::analysis::SIGNALS_ARTIFACT)?;
             let (root, preparations, container_config) =
                 prepared_quality_environment(&operation.config, registry, operation.authorization)?;
             let mut command = vec![
@@ -321,6 +322,10 @@ pub(crate) fn verify(operation: VerifyOperation, registry: &AdapterRegistry) -> 
     managed_quality_result(
         "verify",
         (|| {
+            invalidate_managed_artifact(
+                &operation.config,
+                crate::analysis::VERIFY_SIGNALS_ARTIFACT,
+            )?;
             let (root, preparations, container_config) =
                 prepared_quality_environment(&operation.config, registry, operation.authorization)?;
             let command = managed_verify_command(&operation, container_config);
@@ -338,24 +343,84 @@ pub(crate) fn impact_run(operation: ImpactOperation, registry: &AdapterRegistry)
     managed_quality_result(
         "impact run",
         (|| {
+            crate::impact::invalidate_run_artifact(&operation)
+                .map_err(ayni_environment::BackendError::execution)?;
             let (root, preparations, container_config) =
                 prepared_quality_environment(&operation.config, registry, operation.authorization)?;
-            let command = managed_impact_command(&operation, container_config);
-            ayni_environment::launch_repository_prepared(
+            let prepared_outputs = preparations
+                .iter()
+                .flat_map(|preparation| preparation.outputs.iter())
+                .map(|output| output.mount_path.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let session = crate::impact::prepare_managed_handoff(
+                &operation,
+                registry,
+                &prepared_outputs,
+                &container_config,
+            )
+            .map_err(ayni_environment::BackendError::input)?;
+            let command =
+                managed_impact_command(&operation, container_config, session.result_relative());
+            let captured = ayni_environment::launch_repository_prepared_with_inputs_captured(
                 &root,
                 &preparations,
                 &command,
                 launch_authorization(operation.authorization),
+                &[ayni_environment::ReadOnlyInput {
+                    source: session.handoff_path().to_path_buf(),
+                    destination: String::from("/opt/ayni/inputs/impact-plan.json"),
+                }],
+            )?;
+            std::io::Write::write_all(&mut std::io::stderr(), &captured.stderr).map_err(
+                |error| {
+                    ayni_environment::BackendError::execution(format!(
+                        "failed to emit managed impact diagnostics: {error}"
+                    ))
+                },
+            )?;
+            if !crate::impact::managed_handoff_is_stable(&operation, registry, &session)
+                .map_err(ayni_environment::BackendError::execution)?
+            {
+                crate::impact::invalidate_run_artifact(&operation)
+                    .map_err(ayni_environment::BackendError::execution)?;
+                return Err(ayni_environment::BackendError::execution(
+                    "impact candidate changed during managed execution; discarded impact evidence; rerun against a stable checkout",
+                ));
+            }
+            crate::impact::promote_managed_result(
+                &operation,
+                &session,
+                captured.code,
+                &captured.stdout,
             )
+            .map_err(ayni_environment::BackendError::execution)?;
+            std::io::Write::write_all(&mut std::io::stdout(), &captured.stdout).map_err(
+                |error| {
+                    ayni_environment::BackendError::execution(format!(
+                        "failed to emit managed impact output: {error}"
+                    ))
+                },
+            )?;
+            Ok(captured.code)
         })(),
     )
 }
 
-fn managed_impact_command(operation: &ImpactOperation, container_config: String) -> Vec<String> {
+fn managed_impact_command(
+    operation: &ImpactOperation,
+    container_config: String,
+    managed_result: &str,
+) -> Vec<String> {
     let mut command = vec![
         String::from("impact"),
         String::from("run"),
         String::from("--host"),
+        String::from("--managed-handoff"),
+        String::from("/opt/ayni/inputs/impact-plan.json"),
+        String::from("--managed-result"),
+        managed_result.to_owned(),
         String::from("--base"),
         operation.base.clone(),
         String::from("--config"),
@@ -436,6 +501,16 @@ fn prepared_quality_environment(
     })?;
     let container_config = format!("./{}", relative.to_string_lossy().replace('\\', "/"));
     Ok((root, preparations, container_config))
+}
+
+fn invalidate_managed_artifact(
+    config: &Path,
+    relative_path: &str,
+) -> Result<(), ayni_environment::BackendError> {
+    let root = crate::analysis::workspace_root_from_config_path(config)
+        .map_err(ayni_environment::BackendError::input)?;
+    crate::analysis::invalidate_artifact_at(&root, relative_path)
+        .map_err(ayni_environment::BackendError::execution)
 }
 
 fn managed_quality_result(
@@ -724,14 +799,24 @@ mod tests {
             execution_mode: ExecutionMode::Managed,
             debug: true,
             authorization: CapabilityAuthorization::default(),
+            managed_handoff: None,
+            managed_result: None,
         };
 
         assert_eq!(
-            managed_impact_command(&operation, String::from("./.ayni.toml")),
+            managed_impact_command(
+                &operation,
+                String::from("./.ayni.toml"),
+                ".ayni/impact/pending/impact-test.json",
+            ),
             [
                 "impact",
                 "run",
                 "--host",
+                "--managed-handoff",
+                "/opt/ayni/inputs/impact-plan.json",
+                "--managed-result",
+                ".ayni/impact/pending/impact-test.json",
                 "--base",
                 "feature/base",
                 "--config",

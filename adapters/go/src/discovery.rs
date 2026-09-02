@@ -1,4 +1,4 @@
-use ayni_adapters_common::discovery::{discover_file_parent_roots, is_vcs_or_vendor_dir};
+use ayni_adapters_common::discovery::discover_file_parent_roots;
 use ayni_core::{DiscoveredRoot, ProjectDiscovery, ProjectLayout};
 use std::path::Path;
 
@@ -7,7 +7,8 @@ pub fn discover_roots(repo_root: &Path) -> Vec<String> {
 }
 
 pub fn discover_project_roots(repo_root: &Path) -> ProjectDiscovery {
-    let roots = discover_file_parent_roots(repo_root, "go.mod", is_vcs_or_vendor_dir);
+    let roots =
+        discover_file_parent_roots(repo_root, "go.mod", |parts| parts.contains(&"node_modules"));
     let controlled = repo_root.join("go.work").is_file();
     let root_analyzable = repo_root.join("go.mod").is_file();
     let layout = if controlled {

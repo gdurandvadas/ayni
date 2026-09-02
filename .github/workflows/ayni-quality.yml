@@ -50,6 +50,9 @@ jobs:
       - name: Test example artifact validator
         run: python3 scripts/ci/test_validate_example_artifact.py
 
+      - name: Test release installer
+        run: scripts/ci/test_install_sh.sh
+
       - name: Verify immutable GitHub Action references
         run: python3 scripts/ci/validate_workflow_pins.py
 
@@ -80,7 +83,27 @@ jobs:
           cargo doc-cli > "$RUNNER_TEMP/cli.md"
           diff --unified docs/cli.md "$RUNNER_TEMP/cli.md"
 
+      - name: Audit locked npm dependencies
+        run: npm audit --audit-level=high
+
       - name: Build VitePress
         env:
           VITEPRESS_BASE: /
         run: npm run docs:build
+
+  msrv:
+    name: Rust 1.93 MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.93
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          toolchain: 1.93.0
+
+      - name: Check MSRV
+        run: cargo check --locked --workspace --all-features

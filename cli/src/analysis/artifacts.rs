@@ -1,10 +1,15 @@
 use super::*;
-use ayni_adapters_common::workspace::is_generated_workspace_entry;
+use ayni_adapters_common::workspace::{
+    git_workspace_entries, has_git_ancestor, is_universal_workspace_state,
+};
 use ayni_core::{lower_hex, sha256_fingerprint};
 use sha2::{Digest, Sha256};
+use std::io::Read;
+use std::time::Duration;
 
 const MANAGED_LOCK_FINGERPRINT: &str = "AYNI_MANAGED_LOCK_FINGERPRINT";
 const MANAGED_TOOL_VERSIONS: &str = "AYNI_MANAGED_TOOL_VERSIONS";
+const MANAGED_WORKSPACE_ROOT: &str = "AYNI_MANAGED_WORKSPACE_ROOT";
 
 pub(crate) const SIGNALS_ARTIFACT: &str = ".ayni/last/signals.json";
 pub(crate) const VERIFY_SIGNALS_ARTIFACT: &str = ".ayni/verify/last/signals.json";
@@ -88,28 +93,83 @@ fn file_fingerprint(path: &Path) -> Result<String, String> {
     Ok(sha256_fingerprint(bytes))
 }
 
-fn source_fingerprint(root: &Path) -> Result<String, String> {
-    let mut files = Vec::new();
-    collect_source_entries(root, root, &mut files)?;
+pub(crate) fn source_fingerprint(root: &Path) -> Result<String, String> {
+    let files = if let Some(files) = managed_workspace_manifest_entries(root)? {
+        files
+    } else if has_git_ancestor(root) {
+        collect_git_source_entries(root)?
+    } else {
+        let mut files = Vec::new();
+        collect_source_entries(root, root, &mut files)?;
+        files
+    };
+    fingerprint_source_entries(root, files)
+}
+
+pub(crate) fn source_fingerprint_excluding(
+    root: &Path,
+    excluded_outputs: &[String],
+) -> Result<String, String> {
+    let files = if has_git_ancestor(root) {
+        collect_git_source_entries(root)?
+    } else {
+        let mut files = Vec::new();
+        collect_source_entries(root, root, &mut files)?;
+        files
+    }
+    .into_iter()
+    .filter(|relative| {
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        !excluded_outputs.iter().any(|output| {
+            relative == *output
+                || relative
+                    .strip_prefix(output)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+        })
+    })
+    .collect();
+    fingerprint_source_entries(root, files)
+}
+
+fn fingerprint_source_entries(root: &Path, mut files: Vec<PathBuf>) -> Result<String, String> {
     files.sort();
+    files.dedup();
     let mut hasher = Sha256::new();
     for relative in files {
         let path = root.join(&relative);
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
         let relative = relative.to_string_lossy().replace('\\', "/");
         hash_field(&mut hasher, relative.as_bytes());
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                hasher.update(b"missing");
+                continue;
+            }
+            Err(error) => {
+                return Err(format!("failed to inspect {}: {error}", path.display()));
+            }
+        };
         if metadata.file_type().is_symlink() {
             hasher.update(b"symlink");
             let target = fs::read_link(&path)
                 .map_err(|error| format!("failed to read symlink {}: {error}", path.display()))?;
-            hash_field(&mut hasher, target.to_string_lossy().as_bytes());
+            hash_os_str(&mut hasher, target.as_os_str());
         } else if metadata.is_file() {
             hasher.update(b"file");
             hasher.update([u8::from(is_executable(&metadata))]);
-            let bytes = fs::read(&path)
+            hasher.update(metadata.len().to_be_bytes());
+            let mut file = fs::File::open(&path)
                 .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-            hash_field(&mut hasher, &bytes);
+            let mut buffer = [0u8; 64 * 1024];
+            loop {
+                let read = file
+                    .read(&mut buffer)
+                    .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
         } else if metadata.is_dir() {
             hasher.update(b"directory");
         } else {
@@ -118,6 +178,63 @@ fn source_fingerprint(root: &Path) -> Result<String, String> {
         }
     }
     Ok(format!("sha256:{}", lower_hex(hasher.finalize())))
+}
+
+fn managed_workspace_manifest_entries(root: &Path) -> Result<Option<Vec<PathBuf>>, String> {
+    if std::env::var_os(MANAGED_LOCK_FINGERPRINT).is_none() {
+        return Ok(None);
+    }
+    let Some(path) = std::env::var_os("AYNI_MANAGED_WORKSPACE_MANIFEST") else {
+        return Ok(None);
+    };
+    let managed_root = std::env::var_os(MANAGED_WORKSPACE_ROOT)
+        .ok_or_else(|| String::from("managed execution is missing workspace-root provenance"))?;
+    let managed_root = PathBuf::from(managed_root);
+    let managed_root = managed_root.canonicalize().map_err(|error| {
+        format!(
+            "failed to resolve managed workspace root {}: {error}",
+            managed_root.display()
+        )
+    })?;
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve source root {}: {error}", root.display()))?;
+    if root != managed_root {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path).map_err(|error| {
+        format!(
+            "failed to read managed workspace manifest {}: {error}",
+            Path::new(&path).display()
+        )
+    })?;
+    let mut files = Vec::new();
+    for raw in bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let relative = std::str::from_utf8(raw)
+            .map_err(|_| String::from("managed workspace manifest requires UTF-8 paths"))?;
+        let path = PathBuf::from(relative);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(String::from(
+                "managed workspace manifest contains a non-normalized path",
+            ));
+        }
+        files.push(path);
+    }
+    files.sort();
+    files.dedup();
+    Ok(Some(files))
+}
+
+fn collect_git_source_entries(root: &Path) -> Result<Vec<PathBuf>, String> {
+    git_workspace_entries(root, Duration::from_secs(60))
+        .map_err(|error| format!("failed to enumerate source fingerprint inputs: {error}"))
 }
 
 fn collect_source_entries(
@@ -133,7 +250,7 @@ fn collect_source_entries(
     for entry in entries {
         let path = entry.path();
         let name = entry.file_name();
-        if is_generated_workspace_entry(&name.to_string_lossy()) {
+        if is_universal_workspace_state(&name.to_string_lossy()) {
             continue;
         }
         let file_type = entry
@@ -186,6 +303,29 @@ fn special_file_type(_metadata: &fs::Metadata) -> &'static str {
     "unknown"
 }
 
+#[cfg(unix)]
+fn hash_os_str(hasher: &mut Sha256, value: &std::ffi::OsStr) {
+    use std::os::unix::ffi::OsStrExt;
+
+    hash_field(hasher, value.as_bytes());
+}
+
+#[cfg(windows)]
+fn hash_os_str(hasher: &mut Sha256, value: &std::ffi::OsStr) {
+    use std::os::windows::ffi::OsStrExt;
+
+    let encoded = value
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    hash_field(hasher, &encoded);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn hash_os_str(hasher: &mut Sha256, value: &std::ffi::OsStr) {
+    hash_field(hasher, value.to_string_lossy().as_bytes());
+}
+
 fn hash_field(hasher: &mut Sha256, value: &[u8]) {
     hasher.update((value.len() as u64).to_be_bytes());
     hasher.update(value);
@@ -195,6 +335,20 @@ pub(crate) fn serialize_artifact(artifact: &RunArtifact) -> Result<String, Strin
     serde_json::to_string_pretty(artifact)
         .map(|serialized| format!("{serialized}\n"))
         .map_err(|error| format!("failed to serialize artifact: {error}"))
+}
+
+/// Remove evidence that cannot describe the current invocation, such as after
+/// contract validation fails before target planning. Absence is safer than a
+/// prior successful artifact whose contract digest no longer matches.
+pub(crate) fn invalidate_artifact_at(repo_root: &Path, relative_path: &str) -> Result<(), String> {
+    let destination = repo_root.join(relative_path);
+    match fs::remove_file(&destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "failed to invalidate stale artifact {relative_path}: {error}"
+        )),
+    }
 }
 
 pub(crate) fn persist_artifact_at(
@@ -264,8 +418,8 @@ pub(crate) fn workspace_root_from_config_path(config_path: &Path) -> Result<Path
 
 #[cfg(test)]
 mod tests {
-    use super::{source_fingerprint, workspace_root_from_config_path};
-    use ayni_adapters_common::workspace::GENERATED_WORKSPACE_ENTRY_NAMES;
+    use super::{fingerprint_source_entries, source_fingerprint, workspace_root_from_config_path};
+    use ayni_adapters_common::workspace::UNIVERSAL_WORKSPACE_STATE_NAMES;
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
@@ -300,18 +454,92 @@ mod tests {
     }
 
     #[test]
-    fn generated_workspace_entries_do_not_change_source_provenance() {
+    fn universal_workspace_state_does_not_change_source_provenance() {
         let directory = TempDir::new().expect("fixture");
         fs::write(directory.path().join("source.rs"), "fn main() {}\n").expect("source");
         let before = source_fingerprint(directory.path()).expect("before");
 
-        for name in GENERATED_WORKSPACE_ENTRY_NAMES {
-            let generated = directory.path().join(name);
-            fs::create_dir(&generated).expect("generated directory");
-            fs::write(generated.join("output"), "generated").expect("generated output");
+        for name in UNIVERSAL_WORKSPACE_STATE_NAMES
+            .iter()
+            .copied()
+            .filter(|name| *name != ".git")
+        {
+            let state = directory.path().join(name);
+            fs::create_dir(&state).expect("state directory");
+            fs::write(state.join("output"), "state").expect("state output");
         }
 
         assert_eq!(source_fingerprint(directory.path()).expect("after"), before);
+    }
+
+    #[test]
+    fn source_provenance_includes_tracked_source_and_ignores_generated_output() {
+        let directory = TempDir::new().expect("fixture");
+        let source = directory.path().join("src/build/checked_in.rs");
+        let generated = directory.path().join("target/debug/output");
+        fs::create_dir_all(source.parent().expect("source parent")).expect("source directory");
+        fs::create_dir_all(generated.parent().expect("generated parent"))
+            .expect("generated directory");
+        fs::write(&source, "pub const VALUE: u8 = 1;\n").expect("source");
+        fs::write(&generated, "first\n").expect("generated output");
+        fs::write(directory.path().join(".gitignore"), "target/\n").expect("ignore file");
+        let git = |arguments: &[&str]| {
+            let status = std::process::Command::new("git")
+                .current_dir(directory.path())
+                .args(arguments)
+                .status()
+                .expect("git");
+            assert!(status.success());
+        };
+        git(&["init", "-q"]);
+        git(&["add", ".gitignore", "src/build/checked_in.rs"]);
+        let before = source_fingerprint(directory.path()).expect("before");
+
+        fs::write(&generated, "second\n").expect("changed generated output");
+        assert_eq!(
+            source_fingerprint(directory.path()).expect("after generated change"),
+            before
+        );
+
+        let nested_root = directory.path().join("src");
+        let nested_generated = nested_root.join("target/output");
+        fs::create_dir_all(nested_generated.parent().expect("nested generated parent"))
+            .expect("nested generated directory");
+        fs::write(&nested_generated, "first\n").expect("nested generated output");
+        let nested_before = source_fingerprint(&nested_root).expect("nested Git workspace");
+        fs::write(&nested_generated, "second\n").expect("changed nested generated output");
+        assert_eq!(
+            source_fingerprint(&nested_root).expect("nested generated change"),
+            nested_before
+        );
+
+        fs::write(&source, "pub const VALUE: u8 = 2;\n").expect("changed source");
+        assert_ne!(source_fingerprint(directory.path()).expect("after"), before);
+    }
+
+    #[test]
+    fn managed_manifest_fingerprint_ignores_new_output_but_detects_source_changes() {
+        let directory = TempDir::new().expect("fixture");
+        fs::write(directory.path().join("source.rs"), "first\n").expect("source");
+        let entries = vec![std::path::PathBuf::from("source.rs")];
+        let before = fingerprint_source_entries(directory.path(), entries.clone())
+            .expect("manifest fingerprint");
+
+        fs::create_dir(directory.path().join("coverage")).expect("generated directory");
+        fs::write(directory.path().join("coverage/output.json"), "generated\n")
+            .expect("generated output");
+        assert_eq!(
+            fingerprint_source_entries(directory.path(), entries.clone())
+                .expect("unchanged manifest fingerprint"),
+            before
+        );
+
+        fs::write(directory.path().join("source.rs"), "second\n").expect("changed source");
+        assert_ne!(
+            fingerprint_source_entries(directory.path(), entries)
+                .expect("changed manifest fingerprint"),
+            before
+        );
     }
 
     #[cfg(unix)]
@@ -338,5 +566,22 @@ mod tests {
         symlink("target-b", &entry).expect("second symlink");
         let symlink_b = source_fingerprint(directory.path()).expect("second symlink fingerprint");
         assert_ne!(symlink_a, symlink_b);
+
+        fs::remove_file(&entry).expect("remove second symlink");
+        symlink("/opt/ayni/prepared-source", &entry).expect("prepared-looking source symlink");
+        let prepared_looking =
+            source_fingerprint(directory.path()).expect("prepared-looking symlink fingerprint");
+        assert_ne!(symlink_b, prepared_looking);
+
+        use std::os::unix::ffi::OsStringExt;
+        fs::remove_file(&entry).expect("remove prepared-looking symlink");
+        symlink(std::ffi::OsString::from_vec(vec![0xff]), &entry)
+            .expect("non-UTF-8 symlink target");
+        let non_utf8_a = source_fingerprint(directory.path()).expect("non-UTF-8 target");
+        fs::remove_file(&entry).expect("remove non-UTF-8 symlink");
+        symlink(std::ffi::OsString::from_vec(vec![0xfe]), &entry)
+            .expect("second non-UTF-8 symlink target");
+        let non_utf8_b = source_fingerprint(directory.path()).expect("second non-UTF-8 target");
+        assert_ne!(non_utf8_a, non_utf8_b);
     }
 }

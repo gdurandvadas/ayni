@@ -269,6 +269,26 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     fs::remove_file(&cache_marker).unwrap();
     fs::write(&cache_marker, format!("sha256:{preparation}")).unwrap();
 
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(root.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    fs::write(root.path().join(".gitignore"), ".ayni/\nrecord*\n").unwrap();
+    git(&["init", "-q"]);
+    git(&["config", "user.name", "Ayni Test"]);
+    git(&["config", "user.email", "ayni@example.invalid"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+
     write_executable(
         &root.path().join("bin/docker"),
         &format!(
@@ -278,11 +298,15 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
             record.display()
         ),
     );
+    let stale_check = root.path().join(".ayni/last/signals.json");
+    fs::create_dir_all(stale_check.parent().unwrap()).unwrap();
+    fs::write(&stale_check, "stale-success\n").unwrap();
     let managed = command(&root, &["check", "--config"])
         .arg(root.path().join(".ayni.toml"))
         .output()
         .unwrap();
     assert_eq!(managed.status.code(), Some(1));
+    assert!(!stale_check.exists());
     let managed_args = fs::read_to_string(format!("{}.check", record.display())).unwrap();
     let managed_root = root.path().canonicalize().unwrap();
     assert!(managed_args.contains("AYNI_MANAGED_TARGET_ENVIRONMENTS="));
@@ -290,10 +314,13 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     assert!(managed_args.contains("rust:two"));
     assert!(managed_args.ends_with("check\n--host\n--config\n./.ayni.toml\n--output\nhuman\n"));
     assert!(managed_args.contains("--entrypoint\n/bin/sh"));
-    assert!(managed_args.contains(&format!(
-        "type=bind,source={},target=/opt/ayni/checkout,readonly",
-        managed_root.display()
-    )));
+    assert!(managed_args.contains("target=/opt/ayni/inputs/workspace-files,readonly"));
+    let checkout_mount = managed_args
+        .lines()
+        .find(|argument| argument.contains("target=/opt/ayni/checkout,readonly"))
+        .expect("managed checkout snapshot mount");
+    assert!(checkout_mount.starts_with("type=bind,source="));
+    assert!(!checkout_mount.contains(managed_root.to_string_lossy().as_ref()));
     assert!(managed_args.contains("/workspace:rw,exec,nosuid,size=4g,mode=1777"));
     assert!(managed_args.contains(&format!(
         "type=bind,source={},target=/workspace/.ayni",
@@ -306,6 +333,9 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     // checkout-wide mount remains read-only for managed quality execution.
     assert!(cache_marker.exists());
 
+    let stale_verify = root.path().join(".ayni/verify/last/signals.json");
+    fs::create_dir_all(stale_verify.parent().unwrap()).unwrap();
+    fs::write(&stale_verify, "stale-success\n").unwrap();
     let managed_verify = command(&root, &["verify", "coverage", "--config"])
         .arg(root.path().join(".ayni.toml"))
         .args([
@@ -320,6 +350,7 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         .output()
         .unwrap();
     assert_eq!(managed_verify.status.code(), Some(1));
+    assert!(!stale_verify.exists());
     let managed_verify_args = fs::read_to_string(format!("{}.check", record.display())).unwrap();
     assert!(managed_verify_args.contains("AYNI_MANAGED_TARGET_ENVIRONMENTS="));
     assert!(managed_verify_args.contains("rust:one"));
@@ -328,8 +359,9 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         "verify\ncoverage\n--host\n--config\n./.ayni.toml\n--output\njson\n--language\nrust\n--root\none\n--debug\n"
     ));
     assert!(managed_verify_args.contains("--entrypoint\n/bin/sh"));
-    assert!(managed_verify_args.contains(&format!(
-        "type=bind,source={},target=/opt/ayni/checkout,readonly",
+    assert!(managed_verify_args.contains("target=/opt/ayni/checkout,readonly"));
+    assert!(!managed_verify_args.contains(&format!(
+        "source={},target=/opt/ayni/checkout",
         managed_root.display()
     )));
     assert!(managed_verify_args.contains("/workspace:rw,exec,nosuid,size=4g,mode=1777"));
@@ -343,6 +375,33 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     );
     assert!(managed_verify_args.contains("HOME=/tmp"));
     assert!(cache_marker.exists());
+
+    // Managed impact planning happens on the host. The fake engine never runs
+    // the inner CLI, so this verifies the container receives only a read-only
+    // serialized plan rather than requiring the copied workspace to contain
+    // `.git` metadata.
+    fs::create_dir_all(root.path().join("one/src")).unwrap();
+    fs::write(root.path().join("one/src/lib.rs"), "pub fn changed() {}\n").unwrap();
+    let stale_impact = root.path().join(".ayni/impact/last/impact.json");
+    fs::create_dir_all(stale_impact.parent().unwrap()).unwrap();
+    fs::write(&stale_impact, "stale-success\n").unwrap();
+    let managed_impact = command(&root, &["impact", "run", "--base", "HEAD", "--config"])
+        .arg(root.path().join(".ayni.toml"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        managed_impact.status.code(),
+        Some(4),
+        "{}",
+        String::from_utf8_lossy(&managed_impact.stderr)
+    );
+    assert!(!stale_impact.exists());
+    let managed_impact_args = fs::read_to_string(format!("{}.check", record.display())).unwrap();
+    assert!(managed_impact_args.contains("target=/opt/ayni/inputs/impact-plan.json,readonly"));
+    assert!(managed_impact_args.contains("--managed-handoff\n/opt/ayni/inputs/impact-plan.json"));
+    assert!(managed_impact_args.contains("--managed-result\n.ayni/impact/pending/impact-"));
+    assert!(managed_impact_args.contains("--exclude='./.git'"));
+    assert!(!managed_impact_args.contains("target=/workspace/.git"));
 
     fs::write(root.path().join("one/rust-toolchain"), "stable\n").unwrap();
     let stale = command(&root, &["env", "doctor", "--repo-root"])

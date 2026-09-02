@@ -1,5 +1,7 @@
 use crate::workspace::WorkspacePatterns;
-use ayni_adapters_common::discovery::{dedupe_and_sort_roots, discover_file_parent_roots};
+use ayni_adapters_common::discovery::{
+    dedupe_and_sort_roots, discover_file_parent_roots, is_universal_excluded_dir,
+};
 use ayni_adapters_common::paths::canonicalize_relative_posix;
 use ayni_core::{DiscoveredRoot, ProjectDiscovery, ProjectLayout};
 use std::fs;
@@ -60,7 +62,14 @@ fn root_has_source_files_outside_packages(repo_root: &Path, package_roots: &[Str
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            let file_type = match entry.file_type() {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
                 if should_skip_dir(repo_root, &path, package_roots) {
                     continue;
                 }
@@ -79,16 +88,16 @@ fn should_skip_dir(repo_root: &Path, path: &Path, package_roots: &[String]) -> b
     let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
         return false;
     };
-    if matches!(
-        name,
-        "node_modules" | ".git" | ".ayni" | "dist" | "build" | "coverage"
-    ) {
-        return true;
-    }
     let Ok(relative) = path.strip_prefix(repo_root) else {
         return false;
     };
     let text = canonicalize_relative_posix(&relative.to_string_lossy());
+    let parts = text.split('/').collect::<Vec<_>>();
+    if is_universal_excluded_dir(&parts)
+        || matches!(name, "node_modules" | "dist" | "build" | "coverage")
+    {
+        return true;
+    }
     package_roots.contains(&text)
 }
 
@@ -105,6 +114,36 @@ mod tests {
     use ayni_core::ProjectLayout;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn excludes_manifests_in_universal_state_directories() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::create_dir_all(dir.path().join("packages/live")).expect("live directory");
+        fs::write(dir.path().join("packages/live/package.json"), "{}").expect("live package");
+        for state in [".ayni", ".git"] {
+            fs::create_dir_all(dir.path().join(state).join("nested")).expect("state directory");
+            fs::write(dir.path().join(state).join("nested/package.json"), "{}")
+                .expect("state package");
+        }
+
+        assert_eq!(
+            discover_roots(dir.path()),
+            vec![String::from("packages/live")]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skips_symlinked_directories_that_escape_the_repository() {
+        use std::os::unix::fs::symlink;
+
+        let repo = TempDir::new().expect("repository");
+        let outside = TempDir::new().expect("outside");
+        fs::write(outside.path().join("package.json"), "{}").expect("outside package");
+        symlink(outside.path(), repo.path().join("escape")).expect("directory symlink");
+
+        assert!(discover_roots(repo.path()).is_empty());
+    }
 
     #[test]
     fn workspace_controller_without_root_sources_excludes_workspace_root() {

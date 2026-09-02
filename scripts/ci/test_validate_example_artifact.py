@@ -1,4 +1,5 @@
 import copy
+import copy
 import unittest
 from pathlib import Path
 
@@ -49,8 +50,38 @@ def artifact(*, language="python"):
                 "offenders": {"kind": kind, "items": [item] if item else []},
             }
         )
+    applied_thresholds = [
+        {
+            "kind": row["kind"],
+            "language": row["language"],
+            "scope": row["scope"],
+            "budget": row["budget"],
+        }
+        for row in rows
+    ]
+    offender_summaries = []
+    for row in rows:
+        items = row["offenders"]["items"]
+        if not items:
+            continue
+        warning_count = sum(item.get("level") == "warn" for item in items)
+        failing_count = len(items) - warning_count
+        offender_summaries.append(
+            {
+                "kind": row["kind"],
+                "language": row["language"],
+                "scope": row["scope"],
+                "total": len(items),
+                "warning_count": warning_count,
+                "failing_count": failing_count,
+            }
+        )
     return {
         "schema_version": "0.4.0",
+        "generated_at": "2026-09-01T00:00:00Z",
+        "ayni_version": "0.4.0",
+        "output": {"format": "json", "destination": "stdout"},
+        "config_path": "./.ayni.toml",
         "execution_mode": "managed",
         "contract_digest": "sha256:" + "1" * 64,
         "environment_lock_fingerprint": "sha256:" + "2" * 64,
@@ -77,7 +108,9 @@ def artifact(*, language="python"):
             "warning_offenders": outcome.warning_offenders,
             "failing_offenders": outcome.failing_offenders,
         },
+        "applied_thresholds": applied_thresholds,
         "rows": rows,
+        "offender_summaries": offender_summaries,
     }
 
 
@@ -119,6 +152,16 @@ class ArtifactValidatorTests(unittest.TestCase):
         value["aggregate"].update(
             status="fail", passing_rows=4, failing_rows=1, failing_offenders=1
         )
+        value["offender_summaries"] = [
+            {
+                "kind": "coverage",
+                "language": "python",
+                "scope": coverage["scope"],
+                "total": 1,
+                "warning_count": 0,
+                "failing_count": 1,
+            }
+        ]
         self.assert_invalid(value, "aggregate.status", language="python")
 
     def test_coverage_drift_is_rejected(self):
@@ -151,6 +194,21 @@ class ArtifactValidatorTests(unittest.TestCase):
         value = artifact()
         value["rows"][0]["result"]["failure"] = {"message": "tool crashed"}
         self.assert_invalid(value, "command failure")
+
+    def test_required_metadata_and_derived_views(self):
+        for field in ("generated_at", "ayni_version", "output", "config_path"):
+            with self.subTest(field=field):
+                value = artifact()
+                value.pop(field)
+                self.assert_invalid(value, field)
+
+        value = artifact()
+        value["applied_thresholds"] = []
+        self.assert_invalid(value, "applied_thresholds")
+
+        value = artifact(language="kotlin")
+        value["offender_summaries"] = []
+        self.assert_invalid(value, "offender_summaries", language="kotlin")
 
     def test_wrong_schema(self):
         value = artifact()

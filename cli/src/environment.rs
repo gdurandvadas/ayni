@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn aggregates_mixed_targets_deterministically_without_writes() {
         let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join(".ayni.toml"), "[checks]\ntest = true\n[languages]\nenabled = [\"node\", \"rust\", \"node\"]\n[rust]\nroots = [\"rust\"]\n[node]\nroots = [\"node\"]\n[environment.tools]\nprotoc = \"35.1\"\n[environment.debian]\npackages = [\"libssl-dev\"]\n[environment.docker]\naccess = \"socket\"\nnetwork = \"bridge\"\n").unwrap();
+        fs::write(temp.path().join(".ayni.toml"), "[checks]\ntest = true\n[languages]\nenabled = [\"node\", \"rust\"]\n[rust]\nroots = [\"rust\"]\n[node]\nroots = [\"node\"]\n[environment.tools]\nprotoc = \"35.1\"\n[environment.debian]\npackages = [\"libssl-dev\"]\n[environment.docker]\naccess = \"socket\"\nnetwork = \"bridge\"\n").unwrap();
         fs::create_dir(temp.path().join("rust")).unwrap();
         fs::write(
             temp.path().join("rust/Cargo.toml"),

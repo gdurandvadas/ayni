@@ -1,12 +1,12 @@
 use crate::image::image_plan_with_preparation;
 use crate::{BackendError, read_lock};
-use ayni_adapters_common::workspace::GENERATED_WORKSPACE_ENTRY_NAMES;
+use ayni_adapters_common::workspace::UNIVERSAL_WORKSPACE_STATE_NAMES;
 use ayni_core::{
     ArtifactToolVersion, DependencyPreparationPlan, DockerAccess, EnvironmentCapabilities,
     EnvironmentLock, EnvironmentResourceLimits, LockedTargetEnvironment, NetworkAccess,
     TargetIdentity,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
@@ -14,6 +14,7 @@ use std::process::{Command, Stdio};
 
 pub const WORKSPACE: &str = "/workspace";
 const CHECKOUT_SOURCE: &str = "/opt/ayni/checkout";
+const WORKSPACE_MANIFEST: &str = "/opt/ayni/inputs/workspace-files";
 
 /// Operator-owned authorization for repository-requested runtime capabilities.
 /// This value is intentionally not stored in the repository lock.
@@ -30,14 +31,9 @@ fn managed_workspace_init() -> String {
         "archive_fifo=$archive_dir/archive\n",
         "mkfifo \"$archive_fifo\"\n",
         "trap 'rm -rf \"$archive_dir\"' EXIT HUP INT TERM\n",
-        "(cd /opt/ayni/checkout; set --; ",
-        "for entry in ./* ./.[!.]* ./..?*; do ",
-        "if [ -e \"$entry\" ] || [ -L \"$entry\" ]; then set -- \"$@\" \"$entry\"; fi; ",
-        "done; ",
-        "if [ \"$#\" -eq 0 ]; then tar -cf - --files-from /dev/null; ",
-        "else tar "
+        "(cd /opt/ayni/checkout; tar "
     ));
-    for name in GENERATED_WORKSPACE_ENTRY_NAMES {
+    for name in UNIVERSAL_WORKSPACE_STATE_NAMES {
         script.push_str("--exclude='./");
         script.push_str(name);
         script.push_str("' --exclude='*/");
@@ -45,7 +41,8 @@ fn managed_workspace_init() -> String {
         script.push_str("' ");
     }
     script.push_str(concat!(
-        "-cf - \"$@\"; fi) ",
+        "-cf - --null ",
+        "--files-from=/opt/ayni/inputs/workspace-files) ",
         "> \"$archive_fifo\" &\n",
         "producer=$!\n",
         "consumer_status=0\n",
@@ -129,12 +126,101 @@ pub fn launch_repository(repo_root: &Path, command: &[String]) -> Result<i32, Ba
     launch_repository_prepared(repo_root, &[], command, LaunchAuthorization::default())
 }
 
+#[derive(Clone)]
+pub struct ReadOnlyInput {
+    pub source: PathBuf,
+    pub destination: String,
+}
+
+mod snapshot;
+
+fn managed_workspace_snapshot(
+    root: &Path,
+    preparations: &[DependencyPreparationPlan],
+) -> Result<snapshot::ManagedWorkspaceSnapshot, BackendError> {
+    snapshot::create(root, preparations)
+}
+
 pub fn launch_repository_prepared(
     repo_root: &Path,
     preparations: &[DependencyPreparationPlan],
     command: &[String],
     authorization: LaunchAuthorization,
 ) -> Result<i32, BackendError> {
+    launch_repository_prepared_with_inputs(repo_root, preparations, command, authorization, &[])
+}
+
+/// Launch repository quality work with opaque, host-produced immutable inputs.
+/// Inputs are mounted read-only below `/opt/ayni/inputs`; their interpretation
+/// remains the responsibility of the caller.
+pub fn launch_repository_prepared_with_inputs(
+    repo_root: &Path,
+    preparations: &[DependencyPreparationPlan],
+    command: &[String],
+    authorization: LaunchAuthorization,
+    inputs: &[ReadOnlyInput],
+) -> Result<i32, BackendError> {
+    let root = canonical_root(repo_root)?;
+    let snapshot = managed_workspace_snapshot(&root, preparations)?;
+    let mut launch_inputs = inputs.to_vec();
+    launch_inputs.push(ReadOnlyInput {
+        source: snapshot.manifest.path().to_path_buf(),
+        destination: WORKSPACE_MANIFEST.into(),
+    });
+    let (engine, args) = prepared_repository_launch(
+        &root,
+        snapshot.checkout.path(),
+        preparations,
+        command,
+        authorization,
+        &launch_inputs,
+    )?;
+    let result = execute_launch(engine, &args);
+    drop(snapshot);
+    result
+}
+
+pub struct CapturedLaunch {
+    pub code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+pub fn launch_repository_prepared_with_inputs_captured(
+    repo_root: &Path,
+    preparations: &[DependencyPreparationPlan],
+    command: &[String],
+    authorization: LaunchAuthorization,
+    inputs: &[ReadOnlyInput],
+) -> Result<CapturedLaunch, BackendError> {
+    let root = canonical_root(repo_root)?;
+    let snapshot = managed_workspace_snapshot(&root, preparations)?;
+    let mut launch_inputs = inputs.to_vec();
+    launch_inputs.push(ReadOnlyInput {
+        source: snapshot.manifest.path().to_path_buf(),
+        destination: WORKSPACE_MANIFEST.into(),
+    });
+    let (engine, args) = prepared_repository_launch(
+        &root,
+        snapshot.checkout.path(),
+        preparations,
+        command,
+        authorization,
+        &launch_inputs,
+    )?;
+    let result = execute_launch_captured(engine, &args);
+    drop(snapshot);
+    result
+}
+
+fn prepared_repository_launch(
+    repo_root: &Path,
+    checkout_source: &Path,
+    preparations: &[DependencyPreparationPlan],
+    command: &[String],
+    authorization: LaunchAuthorization,
+    inputs: &[ReadOnlyInput],
+) -> Result<(Engine, Vec<String>), BackendError> {
     let root = canonical_root(repo_root)?;
     let lock = read_lock(&root)?;
     validate_launch_authorization(lock.capabilities(), authorization)?;
@@ -148,6 +234,8 @@ pub fn launch_repository_prepared(
     let tool_versions = managed_tool_versions(&lock)?;
     let args = repository_launch_args(RepositoryLaunch {
         root: &root,
+        checkout_source,
+        inputs,
         engine,
         state_home: &state_home,
         image_tag: &plan.tag,
@@ -159,7 +247,7 @@ pub fn launch_repository_prepared(
         lock_fingerprint: lock.fingerprint(),
         tool_versions: &tool_versions,
     })?;
-    execute_launch(engine, &args)
+    Ok((engine, args))
 }
 
 pub fn launch(
@@ -223,6 +311,8 @@ use materialization::materialize_outputs;
 
 struct RepositoryLaunch<'a> {
     root: &'a Path,
+    checkout_source: &'a Path,
+    inputs: &'a [ReadOnlyInput],
     engine: Engine,
     state_home: &'a str,
     image_tag: &'a str,
@@ -235,10 +325,70 @@ struct RepositoryLaunch<'a> {
     tool_versions: &'a str,
 }
 
+fn mount_value_is_safe(value: &str) -> bool {
+    !value
+        .chars()
+        .any(|character| matches!(character, ',' | '\n' | '\r'))
+}
+
+fn valid_read_only_input_destination(destination: &str) -> bool {
+    destination
+        .strip_prefix("/opt/ayni/inputs/")
+        .is_some_and(|relative| {
+            !relative.is_empty()
+                && mount_value_is_safe(destination)
+                && relative
+                    .split('/')
+                    .all(|component| !component.is_empty() && component != "." && component != "..")
+        })
+}
+
 fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, BackendError> {
+    if !mount_value_is_safe(&request.root.to_string_lossy())
+        || !mount_value_is_safe(&request.checkout_source.to_string_lossy())
+    {
+        return Err(BackendError::input(
+            "managed repository paths must not contain container mount delimiters",
+        ));
+    }
     let mut args = base_launch_args(request.engine, request.capabilities, request.resources)?;
-    append_managed_workspace_state_args(&mut args, request.root, WORKSPACE, request.state_home);
-    let workspace_mounts = append_managed_prepared_mounts(&mut args, request.mounts);
+    append_managed_workspace_state_args(
+        &mut args,
+        request.root,
+        request.checkout_source,
+        WORKSPACE,
+        request.state_home,
+    );
+    let mut input_destinations = BTreeSet::new();
+    for input in request.inputs {
+        if !input_destinations.insert(&input.destination) {
+            return Err(BackendError::input(
+                "read-only input destinations must be unique",
+            ));
+        }
+        if !valid_read_only_input_destination(&input.destination) {
+            return Err(BackendError::input(
+                "read-only input destination must be a normalized file below /opt/ayni/inputs",
+            ));
+        }
+        let source = input.source.canonicalize().map_err(|error| {
+            BackendError::input(format!("failed to resolve read-only input: {error}"))
+        })?;
+        if !source.is_file() || !mount_value_is_safe(&source.to_string_lossy()) {
+            return Err(BackendError::input(
+                "read-only input source must be a regular file with a mount-safe path",
+            ));
+        }
+        args.extend([
+            "--mount".into(),
+            format!(
+                "type=bind,source={},target={},readonly",
+                source.display(),
+                input.destination
+            ),
+        ]);
+    }
+    let workspace_mounts = append_managed_prepared_mounts(&mut args, request.mounts)?;
     if let Some(value) = request.managed_environments {
         args.extend([
             "--env".into(),
@@ -246,6 +396,10 @@ fn repository_launch_args(request: RepositoryLaunch<'_>) -> Result<Vec<String>, 
         ]);
     }
     args.extend([
+        "--env".into(),
+        format!("AYNI_MANAGED_WORKSPACE_MANIFEST={WORKSPACE_MANIFEST}"),
+        "--env".into(),
+        format!("AYNI_MANAGED_WORKSPACE_ROOT={WORKSPACE}"),
         "--env".into(),
         format!("AYNI_MANAGED_LOCK_FINGERPRINT={}", request.lock_fingerprint),
         "--env".into(),
@@ -304,9 +458,14 @@ fn managed_tool_versions(lock: &EnvironmentLock) -> Result<String, BackendError>
 fn append_managed_prepared_mounts(
     args: &mut Vec<String>,
     mounts: &[(PathBuf, String)],
-) -> Vec<String> {
+) -> Result<Vec<String>, BackendError> {
     let mut workspace_mounts = Vec::new();
     for (source, destination) in mounts {
+        if !mount_value_is_safe(&source.to_string_lossy()) || !mount_value_is_safe(destination) {
+            return Err(BackendError::input(
+                "prepared dependency mount paths must not contain container mount delimiters",
+            ));
+        }
         let target = if let Some(relative) = destination.strip_prefix(&format!("{WORKSPACE}/")) {
             let target = format!("/opt/ayni/prepared-{}/{relative}", workspace_mounts.len());
             workspace_mounts.push(destination.clone());
@@ -319,16 +478,25 @@ fn append_managed_prepared_mounts(
             format!("type=bind,source={},target={target}", source.display()),
         ]);
     }
-    workspace_mounts
+    Ok(workspace_mounts)
 }
 
-fn append_prepared_mounts(args: &mut Vec<String>, mounts: &[(PathBuf, String)]) {
+fn append_prepared_mounts(
+    args: &mut Vec<String>,
+    mounts: &[(PathBuf, String)],
+) -> Result<(), BackendError> {
     for (source, destination) in mounts {
+        if !mount_value_is_safe(&source.to_string_lossy()) || !mount_value_is_safe(destination) {
+            return Err(BackendError::input(
+                "prepared dependency mount paths must not contain container mount delimiters",
+            ));
+        }
         args.extend([
             "--mount".into(),
             format!("type=bind,source={},target={destination}", source.display()),
         ]);
     }
+    Ok(())
 }
 
 struct TargetLaunch<'a> {
@@ -348,7 +516,7 @@ struct TargetLaunch<'a> {
 fn launch_args(request: TargetLaunch<'_>) -> Result<Vec<String>, BackendError> {
     let mut args = base_launch_args(request.engine, request.capabilities, request.resources)?;
     append_workspace_args(&mut args, request.root, request.target, request.state_home);
-    append_prepared_mounts(&mut args, request.mounts);
+    append_prepared_mounts(&mut args, request.mounts)?;
     append_target_environment(&mut args, request.target)?;
     for (name, value) in request.execution_environment {
         args.extend(["--env".into(), format!("{name}={value}")]);
@@ -443,15 +611,12 @@ fn append_docker_socket_args(
         ));
     }
     let socket = docker_socket_path()?;
-    // Docker Desktop projects its host socket into the Linux VM as root:root,
-    // regardless of the macOS socket's owner/group metadata. Native Unix
-    // engines preserve the socket GID and must use that group instead.
-    #[cfg(target_os = "macos")]
-    let gid = Some(0);
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let gid = {
+    // Native Unix engines preserve the socket GID. Docker Desktop for macOS
+    // projects it as root:root, so authorize both observed and projected groups.
+    #[cfg(unix)]
+    let gids = {
         use std::os::unix::fs::MetadataExt;
-        Some(
+        let mut gids = vec![
             fs::metadata(&socket)
                 .map_err(|error| {
                     BackendError::environment(format!(
@@ -460,15 +625,20 @@ fn append_docker_socket_args(
                     ))
                 })?
                 .gid(),
-        )
+        ];
+        #[cfg(target_os = "macos")]
+        gids.push(0);
+        gids.sort_unstable();
+        gids.dedup();
+        gids
     };
     #[cfg(not(unix))]
-    let gid = None;
-    append_known_docker_socket_args(args, &socket, gid);
+    let gids = Vec::new();
+    append_known_docker_socket_args(args, &socket, &gids);
     Ok(())
 }
 
-fn append_known_docker_socket_args(args: &mut Vec<String>, socket: &Path, gid: Option<u32>) {
+fn append_known_docker_socket_args(args: &mut Vec<String>, socket: &Path, gids: &[u32]) {
     args.extend([
         "--mount".into(),
         format!(
@@ -484,7 +654,7 @@ fn append_known_docker_socket_args(args: &mut Vec<String>, socket: &Path, gid: O
         "--add-host".into(),
         "host.docker.internal:host-gateway".into(),
     ]);
-    if let Some(gid) = gid {
+    for gid in gids {
         args.extend(["--group-add".into(), gid.to_string()]);
     }
 }
@@ -516,19 +686,49 @@ fn docker_unix_socket_path(host: Option<&str>) -> Result<PathBuf, BackendError> 
     }
 }
 
+fn validate_docker_socket_path(configured_path: &Path) -> Result<PathBuf, BackendError> {
+    let path = configured_path.canonicalize().map_err(|error| {
+        BackendError::environment(format!(
+            "Docker socket is unavailable at {}: {error}",
+            configured_path.display()
+        ))
+    })?;
+    if !mount_value_is_safe(&path.to_string_lossy()) {
+        return Err(BackendError::environment(
+            "Docker socket path contains container mount delimiters",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        let metadata = fs::metadata(&path).map_err(|error| {
+            BackendError::environment(format!(
+                "failed to inspect Docker socket {}: {error}",
+                path.display()
+            ))
+        })?;
+        if !metadata.file_type().is_socket() {
+            return Err(BackendError::environment(format!(
+                "Docker socket path {} is not a Unix socket",
+                path.display()
+            )));
+        }
+        Ok(path)
+    }
+    #[cfg(not(unix))]
+    {
+        Err(BackendError::environment(
+            "Docker socket access requires Unix socket support",
+        ))
+    }
+}
+
 fn docker_socket_path() -> Result<PathBuf, BackendError> {
     let configured = std::env::var("DOCKER_HOST")
         .ok()
         .or_else(active_docker_context_host);
-    let path = docker_unix_socket_path(configured.as_deref())?;
-    if fs::metadata(&path).is_ok() {
-        Ok(path)
-    } else {
-        Err(BackendError::environment(format!(
-            "Docker socket is unavailable at {}",
-            path.display()
-        )))
-    }
+    let configured_path = docker_unix_socket_path(configured.as_deref())?;
+    validate_docker_socket_path(&configured_path)
 }
 
 fn append_workspace_args(
@@ -567,6 +767,7 @@ fn append_workspace_state_args(
 fn append_managed_workspace_state_args(
     args: &mut Vec<String>,
     root: &Path,
+    checkout_source: &Path,
     workdir: &str,
     _state_home: &str,
 ) {
@@ -574,7 +775,7 @@ fn append_managed_workspace_state_args(
         "--mount".into(),
         format!(
             "type=bind,source={},target={CHECKOUT_SOURCE},readonly",
-            root.display()
+            checkout_source.display()
         ),
         "--tmpfs".into(),
         format!("{WORKSPACE}:rw,exec,nosuid,size=4g,mode=1777"),
@@ -648,6 +849,23 @@ fn execute_launch(engine: Engine, args: &[String]) -> Result<i32, BackendError> 
             BackendError::execution(format!("failed to start {}: {error}", engine_name(engine)))
         })?;
     Ok(status.code().unwrap_or(4))
+}
+
+fn execute_launch_captured(
+    engine: Engine,
+    args: &[String],
+) -> Result<CapturedLaunch, BackendError> {
+    let output = Command::new(engine_name(engine))
+        .args(args)
+        .output()
+        .map_err(|error| {
+            BackendError::execution(format!("failed to start {}: {error}", engine_name(engine)))
+        })?;
+    Ok(CapturedLaunch {
+        code: output.status.code().unwrap_or(4),
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
 }
 
 pub(crate) fn target_environment(
@@ -917,10 +1135,26 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn docker_socket_validation_rejects_regular_files() {
+        let root = tempfile::TempDir::new().expect("socket directory");
+        let regular = root.path().join("not-a-socket");
+        fs::write(&regular, "not a socket\n").expect("regular file");
+        assert!(validate_docker_socket_path(&regular).is_err());
+
+        let socket = root.path().join("docker.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("Unix socket");
+        assert_eq!(
+            validate_docker_socket_path(&socket).expect("validated socket"),
+            socket.canonicalize().expect("canonical socket")
+        );
+    }
+
     #[test]
     fn docker_socket_args_are_explicit_and_testcontainers_aware() {
         let mut args = Vec::new();
-        append_known_docker_socket_args(&mut args, Path::new("/host/docker.sock"), Some(123));
+        append_known_docker_socket_args(&mut args, Path::new("/host/docker.sock"), &[123]);
         assert!(args.iter().any(|arg| {
             arg == "type=bind,source=/host/docker.sock,target=/var/run/docker.sock"
         }));
@@ -975,6 +1209,120 @@ mod tests {
     }
 
     #[test]
+    fn managed_workspace_excludes_only_universal_state_and_exact_prepared_outputs() {
+        let outputs = vec![String::from("packages/app/node_modules")];
+        assert!(snapshot::path_is_excluded(
+            ".ayni/last/signals.json",
+            &outputs
+        ));
+        assert!(snapshot::path_is_excluded(
+            "packages/app/node_modules",
+            &outputs
+        ));
+        assert!(snapshot::path_is_excluded(
+            "packages/app/node_modules/pkg/index.js",
+            &outputs
+        ));
+        assert!(!snapshot::path_is_excluded(
+            "src/build/checked.rs",
+            &outputs
+        ));
+        assert!(!snapshot::path_is_excluded(
+            "packages/other/node_modules/source.js",
+            &outputs
+        ));
+    }
+
+    #[test]
+    fn managed_workspace_manifest_preserves_tracked_source_and_skips_ignored_output() {
+        let repository = tempfile::TempDir::new().expect("repository");
+        let root = repository.path();
+        fs::create_dir_all(root.join("src/build")).expect("source directory");
+        fs::create_dir_all(root.join("target/debug")).expect("generated directory");
+        fs::create_dir_all(root.join(".ayni/last")).expect("Ayni state");
+        fs::write(
+            root.join("src/build/checked.rs"),
+            "pub const VALUE: u8 = 1;\n",
+        )
+        .expect("tracked source");
+        fs::write(root.join("visible.txt"), "untracked but visible\n").expect("untracked source");
+        fs::write(root.join("target/debug/output"), "generated\n").expect("generated output");
+        fs::write(root.join(".ayni/last/signals.json"), "state\n").expect("Ayni output");
+        fs::write(root.join(".gitignore"), "target/\n").expect("ignore file");
+        let git = |arguments: &[&str]| {
+            let status = Command::new("git")
+                .current_dir(root)
+                .args(arguments)
+                .status()
+                .expect("git");
+            assert!(status.success());
+        };
+        git(&["init", "-q"]);
+        git(&["add", ".gitignore", "src/build/checked.rs"]);
+
+        let snapshot = managed_workspace_snapshot(root, &[]).expect("workspace snapshot");
+        let bytes = fs::read(snapshot.manifest.path()).expect("manifest bytes");
+        let paths = bytes
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| std::str::from_utf8(path).expect("UTF-8 path"))
+            .collect::<Vec<_>>();
+
+        assert!(paths.contains(&"src/build/checked.rs"));
+        assert!(paths.contains(&"visible.txt"));
+        assert!(!paths.iter().any(|path| path.starts_with("target/")));
+        assert!(!paths.iter().any(|path| path.starts_with(".ayni/")));
+        assert_eq!(
+            fs::read_to_string(snapshot.checkout.path().join("src/build/checked.rs"))
+                .expect("snapshotted source"),
+            "pub const VALUE: u8 = 1;\n"
+        );
+        assert!(!snapshot.checkout.path().join("target").exists());
+    }
+
+    #[test]
+    fn read_only_inputs_require_normalized_contained_destinations() {
+        assert!(valid_read_only_input_destination(
+            "/opt/ayni/inputs/impact-plan.json"
+        ));
+        for invalid in [
+            "/opt/ayni/inputs/",
+            "/opt/ayni/inputs/../escape",
+            "/opt/ayni/inputs/./plan.json",
+            "/opt/ayni/inputs/nested//plan.json",
+            "/opt/ayni/inputs/plan,bad.json",
+            "/workspace/plan.json",
+        ] {
+            assert!(!valid_read_only_input_destination(invalid), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn prepared_mounts_reject_container_mount_delimiters() {
+        let mut args = Vec::new();
+        assert!(
+            append_managed_prepared_mounts(
+                &mut args,
+                &[(
+                    PathBuf::from("/state/unsafe,path"),
+                    String::from("/workspace/deps")
+                )],
+            )
+            .is_err()
+        );
+        assert!(
+            append_prepared_mounts(
+                &mut args,
+                &[(
+                    PathBuf::from("/state/safe"),
+                    String::from("/workspace/deps,bad")
+                )],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn repository_launch_keeps_target_activation_inside_ayni() {
         let mounts = [
             (
@@ -988,6 +1336,8 @@ mod tests {
         ];
         let args = repository_launch_args(RepositoryLaunch {
             root: Path::new("/checkout"),
+            checkout_source: Path::new("/snapshot"),
+            inputs: &[],
             engine: Engine::Docker,
             state_home: "/workspace/.ayni/environment/state/home",
             image_tag: "ayni-env:test",
@@ -1019,7 +1369,7 @@ mod tests {
         );
         assert!(
             args.iter().any(|arg| {
-                arg == "type=bind,source=/checkout,target=/opt/ayni/checkout,readonly"
+                arg == "type=bind,source=/snapshot,target=/opt/ayni/checkout,readonly"
             })
         );
         assert!(
@@ -1036,10 +1386,20 @@ mod tests {
                 .any(|pair| pair == ["--entrypoint", "/bin/sh"])
         );
         assert!(args.iter().any(|arg| arg == &workspace_init));
-        for name in GENERATED_WORKSPACE_ENTRY_NAMES {
+        for name in UNIVERSAL_WORKSPACE_STATE_NAMES {
             assert!(workspace_init.contains(&format!("--exclude='./{name}'")));
             assert!(workspace_init.contains(&format!("--exclude='*/{name}'")));
         }
+        for source_directory in ["build", "coverage", "target"] {
+            assert!(!workspace_init.contains(&format!("--exclude='./{source_directory}'")));
+            assert!(!workspace_init.contains(&format!("--exclude='*/{source_directory}'")));
+        }
+        assert!(workspace_init.contains("--files-from=/opt/ayni/inputs/workspace-files"));
+        assert!(workspace_init.contains("${destination#/workspace/}"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "AYNI_MANAGED_WORKSPACE_ROOT=/workspace")
+        );
         assert!(
             args.iter()
                 .any(|arg| arg == "AYNI_MANAGED_LOCK_FINGERPRINT=sha256:test")
