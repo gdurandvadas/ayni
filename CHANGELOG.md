@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.3](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.2...ayni-v0.11.3) (2026-09-02)
+
+
+### Bug Fixes
+
+* **audit:** harden managed execution and release recovery ([#85](https://github.com/gdurandvadas/ayni/issues/85)) ([f609e1b](https://github.com/gdurandvadas/ayni/commit/f609e1bc8cadf1d0644f232141f6b2a46b41a906))
+* **release:** unblock release automation ([db53e7d](https://github.com/gdurandvadas/ayni/commit/db53e7d3b2feedb3b9d2978332007b21c6db6935))
+
 ## [0.11.2](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.1...ayni-v0.11.2) (2026-08-23)
 
 
