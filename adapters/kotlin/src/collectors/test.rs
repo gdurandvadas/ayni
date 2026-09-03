@@ -4,8 +4,8 @@ use ayni_adapters_common::exec::{format_command, run_command_for_context_structu
 use ayni_adapters_common::failure::{command_failure_from_output, test_execution_incomplete};
 use ayni_adapters_common::xml::{attr_f64, attr_string, attr_u64};
 use ayni_core::{
-    Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestBudget, TestFailure, TestResult, VerificationSelection,
+    Budget, Language, Offenders, RunContext, SignalKind, SignalResult, SignalRow, TestBudget,
+    TestFailure, TestResult, VerificationSelection,
 };
 use regex::Regex;
 use std::fs;
@@ -67,12 +67,7 @@ fn collect_with_command(
     Ok(SignalRow {
         kind: SignalKind::Test,
         language: Language::Kotlin,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: test_row_passes(output.status.success(), report.tests, failed),
         result: SignalResult::Test(TestResult {
             total_tests: report.tests,

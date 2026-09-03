@@ -10,8 +10,8 @@ use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_adapters_common::xml::{attr_string, attr_u64};
 use ayni_core::{
     Budget, ConfiguredMetricEvaluation, CoverageBudget, CoverageOffender, CoveragePolicy,
-    CoverageResult, Language, Level, Offenders, RunContext, Scope, SignalKind, SignalResult,
-    SignalRow, evaluate_configured_metric,
+    CoverageResult, Language, Level, Offenders, RunContext, SignalKind, SignalResult, SignalRow,
+    evaluate_configured_metric,
 };
 use regex::Regex;
 use std::fs;
@@ -76,12 +76,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     Ok(SignalRow {
         kind: SignalKind::Coverage,
         language: Language::Kotlin,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass,
         result: SignalResult::Coverage(CoverageResult {
             percent: report.line_percent.or(report.branch_percent),
@@ -138,12 +133,7 @@ fn error_row(
     SignalRow {
         kind: SignalKind::Coverage,
         language: Language::Kotlin,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: false,
         result: SignalResult::Coverage(CoverageResult {
             percent: None,

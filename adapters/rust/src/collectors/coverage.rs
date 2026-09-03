@@ -3,7 +3,7 @@ use ayni_adapters_common::exec::{format_command, run_command_for_context_structu
 use ayni_adapters_common::failure::{concise_failure_message, coverage_metric_failure};
 use ayni_core::{
     Budget, CommandFailure, ConfiguredMetricEvaluation, CoverageBudget, CoverageOffender,
-    CoveragePolicy, CoverageResult, Level, Offenders, RunContext, Scope, SignalKind, SignalResult,
+    CoveragePolicy, CoverageResult, Level, Offenders, RunContext, SignalKind, SignalResult,
     SignalRow, evaluate_configured_metric,
 };
 use serde_json::Value as JsonValue;
@@ -70,12 +70,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     Ok(SignalRow {
         kind: SignalKind::Coverage,
         language: ayni_core::Language::Rust,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass,
         result: SignalResult::Coverage(CoverageResult {
             percent,

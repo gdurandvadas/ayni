@@ -3,8 +3,8 @@ use ayni_adapters_common::collector::CollectorResult;
 use ayni_adapters_common::exec::format_command;
 use ayni_adapters_common::failure::{command_failure_from_output, test_execution_incomplete};
 use ayni_core::{
-    Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestBudget, TestFailure, TestResult, VerificationSelection,
+    Budget, Language, Offenders, RunContext, SignalKind, SignalResult, SignalRow, TestBudget,
+    TestFailure, TestResult, VerificationSelection,
 };
 use serde::Deserialize;
 
@@ -80,12 +80,7 @@ fn collect_with_command(
     Ok(SignalRow {
         kind: SignalKind::Test,
         language: Language::Go,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: test_row_passes(success, summary.total_tests, summary.failed),
         result: SignalResult::Test(TestResult {
             total_tests: summary.total_tests,

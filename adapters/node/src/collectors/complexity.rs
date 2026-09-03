@@ -4,7 +4,7 @@ use ayni_adapters_common::failure::setup_failure;
 use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
     Budget, ComplexityBudget, ComplexityOffender, ComplexityResult, FloatThresholdBudget, Language,
-    Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, classify_maximum,
+    Level, Offenders, RunContext, SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use regex::Regex;
 use serde_json::Value as JsonValue;
@@ -160,12 +160,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     Ok(SignalRow {
         kind: SignalKind::Complexity,
         language: Language::Node,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass,
         result: SignalResult::Complexity(ComplexityResult {
             engine: String::from("eslint"),

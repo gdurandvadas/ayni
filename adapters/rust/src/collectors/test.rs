@@ -2,8 +2,8 @@ use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{format_command, run_command_for_context_streaming_structured};
 use ayni_adapters_common::failure::test_execution_incomplete;
 use ayni_core::{
-    Budget, CommandFailure, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestBudget, TestFailure, TestResult, VerificationSelection,
+    Budget, CommandFailure, Offenders, RunContext, SignalKind, SignalResult, SignalRow, TestBudget,
+    TestFailure, TestResult, VerificationSelection,
 };
 
 const STDERR_TAIL_LINES: usize = 20;
@@ -110,12 +110,7 @@ fn build_test_row(
     SignalRow {
         kind: SignalKind::Test,
         language: ayni_core::Language::Rust,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: test_row_passes(success, total_tests, failed),
         result: SignalResult::Test(TestResult {
             total_tests,

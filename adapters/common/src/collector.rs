@@ -4,7 +4,7 @@ use crate::exec::ExecutionError;
 use crate::failure::command_failure_from_execution_error;
 use ayni_core::{
     AdapterError, Budget, ComplexityBudget, ComplexityResult, CoverageBudget, CoverageResult,
-    DepsBudget, DepsResult, Language, MutationBudget, MutationResult, Offenders, RunContext, Scope,
+    DepsBudget, DepsResult, Language, MutationBudget, MutationResult, Offenders, RunContext,
     SignalKind, SignalResult, SignalRow, SizeBudget, SizeResult, TestBudget, TestResult,
 };
 
@@ -58,7 +58,7 @@ fn execution_error_row(
     error: ExecutionError,
 ) -> SignalRow {
     let failure = command_failure_from_execution_error(kind, &error);
-    let scope = scope(context);
+    let scope = context.scope.clone();
     match kind {
         SignalKind::Test => SignalRow {
             kind,
@@ -155,15 +155,6 @@ fn execution_error_row(
             budget: Budget::Mutation(MutationBudget::default()),
             offenders: Offenders::Mutation(Vec::new()),
         },
-    }
-}
-
-fn scope(context: &RunContext) -> Scope {
-    Scope {
-        workspace_root: context.scope.workspace_root.clone(),
-        path: context.scope.path.clone(),
-        package: context.scope.package.clone(),
-        file: context.scope.file.clone(),
     }
 }
 

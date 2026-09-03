@@ -30,12 +30,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     Ok(SignalRow {
         kind: SignalKind::Deps,
         language: Language::Rust,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: analysis.result.violation_count == 0,
         result: SignalResult::Deps(analysis.result),
         budget: Budget::Deps(DepsBudget {

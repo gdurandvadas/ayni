@@ -6,7 +6,7 @@ use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::xml;
 use ayni_core::{
     Budget, Language, Level, MutationBudget, MutationOffender, MutationResult, Offenders,
-    RunContext, Scope, SignalKind, SignalResult, SignalRow,
+    RunContext, SignalKind, SignalResult, SignalRow,
 };
 use regex::Regex;
 use std::fs;
@@ -17,12 +17,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         return Ok(SignalRow {
             kind: SignalKind::Mutation,
             language: Language::Python,
-            scope: Scope {
-                workspace_root: context.scope.workspace_root.clone(),
-                path: context.scope.path.clone(),
-                package: context.scope.package.clone(),
-                file: context.scope.file.clone(),
-            },
+            scope: context.scope.clone(),
             pass: true,
             result: SignalResult::Mutation(MutationResult {
                 engine: String::from("mutmut"),
@@ -101,12 +96,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     Ok(SignalRow {
         kind: SignalKind::Mutation,
         language: Language::Python,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: survived == 0,
         result: SignalResult::Mutation(MutationResult {
             engine: String::from("mutmut"),
@@ -131,12 +121,7 @@ fn error_row(
     SignalRow {
         kind: SignalKind::Mutation,
         language: Language::Python,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: false,
         result: SignalResult::Mutation(MutationResult {
             engine,

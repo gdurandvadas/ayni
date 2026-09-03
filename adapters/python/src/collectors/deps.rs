@@ -1,6 +1,6 @@
 use super::util::to_repo_relative_path;
 use ayni_core::{
-    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope,
+    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext,
     SignalKind, SignalResult, SignalRow,
 };
 use glob::Pattern;
@@ -56,12 +56,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     Ok(SignalRow {
         kind: SignalKind::Deps,
         language: Language::Python,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: offenders.is_empty(),
         result: SignalResult::Deps(DepsResult {
             crate_count: files.len() as u64,

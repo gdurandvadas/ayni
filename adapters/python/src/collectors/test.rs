@@ -6,8 +6,8 @@ use super::util::{
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::failure::test_execution_incomplete;
 use ayni_core::{
-    Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    TestBudget, TestFailure, TestResult, VerificationSelection,
+    Budget, Language, Offenders, RunContext, SignalKind, SignalResult, SignalRow, TestBudget,
+    TestFailure, TestResult, VerificationSelection,
 };
 use serde::Deserialize;
 use std::fs;
@@ -149,12 +149,7 @@ fn collect_with_command(
     Ok(SignalRow {
         kind: SignalKind::Test,
         language: Language::Python,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: test_row_passes(success, total_tests, failed),
         result: SignalResult::Test(TestResult {
             total_tests,

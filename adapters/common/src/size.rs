@@ -1,7 +1,9 @@
 use crate::paths::to_repo_relative_path;
 use ayni_core::signal::{Level, SizeOffender, SizeResult};
-use ayni_core::{SizeBudget, SizeBudgetRule};
-use ayni_core::{SizeThreshold, classify_maximum};
+use ayni_core::{
+    Budget, Language, Offenders, RunContext, SignalKind, SignalResult, SignalRow, SizeBudget,
+    SizeBudgetRule, SizeThreshold, classify_maximum,
+};
 use glob::Pattern;
 use std::collections::BTreeMap;
 use std::fs;
@@ -19,6 +21,48 @@ pub struct SizeCollection {
     pub result: SizeResult,
     pub offenders: Vec<SizeOffender>,
     pub budget: SizeBudget,
+}
+
+/// Collects and normalizes one adapter's size signal while preserving its
+/// ecosystem-specific directory exclusions.
+pub fn collect_size_signal(
+    context: &RunContext,
+    language: Language,
+    excluded_dir_names: &[&str],
+) -> Result<SignalRow, String> {
+    let size_map = context.policy.size_rules_for(language);
+    if size_map.is_empty() {
+        return Err(format!(
+            "missing size config: add [{language}.size] with at least one glob entry to .ayni.toml"
+        ));
+    }
+
+    let collected = if let Some(file) = context.scope.file.as_deref() {
+        collect_size_file(
+            &context.repo_root,
+            &context.workdir,
+            file,
+            size_map,
+            excluded_dir_names,
+        )?
+    } else {
+        collect_size(
+            &context.repo_root,
+            &context.workdir,
+            size_map,
+            excluded_dir_names,
+        )?
+    };
+
+    Ok(SignalRow {
+        kind: SignalKind::Size,
+        language,
+        scope: context.scope.clone(),
+        pass: collected.result.fail_count == 0,
+        result: SignalResult::Size(collected.result),
+        budget: Budget::Size(collected.budget),
+        offenders: Offenders::Size(collected.offenders),
+    })
 }
 
 pub fn collect_size(
