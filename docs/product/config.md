@@ -283,8 +283,8 @@ args = ["test"]
 command = "go"
 args = ["test", "./..."]
 
-# Rust and Node only. Opt in when the coverage command runs the complete
-# required suite and emits the adapter's normal parseable test evidence.
+# Available for every supported adapter. Opt in only when the coverage
+# command runs the complete suite and emits both native evidence types.
 [node.tooling]
 coverage_satisfies_test = true
 
@@ -293,8 +293,7 @@ command = "pnpm"
 args = ["exec", "vitest", "run", "--reporter=json", "--passWithNoTests"]
 
 [python.tooling.test]
-command = "uv"
-args = ["run", "pytest", "--json-report", "--json-report-file", ".ayni/pytest-report.json"]
+command = "pytest"
 ```
 
 Notes:
@@ -302,16 +301,17 @@ Notes:
 - `command` is required inside each override table and must be non-empty; an empty table is invalid policy rather than a command with an empty executable.
 - `args` is optional; when omitted, Ayni uses signal-specific defaults for that language.
 - Overrides are command execution overrides only; result parsing still expects the signal collector’s native output shape.
-- For Rust and Node, set `coverage_satisfies_test = true` in the language's
-  `tooling` table only when its coverage command executes the complete test
-  suite. When both checks are enabled, repository `check` runs that command
-  once and emits separate typed test and coverage rows instead of first running
-  the ordinary test command. Rust still requires parseable Cargo `test result:`
-  summaries plus the cargo-llvm-cov JSON report. Node still requires a parseable
-  Vitest JSON test report in command output plus a newly generated
-  `coverage/coverage-summary.json`. Missing either half fails both rows closed.
-  The default is `false`; focused `verify` and impact scopes continue using
-  their existing signal-specific execution.
+- For any supported language, set `coverage_satisfies_test = true` in its
+  `tooling` table only when the coverage command executes the complete test
+  suite. When both checks are enabled, repository `check` uses one test-suite
+  execution and emits separate typed test and coverage rows instead of first
+  running the ordinary test command. Rust requires Cargo test summaries plus
+  cargo-llvm-cov JSON; Node requires Vitest JSON plus a new coverage summary;
+  Go requires `go test -json` events plus a coverage profile parsed by
+  `go tool cover`; Python requires pytest-json-report and pytest-cov JSON; and
+  Kotlin requires JUnit XML plus Kover or JaCoCo XML from one test-bearing Gradle invocation.
+  Missing either evidence type fails both rows closed. The default is `false`;
+  focused `verify` and impact scopes continue using signal-specific execution.
 - Mutation is unavailable for Rust, Node, and Go. Those adapters reject the
   signal before tool invocation even if a `tooling.mutation` table is present.
 - Managed execution accepts overrides after the adapter has contributed and

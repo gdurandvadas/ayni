@@ -613,7 +613,6 @@ fn normalize_debian_packages(packages: &mut Vec<String>) -> Result<(), String> {
 
 fn validate_language_thresholds(language: &str, tooling: &LanguageTooling) -> Result<(), String> {
     validate_tool_command_overrides(language, &tooling.tooling)?;
-    validate_coverage_reuse_support(language, &tooling.tooling)?;
     validate_size_thresholds(language, &tooling.size)?;
     if let Some(complexity) = &tooling.complexity {
         for (name, threshold) in [
@@ -664,18 +663,6 @@ fn validate_size_thresholds(
                 rule.warn, rule.fail
             ));
         }
-    }
-    Ok(())
-}
-
-fn validate_coverage_reuse_support(
-    language: &str,
-    tooling: &LanguageToolingOverrides,
-) -> Result<(), String> {
-    if tooling.coverage_satisfies_test && !matches!(language, "rust" | "node") {
-        return Err(format!(
-            "{language}.tooling.coverage_satisfies_test is unsupported; only rust and node can parse combined test and coverage evidence"
-        ));
     }
     Ok(())
 }

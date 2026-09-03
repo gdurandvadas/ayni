@@ -1,4 +1,6 @@
-use ayni_adapters_common::collector::{CollectorError, CollectorResult, finish_collection};
+use ayni_adapters_common::collector::{
+    CollectorError, CollectorResult, finish_collection, finish_coverage_backed_test,
+};
 use ayni_core::{
     AdapterError, Language, RunContext, SignalCollector, SignalKind, SignalRow,
     VerificationSelection,
@@ -31,6 +33,29 @@ impl SignalCollector for PythonCollector {
             | SignalKind::Mutation => vec![manager.executable().to_string()],
             SignalKind::Size | SignalKind::Deps => Vec::new(),
         }
+    }
+
+    fn supports_coverage_backed_test(&self, context: &RunContext) -> bool {
+        context.policy.python.tooling.coverage_satisfies_test
+    }
+
+    fn collect_coverage_backed_test(
+        &self,
+        language: Language,
+        context: &RunContext,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<(SignalRow, SignalRow), AdapterError> {
+        if language != Language::Python || !self.supports_coverage_backed_test(context) {
+            return Err(AdapterError::new(
+                Language::Python,
+                "coverage-backed test collection is not enabled for this Python target",
+            ));
+        }
+        finish_coverage_backed_test(
+            Language::Python,
+            context,
+            coverage::collect_with_test_lines(context, on_line),
+        )
     }
 
     fn collect_verification(
@@ -69,8 +94,11 @@ mod tests {
     use super::PythonCollector;
     use ayni_core::{
         AyniPolicy, ExecutionResolution, Language, RunContext, Scope, SignalCollector, SignalKind,
+        SignalResult,
     };
+    use std::fs;
     use std::time::Duration;
+    use tempfile::TempDir;
 
     #[test]
     fn host_preflight_matches_direct_and_managed_python_complexity_launchers() {
@@ -104,6 +132,164 @@ mod tests {
     #[test]
     fn controlled_timeout_child() {
         std::thread::sleep(Duration::from_secs(2));
+    }
+
+    #[test]
+    fn coverage_backed_test_collection_requires_opt_in() {
+        let policy: AyniPolicy =
+            toml::from_str("[checks]\ntest=true\ncoverage=true\n[languages]\nenabled=[\"python\"]")
+                .expect("policy");
+        let cwd = std::env::current_dir().expect("working directory");
+        let context = RunContext {
+            repo_root: cwd.clone(),
+            target_root: cwd.clone(),
+            workdir: cwd.clone(),
+            policy,
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("python", cwd, "test", 100),
+            cancellation: Default::default(),
+            debug: false,
+        };
+        assert!(!PythonCollector.supports_coverage_backed_test(&context));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opted_in_coverage_command_runs_once_and_emits_both_rows() {
+        let directory = TempDir::new().expect("fixture");
+        fs::write(
+            directory.path().join("combined.sh"),
+            r#"#!/bin/sh
+printf 'launched\n' >> launches
+mkdir -p .ayni/work/python/workspace
+printf '%s\n' '{"duration":1.5,"summary":{"total":2,"passed":2,"failed":0,"error":0},"tests":[]}' > .ayni/work/python/workspace/pytest-report.json
+printf '%s\n' '{"totals":{"covered_lines":8,"num_statements":10,"covered_branches":3,"num_branches":4}}' > .ayni/work/python/workspace/coverage.json
+"#,
+        )
+        .expect("script");
+        let policy: AyniPolicy = toml::from_str(
+            r#"
+[checks]
+test = true
+coverage = true
+[languages]
+enabled = ["python"]
+[python.tooling]
+coverage_satisfies_test = true
+[python.tooling.coverage]
+command = "sh"
+args = ["combined.sh"]
+"#,
+        )
+        .expect("policy");
+        let root = directory.path().to_path_buf();
+        let context = RunContext {
+            repo_root: root.clone(),
+            target_root: root.clone(),
+            workdir: root.clone(),
+            policy,
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("uv", root, "test", 100),
+            cancellation: Default::default(),
+            debug: false,
+        };
+
+        let (test, coverage) = PythonCollector
+            .collect_coverage_backed_test(Language::Python, &context, &mut |_| {})
+            .expect("combined rows");
+
+        assert_eq!(
+            fs::read_to_string(directory.path().join("launches")).unwrap(),
+            "launched\n"
+        );
+        assert!(test.pass);
+        assert!(coverage.pass);
+        let SignalResult::Test(result) = test.result else {
+            panic!("test row")
+        };
+        assert_eq!(
+            (result.total_tests, result.passed, result.failed),
+            (2, 2, 0)
+        );
+        let SignalResult::Coverage(result) = coverage.result else {
+            panic!("coverage row")
+        };
+        assert_eq!(result.line_percent, Some(80.0));
+        assert_eq!(result.branch_percent, Some(75.0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn incomplete_combined_evidence_fails_both_rows() {
+        let directory = TempDir::new().expect("fixture");
+        fs::write(
+            directory.path().join("combined.sh"),
+            "#!/bin/sh\nmkdir -p .ayni/work/python/workspace\nprintf '%s\n' '{\"duration\":1.5,\"summary\":{\"total\":2,\"passed\":2,\"failed\":0,\"error\":0},\"tests\":[]}' > .ayni/work/python/workspace/pytest-report.json\n",
+        )
+        .expect("script");
+        let policy: AyniPolicy = toml::from_str(
+            "[checks]\ntest=true\ncoverage=true\n[languages]\nenabled=[\"python\"]\n[python.tooling]\ncoverage_satisfies_test=true\n[python.tooling.coverage]\ncommand=\"sh\"\nargs=[\"combined.sh\"]",
+        )
+        .expect("policy");
+        let root = directory.path().to_path_buf();
+        let context = RunContext {
+            repo_root: root.clone(),
+            target_root: root.clone(),
+            workdir: root.clone(),
+            policy,
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("uv", root, "test", 100),
+            cancellation: Default::default(),
+            debug: false,
+        };
+        let (test, coverage) = PythonCollector
+            .collect_coverage_backed_test(Language::Python, &context, &mut |_| {})
+            .expect("typed failed rows");
+        assert!(!test.pass);
+        assert!(!coverage.pass);
+        assert_eq!(
+            test.result.command_failure().unwrap().classification,
+            "incomplete_combined_evidence"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn malformed_test_evidence_fails_both_combined_rows() {
+        let directory = TempDir::new().expect("fixture");
+        fs::write(
+            directory.path().join("combined.sh"),
+            "#!/bin/sh\nmkdir -p .ayni/work/python/workspace\nprintf '{' > .ayni/work/python/workspace/pytest-report.json\nprintf '%s\n' '{\"totals\":{\"covered_lines\":8,\"num_statements\":10}}' > .ayni/work/python/workspace/coverage.json\n",
+        )
+        .expect("script");
+        let policy: AyniPolicy = toml::from_str(
+            "[checks]\ntest=true\ncoverage=true\n[languages]\nenabled=[\"python\"]\n[python.tooling]\ncoverage_satisfies_test=true\n[python.tooling.coverage]\ncommand=\"sh\"\nargs=[\"combined.sh\"]",
+        )
+        .expect("policy");
+        let root = directory.path().to_path_buf();
+        let context = RunContext {
+            repo_root: root.clone(),
+            target_root: root.clone(),
+            workdir: root.clone(),
+            policy,
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("uv", root, "test", 100),
+            cancellation: Default::default(),
+            debug: false,
+        };
+        let (test, coverage) = PythonCollector
+            .collect_coverage_backed_test(Language::Python, &context, &mut |_| {})
+            .expect("typed failed rows");
+        assert!(!test.pass);
+        assert!(!coverage.pass);
+        assert_eq!(
+            test.result.command_failure().unwrap().classification,
+            "missing_report"
+        );
+        assert_eq!(
+            coverage.result.command_failure().unwrap().classification,
+            "incomplete_combined_evidence"
+        );
     }
 
     #[test]

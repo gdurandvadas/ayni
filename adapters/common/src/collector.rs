@@ -62,7 +62,10 @@ fn enforce_coverage_backed_evidence(
 ) {
     let coverage_complete = matches!(
         &coverage_row.result,
-        SignalResult::Coverage(result) if result.status == "ok" && result.failure.is_none()
+        SignalResult::Coverage(result)
+            if result.status == "ok"
+                && result.failure.is_none()
+                && result.headline_percent().is_some_and(f64::is_finite)
     );
     if !coverage_complete
         && test_row.pass

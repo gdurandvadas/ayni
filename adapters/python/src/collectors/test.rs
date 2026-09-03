@@ -4,7 +4,7 @@ use super::util::{
     run_command_for_context_structured,
 };
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
-use ayni_adapters_common::failure::test_execution_incomplete;
+use ayni_adapters_common::failure::{setup_failure, test_execution_incomplete};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, SignalKind, SignalResult, SignalRow, TestBudget,
     TestFailure, TestResult, VerificationSelection,
@@ -89,38 +89,57 @@ fn collect_with_command(
     report_path: std::path::PathBuf,
     on_line: Option<&mut dyn FnMut(&str)>,
 ) -> CollectorResult {
-    let runner = format_command(&program, &args);
     let output = if let Some(on_line) = on_line {
         run_command_for_context_streaming_structured(context, &program, &args, on_line)?
     } else {
         run_command_for_context_structured(context, &program, &args)?
     };
-    let success = output.status.success();
+    Ok(build_row_from_output(
+        context,
+        &program,
+        &args,
+        &report_path,
+        &output,
+    ))
+}
 
-    let report = read_report(&report_path).map_err(|error| {
-        if is_no_tests_collected(&output) {
-            return String::new();
-        }
-        if success {
-            error
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            format!("{error}; stderr: {}", stderr.trim())
-        }
-    });
-    let report = match report {
-        Ok(report) => report,
-        Err(error) if error.is_empty() => PytestReport {
-            duration: None,
-            summary: Some(PytestSummary {
-                total: Some(0),
-                passed: Some(0),
-                failed: Some(0),
-                error: Some(0),
-            }),
-            tests: Some(Vec::new()),
-        },
-        Err(error) => return Err(CollectorError::Adapter(error)),
+pub(super) fn build_row_from_output(
+    context: &RunContext,
+    program: &str,
+    args: &[String],
+    report_path: &std::path::Path,
+    output: &std::process::Output,
+) -> SignalRow {
+    let runner = format_command(program, args);
+    let success = output.status.success();
+    let report = read_report(report_path);
+    let (report, mut report_failure) = match report {
+        Ok(report) => (report, None),
+        Err(_) if is_no_tests_collected(output) => (
+            PytestReport {
+                duration: None,
+                summary: Some(PytestSummary {
+                    total: Some(0),
+                    passed: Some(0),
+                    failed: Some(0),
+                    error: Some(0),
+                }),
+                tests: Some(Vec::new()),
+            },
+            None,
+        ),
+        Err(error) => (
+            PytestReport {
+                duration: None,
+                summary: None,
+                tests: None,
+            },
+            Some(setup_failure(
+                context,
+                runner.clone(),
+                format!("pytest command did not produce a parseable JSON report: {error}"),
+            )),
+        ),
     };
 
     let summary = report.summary.unwrap_or(PytestSummary {
@@ -131,10 +150,26 @@ fn collect_with_command(
     });
     let total_tests = summary.total.unwrap_or(0);
     let passed = summary.passed.unwrap_or(0);
-    let failed = summary.failed.unwrap_or(0) + summary.error.unwrap_or(0);
+    let failed_cases = summary.failed.unwrap_or(0);
+    let error_cases = summary.error.unwrap_or(0);
+    let failed = failed_cases.saturating_add(error_cases);
+    if !test_counts_valid(total_tests, passed, failed_cases, error_cases)
+        && report_failure.is_none()
+    {
+        report_failure = Some(setup_failure(
+            context,
+            runner.clone(),
+            format!(
+                "pytest JSON summary counts were inconsistent: total={total_tests}, passed={passed}, failed={failed_cases}, error={error_cases}"
+            ),
+        ));
+    }
     let duration_ms = report.duration.map(|value| (value * 1000.0) as u64);
-    let failure = test_execution_incomplete(success, total_tests, failed)
-        .then(|| command_failure_from_output(context, SignalKind::Test, &program, &args, &output));
+    let report_complete = report_failure.is_none();
+    let failure = report_failure.or_else(|| {
+        test_execution_incomplete(success, total_tests, failed)
+            .then(|| command_failure_from_output(context, SignalKind::Test, program, args, output))
+    });
     let mut offenders = report
         .tests
         .unwrap_or_default()
@@ -142,15 +177,15 @@ fn collect_with_command(
         .filter(|case| matches!(case.outcome.as_deref(), Some("failed" | "error")))
         .map(test_failure)
         .collect::<Vec<_>>();
-    if success && total_tests == 0 {
+    if success && total_tests == 0 && failure.is_none() {
         offenders.push(zero_tests_failure());
     }
 
-    Ok(SignalRow {
+    SignalRow {
         kind: SignalKind::Test,
         language: Language::Python,
         scope: context.scope.clone(),
-        pass: test_row_passes(success, total_tests, failed),
+        pass: report_complete && test_row_passes(success, total_tests, failed),
         result: SignalResult::Test(TestResult {
             total_tests,
             passed,
@@ -161,7 +196,14 @@ fn collect_with_command(
         }),
         budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(offenders),
-    })
+    }
+}
+
+fn test_counts_valid(total: u64, passed: u64, failed: u64, errors: u64) -> bool {
+    passed
+        .checked_add(failed)
+        .and_then(|accounted| accounted.checked_add(errors))
+        .is_some_and(|accounted| accounted <= total)
 }
 
 fn zero_tests_failure() -> TestFailure {
@@ -222,7 +264,15 @@ fn test_failure(case: PytestCase) -> TestFailure {
 
 #[cfg(test)]
 mod tests {
-    use super::{test_row_passes, zero_tests_failure};
+    use super::{test_counts_valid, test_row_passes, zero_tests_failure};
+
+    #[test]
+    fn rejects_inconsistent_or_overflowing_summary_counts() {
+        assert!(test_counts_valid(3, 1, 1, 1));
+        assert!(!test_counts_valid(1, 2, 0, 0));
+        assert!(!test_counts_valid(1, u64::MAX, 1, 0));
+        assert!(!test_counts_valid(1, 0, u64::MAX, 1));
+    }
 
     #[test]
     fn successful_zero_test_run_fails_with_an_actionable_finding() {
@@ -309,6 +359,34 @@ mod report_tests {
         assert_eq!(offenders.len(), 2);
         assert_eq!(offenders[0].file.as_deref(), Some("tests/test_a.py"));
         assert_eq!(offenders[1].message, "\"setup exploded\"");
+    }
+
+    #[test]
+    fn inconsistent_summary_counts_produce_failed_typed_evidence() {
+        let temp = TempDir::new().expect("temporary repository");
+        let report = temp.path().join("pytest-report.json");
+        let command = script(
+            temp.path(),
+            &report,
+            r#"{"summary":{"total":1,"passed":2,"failed":0,"error":0},"tests":[]}"#,
+        );
+
+        let row = collect_with_command(
+            &context(temp.path()),
+            String::from("sh"),
+            vec![command.display().to_string()],
+            report,
+            None,
+        )
+        .expect("typed failed row");
+        assert!(!row.pass);
+        assert!(
+            row.result
+                .command_failure()
+                .expect("count failure")
+                .message
+                .contains("counts were inconsistent")
+        );
     }
 
     #[test]

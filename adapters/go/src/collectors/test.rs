@@ -1,12 +1,15 @@
 use super::util::run_tool_for_context;
 use ayni_adapters_common::collector::CollectorResult;
 use ayni_adapters_common::exec::format_command;
-use ayni_adapters_common::failure::{command_failure_from_output, test_execution_incomplete};
+use ayni_adapters_common::failure::{
+    command_failure_from_output, setup_failure, test_execution_incomplete,
+};
 use ayni_core::{
     Budget, Language, Offenders, RunContext, SignalKind, SignalResult, SignalRow, TestBudget,
     TestFailure, TestResult, VerificationSelection,
 };
 use serde::Deserialize;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Deserialize)]
 struct GoTestEvent {
@@ -58,13 +61,35 @@ fn collect_with_command(
 ) -> CollectorResult {
     let runner = format_command(&program, &args);
     let output = run_tool_for_context(context, &program, &args)?;
+    Ok(build_row_from_output(
+        context, &program, &args, &output, runner,
+    ))
+}
+
+pub(super) fn build_row_from_output(
+    context: &RunContext,
+    program: &str,
+    args: &[String],
+    output: &std::process::Output,
+    runner: String,
+) -> SignalRow {
     let success = output.status.success();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let mut summary = parse_test_events(&stdout);
 
-    let execution_incomplete =
-        test_execution_incomplete(success, summary.total_tests, summary.failed);
+    let evidence_failure = summary.evidence_error().map(|message| {
+        setup_failure(
+            context,
+            runner.clone(),
+            format!("go test JSON evidence was incomplete: {message}"),
+        )
+    });
+    let evidence_complete = evidence_failure.is_none();
+    let failure = evidence_failure.or_else(|| {
+        test_execution_incomplete(success, summary.total_tests, summary.failed)
+            .then(|| command_failure_from_output(context, SignalKind::Test, program, args, output))
+    });
 
     if !success && summary.offenders.is_empty() {
         summary.offenders.push(TestFailure {
@@ -77,24 +102,22 @@ fn collect_with_command(
         summary.offenders.push(zero_tests_failure());
     }
 
-    Ok(SignalRow {
+    SignalRow {
         kind: SignalKind::Test,
         language: Language::Go,
         scope: context.scope.clone(),
-        pass: test_row_passes(success, summary.total_tests, summary.failed),
+        pass: evidence_complete && test_row_passes(success, summary.total_tests, summary.failed),
         result: SignalResult::Test(TestResult {
             total_tests: summary.total_tests,
             passed: summary.passed,
             failed: summary.failed,
             duration_ms: (summary.duration_ms > 0).then_some(summary.duration_ms),
             runner,
-            failure: execution_incomplete.then(|| {
-                command_failure_from_output(context, SignalKind::Test, &program, &args, &output)
-            }),
+            failure,
         }),
         budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(summary.offenders),
-    })
+    }
 }
 
 #[derive(Default)]
@@ -104,14 +127,45 @@ struct TestSummary {
     passed: u64,
     failed: u64,
     duration_ms: u64,
+    malformed_events: u64,
+    packages_with_tests: BTreeSet<String>,
+    terminal_packages: BTreeSet<String>,
+}
+
+impl TestSummary {
+    fn evidence_error(&self) -> Option<String> {
+        if self.malformed_events > 0 {
+            return Some(format!(
+                "{} non-empty output line(s) were not valid Go test JSON events",
+                self.malformed_events
+            ));
+        }
+        let unterminated = self
+            .packages_with_tests
+            .difference(&self.terminal_packages)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unterminated.is_empty() {
+            return Some(format!(
+                "package-level terminal events were missing for {}",
+                unterminated.join(", ")
+            ));
+        }
+        None
+    }
 }
 
 fn parse_test_events(stdout: &str) -> TestSummary {
     let mut summary = TestSummary::default();
-    for line in stdout.lines() {
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
         let Ok(event) = serde_json::from_str::<GoTestEvent>(line) else {
+            summary.malformed_events = summary.malformed_events.saturating_add(1);
             continue;
         };
+        if event.action.is_none() || event.package.is_none() {
+            summary.malformed_events = summary.malformed_events.saturating_add(1);
+            continue;
+        }
         record_test_event(&mut summary, event);
     }
     summary
@@ -121,6 +175,13 @@ fn record_test_event(summary: &mut TestSummary, event: GoTestEvent) {
     let Some(action) = event.action.as_deref() else {
         return;
     };
+    if let Some(package) = &event.package {
+        if event.test.is_some() {
+            summary.packages_with_tests.insert(package.clone());
+        } else if matches!(action, "pass" | "fail" | "skip") {
+            summary.terminal_packages.insert(package.clone());
+        }
+    }
     if event.test.is_some() {
         match action {
             "pass" => {
@@ -203,7 +264,7 @@ fn test_command(context: &RunContext) -> (String, Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{test_command, test_row_passes, zero_tests_failure};
+    use super::{parse_test_events, test_command, test_row_passes, zero_tests_failure};
     use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope};
     use std::path::PathBuf;
 
@@ -268,6 +329,29 @@ args = ["--jsonfile", ".ayni/go-tests.json", "--", "./..."]
             args,
             vec!["--jsonfile", ".ayni/go-tests.json", "--", "./..."]
         );
+    }
+
+    #[test]
+    fn rejects_malformed_or_unterminated_go_test_json_streams() {
+        let malformed = parse_test_events(
+            "{\"Action\":\"pass\",\"Package\":\"example.com/a\",\"Test\":\"TestA\"}\n{",
+        );
+        assert!(malformed.evidence_error().unwrap().contains("not valid"));
+
+        let unterminated = parse_test_events(
+            "{\"Action\":\"pass\",\"Package\":\"example.com/a\",\"Test\":\"TestA\"}\n",
+        );
+        assert!(
+            unterminated
+                .evidence_error()
+                .unwrap()
+                .contains("terminal events were missing")
+        );
+
+        let complete = parse_test_events(
+            "{\"Action\":\"pass\",\"Package\":\"example.com/a\",\"Test\":\"TestA\"}\n{\"Action\":\"pass\",\"Package\":\"example.com/a\"}\n",
+        );
+        assert!(complete.evidence_error().is_none());
     }
 
     #[test]

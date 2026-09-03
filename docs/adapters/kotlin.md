@@ -78,6 +78,14 @@ Enabled checks come from `[checks]`. Configure roots in `[kotlin].roots`
 `[kotlin.deps.forbidden]`. Command overrides are optional in
 `[kotlin.tooling.test]`, `[kotlin.tooling.coverage]`, and
 `[kotlin.tooling.mutation]`; each override requires `command` and may set `args`.
+With both signals enabled, `[kotlin.tooling].coverage_satisfies_test = true`
+opts repository `check` into one test-bearing Gradle invocation that schedules
+the `test` task together with the detected `koverXmlReport` or `jacocoTestReport` task.
+Ayni emits independent test and coverage rows from newly generated JUnit and
+coverage XML. A coverage command with explicit arguments is an attestation that
+it runs the complete suite and emits JUnit plus exactly one coverage report
+family. Missing, malformed, or ambiguous dual-family evidence fails both rows
+closed.
 
 Size requires a budget entry and complexity requires `fn_cyclomatic`; either
 missing value produces a clear collector error. Coverage thresholds and
@@ -86,7 +94,9 @@ threshold, and without `kotlin.deps.forbidden`, no edges are forbidden.
 
 Shared boundary rules are defined under [Threshold semantics](../product/config.md#threshold-semantics).
 Kotlin line and branch coverage are independently enforced: a configured metric
-with missing or unparseable evidence fails the coverage row.
+with missing or unparseable evidence fails the coverage row. Default coverage
+collection schedules `test` before the selected report task because Gradle's
+`jacocoTestReport` task does not itself depend on fresh test execution.
 
 ## Configuration Example
 
@@ -96,6 +106,9 @@ enabled = ["kotlin"]
 
 [kotlin]
 roots = ["."]
+
+[kotlin.tooling]
+coverage_satisfies_test = true
 
 [kotlin.size]
 "**/*.kt" = { warn = 400, fail = 800, exclude = ["build/**", ".gradle/**", ".git/**", ".ayni/**"] }
