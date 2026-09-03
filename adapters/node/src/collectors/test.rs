@@ -161,7 +161,7 @@ fn selected_test_command(context: &RunContext) -> Result<(String, Vec<String>), 
     Ok((program, args))
 }
 
-fn build_row_from_output(
+pub(super) fn build_row_from_output(
     context: &RunContext,
     output: std::process::Output,
     runner: String,

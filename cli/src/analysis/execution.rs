@@ -218,38 +218,146 @@ fn collect_target_with_ui(
     let mut run_context = target.run_context.clone();
     run_context.cancellation = ctx.cancellation_token();
     let mut rows = Vec::new();
-    for kind in enabled_signal_kinds(&run_context.policy) {
+    let kinds = enabled_signal_kinds(&run_context.policy);
+    let combine_test_and_coverage = kinds.contains(&SignalKind::Test)
+        && kinds.contains(&SignalKind::Coverage)
+        && adapter
+            .collector()
+            .supports_coverage_backed_test(&run_context);
+    let mut index = 0;
+    while index < kinds.len() {
+        let kind = kinds[index];
         if ctx.is_aborted() {
             return Err(String::from("operation aborted"));
         }
-        let tool = ctx.tool(&tool_id(target.language, &target.root, kind))?;
-        tool.started();
-        let row_result = adapter
-            .collector()
-            .collect_streaming(kind, &run_context, &mut |line| {
-                tool.line(line);
-            })
-            .map_err(|e| e.to_string());
-        match row_result {
-            Ok(row) => {
-                tool.line(signal_outcome_line(kind, &row));
-                tool.finished(if row.pass {
-                    ui::runner::ToolState::Done
-                } else {
-                    ui::runner::ToolState::Failed
-                });
-                rows.push(row);
-            }
-            Err(error) => {
-                // Adapter, configuration, and parsing failures are not tool
-                // outcomes. Leave their planned row absent so reconciliation
-                // records incomplete collection evidence for this target.
-                tool.line(error.to_string());
-                tool.finished(ui::runner::ToolState::Failed);
-            }
+        if kind == SignalKind::Test
+            && combine_test_and_coverage
+            && kinds.get(index + 1) == Some(&SignalKind::Coverage)
+        {
+            rows.extend(collect_coverage_backed_with_ui(
+                ctx,
+                target,
+                &run_context,
+                adapter.as_ref(),
+            )?);
+            index += 2;
+            continue;
         }
+
+        if let Some(row) =
+            collect_signal_with_ui(ctx, target, &run_context, adapter.as_ref(), kind)?
+        {
+            rows.push(row);
+        }
+        index += 1;
     }
     Ok(rows)
+}
+
+fn collect_coverage_backed_with_ui(
+    ctx: &ui::runner::ExecContext,
+    target: &AnalyzeTarget,
+    run_context: &RunContext,
+    adapter: &dyn ayni_core::LanguageAdapter,
+) -> Result<Vec<SignalRow>, String> {
+    let test_tool = ctx.tool(&tool_id(target.language, &target.root, SignalKind::Test))?;
+    let coverage_tool = ctx.tool(&tool_id(
+        target.language,
+        &target.root,
+        SignalKind::Coverage,
+    ))?;
+    test_tool.started();
+    coverage_tool.started();
+    let result = adapter
+        .collector()
+        .collect_coverage_backed_test(target.language, run_context, &mut |line| {
+            test_tool.line(line);
+            coverage_tool.line(line);
+        })
+        .map_err(|error| error.to_string())
+        .and_then(|(test_row, coverage_row)| {
+            validate_coverage_backed_rows(target.language, run_context, &test_row, &coverage_row)?;
+            Ok((test_row, coverage_row))
+        });
+    match result {
+        Ok((test_row, coverage_row)) => {
+            finish_tool(&test_tool, SignalKind::Test, &test_row);
+            finish_tool(&coverage_tool, SignalKind::Coverage, &coverage_row);
+            Ok(vec![test_row, coverage_row])
+        }
+        Err(error) => {
+            test_tool.line(error.clone());
+            coverage_tool.line(error);
+            test_tool.finished(ui::runner::ToolState::Failed);
+            coverage_tool.finished(ui::runner::ToolState::Failed);
+            Ok(Vec::new())
+        }
+    }
+}
+
+fn collect_signal_with_ui(
+    ctx: &ui::runner::ExecContext,
+    target: &AnalyzeTarget,
+    run_context: &RunContext,
+    adapter: &dyn ayni_core::LanguageAdapter,
+    kind: SignalKind,
+) -> Result<Option<SignalRow>, String> {
+    let tool = ctx.tool(&tool_id(target.language, &target.root, kind))?;
+    tool.started();
+    let result = adapter
+        .collector()
+        .collect_streaming(kind, run_context, &mut |line| tool.line(line))
+        .map_err(|error| error.to_string());
+    match result {
+        Ok(row) => {
+            finish_tool(&tool, kind, &row);
+            Ok(Some(row))
+        }
+        Err(error) => {
+            // Adapter, configuration, and parsing failures are not tool
+            // outcomes. Leave their planned row absent so reconciliation
+            // records incomplete collection evidence for this target.
+            tool.line(error);
+            tool.finished(ui::runner::ToolState::Failed);
+            Ok(None)
+        }
+    }
+}
+
+fn validate_coverage_backed_rows(
+    language: Language,
+    context: &RunContext,
+    test_row: &SignalRow,
+    coverage_row: &SignalRow,
+) -> Result<(), String> {
+    if test_row.kind != SignalKind::Test || coverage_row.kind != SignalKind::Coverage {
+        return Err(String::from(
+            "coverage-backed collection returned rows with the wrong signal kinds",
+        ));
+    }
+    for row in [test_row, coverage_row] {
+        if row.language != language || row.scope != context.scope {
+            return Err(String::from(
+                "coverage-backed collection returned evidence for the wrong target scope",
+            ));
+        }
+        row.validate_payloads().map_err(|error| {
+            format!(
+                "invalid coverage-backed {} evidence: {error}",
+                signal_kind_slug(row.kind)
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn finish_tool(tool: &ui::runner::ToolHandle, kind: SignalKind, row: &SignalRow) {
+    tool.line(signal_outcome_line(kind, row));
+    tool.finished(if row.pass {
+        ui::runner::ToolState::Done
+    } else {
+        ui::runner::ToolState::Failed
+    });
 }
 
 fn signal_outcome_line(kind: SignalKind, row: &SignalRow) -> String {

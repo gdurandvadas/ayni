@@ -16,6 +16,20 @@ use ayni_core::{
 pub struct KotlinCollector;
 
 impl SignalCollector for KotlinCollector {
+    fn required_host_executables(&self, kind: SignalKind, context: &RunContext) -> Vec<String> {
+        if let Some(command) = context.policy.tool_override_for(Language::Kotlin, kind) {
+            return vec![command.command.clone()];
+        }
+        match kind {
+            SignalKind::Test
+            | SignalKind::Coverage
+            | SignalKind::Complexity
+            | SignalKind::Deps
+            | SignalKind::Mutation => vec![context.execution.runner.clone()],
+            SignalKind::Size => Vec::new(),
+        }
+    }
+
     fn collect_verification(
         &self,
         kind: SignalKind,

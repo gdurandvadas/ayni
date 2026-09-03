@@ -48,6 +48,9 @@ pub struct LanguageToolingOverrides {
     pub test: Option<ToolCommandOverride>,
     pub coverage: Option<ToolCommandOverride>,
     pub mutation: Option<ToolCommandOverride>,
+    /// Explicitly attests that the configured coverage command executes the
+    /// complete required test suite and emits test evidence the adapter can parse.
+    pub coverage_satisfies_test: bool,
 }
 
 /// Per-language tooling thresholds. Maps from TOML tables like `[rust]`.
@@ -288,6 +291,7 @@ impl AyniPolicy {
             let tooling = self.language_tooling(language);
             self.disabled_check_configuration_warnings(language, tooling, &mut warnings);
             self.empty_enabled_rule_warnings(language, tooling, &mut warnings);
+            self.coverage_reuse_warnings(language, tooling, &mut warnings);
             self.missing_complexity_threshold_warnings(language, tooling, &facts, &mut warnings);
         }
         warnings.sort_by(|left, right| {
@@ -384,6 +388,28 @@ impl AyniPolicy {
         }
     }
 
+    fn coverage_reuse_warnings(
+        &self,
+        language: Language,
+        tooling: &LanguageTooling,
+        warnings: &mut Vec<PolicyEffectivenessWarning>,
+    ) {
+        if tooling.tooling.coverage_satisfies_test
+            && (!self.signal_enabled(SignalKind::Test)
+                || !self.signal_enabled(SignalKind::Coverage))
+        {
+            warnings.push(warning(
+                "policy.effectiveness.coverage_reuse.inactive",
+                language,
+                SignalKind::Coverage,
+                format!("{}.tooling.coverage_satisfies_test", language.as_str()),
+                String::from(
+                    "coverage_satisfies_test requires both checks.test and checks.coverage to be enabled",
+                ),
+            ));
+        }
+    }
+
     fn missing_complexity_threshold_warnings(
         &self,
         language: Language,
@@ -444,7 +470,9 @@ fn configured_signals(tooling: &LanguageTooling) -> [(SignalKind, bool); 6] {
         (SignalKind::Test, tooling.tooling.test.is_some()),
         (
             SignalKind::Coverage,
-            tooling.coverage.is_some() || tooling.tooling.coverage.is_some(),
+            tooling.coverage.is_some()
+                || tooling.tooling.coverage.is_some()
+                || tooling.tooling.coverage_satisfies_test,
         ),
         (SignalKind::Size, !tooling.size.is_empty()),
         (SignalKind::Complexity, tooling.complexity.is_some()),
@@ -585,14 +613,8 @@ fn normalize_debian_packages(packages: &mut Vec<String>) -> Result<(), String> {
 
 fn validate_language_thresholds(language: &str, tooling: &LanguageTooling) -> Result<(), String> {
     validate_tool_command_overrides(language, &tooling.tooling)?;
-    for (pattern, rule) in &tooling.size {
-        if rule.warn > rule.fail {
-            return Err(format!(
-                "{language}.size rule '{pattern}': warn ({}) must not exceed fail ({})",
-                rule.warn, rule.fail
-            ));
-        }
-    }
+    validate_coverage_reuse_support(language, &tooling.tooling)?;
+    validate_size_thresholds(language, &tooling.size)?;
     if let Some(complexity) = &tooling.complexity {
         for (name, threshold) in [
             ("fn_cyclomatic", complexity.fn_cyclomatic),
@@ -627,6 +649,33 @@ fn validate_language_thresholds(language: &str, tooling: &LanguageTooling) -> Re
                 }
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_size_thresholds(
+    language: &str,
+    size: &BTreeMap<String, SizeThreshold>,
+) -> Result<(), String> {
+    for (pattern, rule) in size {
+        if rule.warn > rule.fail {
+            return Err(format!(
+                "{language}.size rule '{pattern}': warn ({}) must not exceed fail ({})",
+                rule.warn, rule.fail
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_coverage_reuse_support(
+    language: &str,
+    tooling: &LanguageToolingOverrides,
+) -> Result<(), String> {
+    if tooling.coverage_satisfies_test && !matches!(language, "rust" | "node") {
+        return Err(format!(
+            "{language}.tooling.coverage_satisfies_test is unsupported; only rust and node can parse combined test and coverage evidence"
+        ));
     }
     Ok(())
 }

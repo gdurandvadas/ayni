@@ -134,6 +134,37 @@ impl ProjectDiscovery {
 pub trait SignalCollector: Send + Sync {
     fn collect(&self, kind: SignalKind, context: &RunContext) -> Result<SignalRow, AdapterError>;
 
+    /// Return executable entry points required by a host-mode collection for
+    /// this signal and target, whether launched directly or through a runner's
+    /// executable dispatch. Commands may be bare, absolute, or relative to
+    /// `context.execution.exec_cwd`; callers do not interpret arguments or
+    /// package metadata.
+    fn required_host_executables(&self, _kind: SignalKind, _context: &RunContext) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Whether this target can truthfully use one coverage-backed execution to
+    /// emit both test and coverage rows. Implementations must require either an
+    /// adapter-guaranteed command shape or an explicit repository attestation.
+    fn supports_coverage_backed_test(&self, _context: &RunContext) -> bool {
+        false
+    }
+
+    /// Execute one coverage-backed test run and return independent typed test
+    /// and coverage evidence. The first row must be `test` and the second
+    /// `coverage`; callers validate this boundary before accepting either row.
+    fn collect_coverage_backed_test(
+        &self,
+        language: Language,
+        _context: &RunContext,
+        _on_line: &mut dyn FnMut(&str),
+    ) -> Result<(SignalRow, SignalRow), AdapterError> {
+        Err(AdapterError::new(
+            language,
+            "coverage-backed test collection is unsupported",
+        ))
+    }
+
     /// Collect while streaming live tool output lines through `on_line`.
     /// The default implementation ignores streaming and delegates to
     /// [`Self::collect`]; adapters whose tools produce useful progress output

@@ -16,6 +16,23 @@ pub mod util;
 pub struct PythonCollector;
 
 impl SignalCollector for PythonCollector {
+    fn required_host_executables(&self, kind: SignalKind, context: &RunContext) -> Vec<String> {
+        if let Some(command) = context.policy.tool_override_for(Language::Python, kind) {
+            return vec![command.command.clone()];
+        }
+        let manager = util::package_manager_for_context(context);
+        match kind {
+            SignalKind::Complexity if manager.executable() == "python" => {
+                vec![String::from("complexipy")]
+            }
+            SignalKind::Test
+            | SignalKind::Coverage
+            | SignalKind::Complexity
+            | SignalKind::Mutation => vec![manager.executable().to_string()],
+            SignalKind::Size | SignalKind::Deps => Vec::new(),
+        }
+    }
+
     fn collect_verification(
         &self,
         kind: SignalKind,
@@ -54,6 +71,35 @@ mod tests {
         AyniPolicy, ExecutionResolution, Language, RunContext, Scope, SignalCollector, SignalKind,
     };
     use std::time::Duration;
+
+    #[test]
+    fn host_preflight_matches_direct_and_managed_python_complexity_launchers() {
+        let cwd = std::env::current_dir().expect("working directory");
+        let mut context = RunContext {
+            repo_root: cwd.clone(),
+            target_root: cwd.clone(),
+            workdir: cwd.clone(),
+            policy: AyniPolicy::default(),
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("python3", cwd.clone(), "test", 100),
+            cancellation: Default::default(),
+            debug: false,
+        };
+
+        assert_eq!(
+            PythonCollector.required_host_executables(SignalKind::Complexity, &context),
+            ["complexipy"]
+        );
+        assert_eq!(
+            PythonCollector.required_host_executables(SignalKind::Test, &context),
+            ["python"]
+        );
+        context.execution.runner = String::from("uv");
+        assert_eq!(
+            PythonCollector.required_host_executables(SignalKind::Complexity, &context),
+            ["uv"]
+        );
+    }
 
     #[test]
     fn controlled_timeout_child() {

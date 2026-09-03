@@ -74,7 +74,11 @@ Enabled checks come from `[checks]`. Configure roots in `[node].roots`
 `[node.complexity]`, coverage in `[node.coverage]`, and forbidden edges in
 `[node.deps.forbidden]`. Command overrides are optional in
 `[node.tooling.test]` and `[node.tooling.coverage]`; each override requires
-`command` and may set `args`. Node mutation is unavailable, including through
+`command` and may set `args`. With both signals enabled,
+`[node.tooling].coverage_satisfies_test = true` opts repository `check` into one
+coverage-backed execution that must emit both a Vitest JSON test report and a
+new coverage summary. Missing either evidence type fails both rows closed. Node
+mutation is unavailable, including through
 `[node.tooling.mutation]`: Ayni rejects the signal instead of treating command
 success as mutation evidence.
 
@@ -109,6 +113,9 @@ enabled = ["node"]
 
 [node]
 roots = ["apps/web", "packages/ui"]
+
+[node.tooling]
+coverage_satisfies_test = true
 
 [node.tooling.test]
 command = "pnpm"

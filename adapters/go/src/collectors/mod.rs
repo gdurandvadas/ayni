@@ -15,6 +15,28 @@ use ayni_core::{
 pub struct GoCollector;
 
 impl SignalCollector for GoCollector {
+    fn required_host_executables(&self, kind: SignalKind, context: &RunContext) -> Vec<String> {
+        let override_command = context
+            .policy
+            .tool_override_for(Language::Go, kind)
+            .map(|command| command.command.clone());
+        match kind {
+            SignalKind::Test => {
+                override_command.map_or_else(|| vec![String::from("go")], |command| vec![command])
+            }
+            SignalKind::Coverage => {
+                let mut commands = vec![override_command.unwrap_or_else(|| String::from("go"))];
+                if !commands.iter().any(|command| command == "go") {
+                    commands.push(String::from("go"));
+                }
+                commands
+            }
+            SignalKind::Complexity => vec![String::from("gocyclo")],
+            SignalKind::Deps => vec![String::from("go")],
+            SignalKind::Size | SignalKind::Mutation => Vec::new(),
+        }
+    }
+
     fn collect_verification(
         &self,
         kind: SignalKind,
@@ -55,6 +77,39 @@ mod tests {
         AyniPolicy, ExecutionResolution, Language, RunContext, Scope, SignalCollector, SignalKind,
     };
     use std::time::Duration;
+
+    #[test]
+    fn host_preflight_keeps_go_cover_tool_after_a_coverage_override() {
+        let policy: AyniPolicy = toml::from_str(
+            r#"
+[checks]
+coverage = true
+
+[languages]
+enabled = ["go"]
+
+[go.tooling.coverage]
+command = "custom-go-coverage"
+"#,
+        )
+        .expect("policy");
+        let cwd = std::env::current_dir().expect("working directory");
+        let context = RunContext {
+            repo_root: cwd.clone(),
+            target_root: cwd.clone(),
+            workdir: cwd.clone(),
+            policy,
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("go", cwd, "test", 100),
+            cancellation: Default::default(),
+            debug: false,
+        };
+
+        assert_eq!(
+            GoCollector.required_host_executables(SignalKind::Coverage, &context),
+            ["custom-go-coverage", "go"]
+        );
+    }
 
     #[test]
     fn controlled_timeout_child() {

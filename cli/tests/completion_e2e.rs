@@ -73,6 +73,167 @@ fn toml_string(path: &Path) -> String {
 }
 
 #[cfg(unix)]
+#[test]
+fn host_check_fails_before_launching_collectors_when_a_declared_tool_is_missing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new(&["."], true);
+    fixture.add_rust_root(".");
+    let marker = fixture.root.join("collector-launched");
+    let command = fixture.root.join("fixture-command");
+    fs::write(
+        &command,
+        format!(
+            "#!/bin/sh\ntouch '{}'\nprintf '%s\\n' 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'\n",
+            marker.display()
+        ),
+    )
+    .expect("marker command");
+    let mut permissions = fs::metadata(&command)
+        .expect("command metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&command, permissions).expect("command executable");
+    let mut policy = fs::read_to_string(&fixture.config).expect("policy");
+    policy.push_str(
+        "\n[environment.tools]\nayni-host-prerequisite-that-does-not-exist = \"1.0.0\"\n",
+    );
+    fs::write(&fixture.config, policy).expect("policy with prerequisite");
+
+    let output = fixture.run(&["check", "--host"]);
+
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("host execution is missing required executable"));
+    assert!(stderr.contains("--host"));
+    assert!(stderr.contains("without `--host`"));
+    assert!(!marker.exists(), "collector command must not launch");
+    let artifact = fixture.artifact(".ayni/last/signals.json");
+    assert_eq!(artifact["completion"]["state"], "incomplete");
+    assert_eq!(artifact["completion"]["completed_targets"], 0);
+    assert_eq!(artifact["completion"]["issues"][0]["stage"], "resolution");
+    assert!(
+        artifact["completion"]["issues"][0]["message"]
+            .as_str()
+            .expect("issue message")
+            .contains("missing required executable")
+    );
+    assert!(artifact["rows"].as_array().expect("rows").is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn host_check_preflights_adapter_selected_executables_before_collectors() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new(&["."], true);
+    fixture.add_rust_root(".");
+    let marker = fixture.root.join("collector-launched");
+    let command = fixture.root.join("fixture-command");
+    fs::write(
+        &command,
+        format!(
+            "#!/bin/sh\ntouch '{}'\nprintf '%s\\n' 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'\n",
+            marker.display()
+        ),
+    )
+    .expect("marker command");
+    let mut permissions = fs::metadata(&command)
+        .expect("command metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&command, permissions).expect("command executable");
+    let mut policy = fs::read_to_string(&fixture.config).expect("policy");
+    policy = policy.replace("complexity = false", "complexity = true");
+    policy.push_str("\n[rust.complexity]\nfn_cyclomatic = { warn = 10, fail = 15 }\n");
+    fs::write(&fixture.config, policy).expect("policy with complexity");
+    let empty_path = fixture.root.join("empty-path");
+    fs::create_dir(&empty_path).expect("empty PATH directory");
+
+    let output = ayni()
+        .args(["check", "--host", "--config"])
+        .arg(&fixture.config)
+        .env("PATH", &empty_path)
+        .output()
+        .expect("launch ayni");
+
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("rust-code-analysis-cli"));
+    assert!(stderr.contains("rust:. complexity"));
+    assert!(!marker.exists(), "collector command must not launch");
+}
+
+#[cfg(unix)]
+#[test]
+fn host_check_reuses_one_coverage_execution_for_test_and_coverage_rows() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new(&["."], true);
+    fixture.add_rust_root(".");
+    let coverage_command = fixture.root.join("combined-coverage");
+    fs::write(
+        &coverage_command,
+        "#!/bin/sh\nprintf 'coverage\\n' >> launches\nprintf '%s\\n' '{\"data\":[{\"totals\":{\"lines\":{\"percent\":88.0},\"branches\":{\"percent\":77.0}}}]}'\nprintf '%s\\n' 'test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' >&2\n",
+    )
+    .expect("coverage command");
+    let ordinary_test = fixture.root.join("ordinary-test-that-does-not-exist");
+    let mut permissions = fs::metadata(&coverage_command)
+        .expect("metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&coverage_command, permissions).expect("executable");
+    fs::write(
+        &fixture.config,
+        format!(
+            r#"[checks]
+test = true
+coverage = true
+size = false
+complexity = false
+deps = false
+mutation = false
+[languages]
+enabled = ["rust"]
+[rust]
+roots = ["."]
+[rust.tooling]
+coverage_satisfies_test = true
+[rust.tooling.test]
+command = "{}"
+[rust.tooling.coverage]
+command = "{}"
+"#,
+            toml_string(&ordinary_test),
+            toml_string(&coverage_command),
+        ),
+    )
+    .expect("combined policy");
+
+    let output = fixture.run(&["check", "--host", "--output", "json"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("launches")).expect("launch count"),
+        "coverage\n"
+    );
+    assert!(
+        !ordinary_test.exists(),
+        "unused test override must not be required or launched"
+    );
+    let artifact: Value = serde_json::from_slice(&output.stdout).expect("artifact JSON");
+    let rows = artifact["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["kind"], "test");
+    assert_eq!(rows[0]["result"]["total_tests"], 5);
+    assert_eq!(rows[1]["kind"], "coverage");
+    assert_eq!(rows[1]["result"]["line_percent"], 88.0);
+}
+
+#[cfg(unix)]
 fn write_fixture_command(root: &Path, succeeds: bool) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 

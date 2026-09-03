@@ -209,6 +209,8 @@ mod tests {
         let member = resolve(dir.path(), &dir.path().join("packages/member")).expect("member");
         assert_eq!(member.runner, "pnpm");
         assert_eq!(member.kind, "workspace_ancestor");
+        assert_eq!(member.resolved_from, dir.path());
+        assert_eq!(member.exec_cwd, dir.path().join("packages/member"));
 
         for root in ["packages/excluded/app", "tools/standalone"] {
             let standalone = resolve(dir.path(), &dir.path().join(root)).expect("standalone");

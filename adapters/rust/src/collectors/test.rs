@@ -80,7 +80,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     collect_with_lines(context, |_| {})
 }
 
-fn build_test_row(
+pub(super) fn build_test_row(
     context: &RunContext,
     success: bool,
     exit_code: Option<i32>,

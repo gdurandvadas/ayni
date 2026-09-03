@@ -157,7 +157,7 @@ fn gradle_runner(root: &Path) -> String {
     if root.join("gradlew").is_file() {
         String::from("./gradlew")
     } else if root.join("gradlew.bat").is_file() {
-        String::from("gradlew.bat")
+        String::from("./gradlew.bat")
     } else {
         String::from("gradle")
     }
@@ -165,13 +165,21 @@ fn gradle_runner(root: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::KotlinAdapter;
+    use super::{KotlinAdapter, gradle_runner};
     use ayni_core::{
         LanguageAdapter, OffenderIdentity, Scope, SignalKind, TestFailure,
         VerificationSelectorSupport,
     };
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn windows_wrapper_is_explicitly_relative_to_the_execution_root() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(dir.path().join("gradlew.bat"), "@echo off\r\n").expect("wrapper");
+
+        assert_eq!(gradle_runner(dir.path()), "./gradlew.bat");
+    }
 
     #[test]
     fn resolves_gradle_wrapper_first() {

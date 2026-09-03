@@ -121,6 +121,21 @@ args = ["exec", "stryker", "run"]
 }
 
 #[test]
+fn coverage_backed_test_attestation_parses_and_defaults_off() {
+    let policy: AyniPolicy = toml::from_str(
+        r#"
+[languages]
+enabled = ["rust", "node"]
+[rust.tooling]
+coverage_satisfies_test = true
+"#,
+    )
+    .expect("policy");
+    assert!(policy.rust.tooling.coverage_satisfies_test);
+    assert!(!policy.node.tooling.coverage_satisfies_test);
+}
+
+#[test]
 fn repository_environment_tools_packages_and_docker_capabilities_parse() {
     let document = r#"
 [languages]

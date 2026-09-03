@@ -54,6 +54,13 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome
             }
         };
     profile_phase(debug, "artifact_metadata", phase_started.elapsed());
+    validate_host_prerequisites_or_persist(
+        &workspace_root,
+        &policy,
+        &planning,
+        &metadata,
+        &registry,
+    )?;
     let artifact_slot = Arc::new(Mutex::new(None));
     let phase_started = Instant::now();
     let aborted = execute_analyze_plan_or_persist_failure(
@@ -82,6 +89,51 @@ fn analyze_impl(config_path: &str, options: AnalyzeOptions) -> Result<RunOutcome
     )?;
     profile_phase(debug, "total", total_started.elapsed());
     Ok(outcome)
+}
+
+fn validate_host_prerequisites_or_persist(
+    workspace_root: &Path,
+    policy: &AyniPolicy,
+    planning: &AnalyzePlanning,
+    metadata: &RunArtifactMetadata,
+    registry: &AdapterRegistry,
+) -> Result<(), AnalyzeError> {
+    let mut host_checks = Vec::new();
+    for target in &planning.targets {
+        let adapter = registry
+            .adapters()
+            .iter()
+            .find(|adapter| adapter.language() == target.language)
+            .expect("planned target adapter");
+        let signals = enabled_signal_kinds(policy);
+        let combines_test_and_coverage = signals.contains(&SignalKind::Test)
+            && signals.contains(&SignalKind::Coverage)
+            && adapter
+                .collector()
+                .supports_coverage_backed_test(&target.run_context);
+        host_checks.extend(
+            signals
+                .into_iter()
+                .filter(|signal| *signal != SignalKind::Test || !combines_test_and_coverage)
+                .map(|signal| crate::host_prerequisites::SelectedCheck {
+                    language: target.language,
+                    signal,
+                    context: &target.run_context,
+                    collector: adapter.collector(),
+                }),
+        );
+    }
+    if let Err(error) = crate::host_prerequisites::validate(policy, host_checks) {
+        persist_incomplete_execution_artifact(
+            workspace_root,
+            metadata.clone(),
+            planning,
+            CompletionStage::Resolution,
+            &error,
+        )?;
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

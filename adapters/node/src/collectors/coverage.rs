@@ -1,6 +1,9 @@
-use super::util::{command_failure_from_output, run_tool, tool_command};
-use ayni_adapters_common::collector::CollectorResult;
-use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
+use super::util::{command_failure_from_output, tool_command};
+use ayni_adapters_common::collector::{CollectorError, CollectorResult, CoverageBackedTestResult};
+use ayni_adapters_common::exec::{
+    format_command, run_command_for_context_streaming_structured,
+    run_command_for_context_structured,
+};
 use ayni_adapters_common::failure::coverage_metric_failure;
 use ayni_adapters_common::paths::to_repo_relative_path;
 use ayni_core::{
@@ -12,64 +15,95 @@ use serde_json::Value as JsonValue;
 use std::fs;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
-    let (output, engine) = if let Some((program, args, engine)) = coverage_override_command(context)
-    {
-        (
-            run_command_for_context_structured(context, &program, &args)?,
-            engine,
-        )
-    } else {
-        let (program, args) = tool_command(
-            context,
-            "vitest",
-            &[
-                "run",
-                "--coverage",
-                "--coverage.reporter=json-summary",
-                "--passWithNoTests",
-            ],
-        );
-        let engine = format_command(&program, &args);
-        (
-            run_tool(
-                context,
-                "vitest",
-                &[
-                    "run",
-                    "--coverage",
-                    "--coverage.reporter=json-summary",
-                    "--passWithNoTests",
-                ],
-            )?,
-            engine,
-        )
-    };
-    let coverage_path = context
+    let (program, args, engine) = coverage_command(context, false);
+    let coverage_path = prepare_coverage_report(context)?;
+    let output = run_command_for_context_structured(context, &program, &args)?;
+    Ok(build_coverage_row(
+        context,
+        &program,
+        &args,
+        engine,
+        &output,
+        read_coverage_summary(&coverage_path),
+    ))
+}
+
+pub fn collect_with_test_lines<F>(context: &RunContext, on_line: F) -> CoverageBackedTestResult
+where
+    F: FnMut(&str),
+{
+    let (program, args, engine) = coverage_command(context, true);
+    let coverage_path = prepare_coverage_report(context)?;
+    let output = run_command_for_context_streaming_structured(context, &program, &args, on_line)?;
+    let coverage = build_coverage_row(
+        context,
+        &program,
+        &args,
+        engine,
+        &output,
+        read_coverage_summary(&coverage_path),
+    );
+    let test =
+        super::test::build_row_from_output(context, output, format_command(&program, &args))?;
+    Ok((test, coverage))
+}
+
+fn prepare_coverage_report(context: &RunContext) -> Result<std::path::PathBuf, CollectorError> {
+    let path = context
         .workdir
         .join("coverage")
         .join("coverage-summary.json");
-    let summary = fs::read_to_string(&coverage_path)
-        .ok()
-        .map(|content| serde_json::from_str::<JsonValue>(&content));
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(CollectorError::Adapter(format!(
+                "failed to remove stale coverage report {}: {error}",
+                path.display()
+            )));
+        }
+    }
+    Ok(path)
+}
 
+fn read_coverage_summary(path: &std::path::Path) -> Option<Result<JsonValue, serde_json::Error>> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|content| serde_json::from_str::<JsonValue>(&content))
+}
+
+fn build_coverage_row(
+    context: &RunContext,
+    program: &str,
+    args: &[String],
+    engine: String,
+    output: &std::process::Output,
+    summary: Option<Result<JsonValue, serde_json::Error>>,
+) -> SignalRow {
     let status = if output.status.success() && matches!(summary, Some(Ok(_))) {
         String::from("ok")
     } else {
         String::from("error")
     };
-    let failure = (!output.status.success()).then(|| {
-        command_failure_from_output(
-            context,
-            SignalKind::Coverage,
-            engine.split_whitespace().next().unwrap_or("node"),
-            &engine
-                .split_whitespace()
-                .skip(1)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            &output,
-        )
-    });
+    let command_failure = (!output.status.success())
+        .then(|| command_failure_from_output(context, SignalKind::Coverage, program, args, output));
+    let report_failure = if output.status.success() {
+        match &summary {
+            None => Some(ayni_adapters_common::failure::setup_failure(
+                context,
+                engine.clone(),
+                "coverage command completed but coverage/coverage-summary.json was missing",
+            )),
+            Some(Err(error)) => Some(ayni_adapters_common::failure::setup_failure(
+                context,
+                engine.clone(),
+                format!("coverage summary was not valid JSON: {error}"),
+            )),
+            Some(Ok(_)) => None,
+        }
+    } else {
+        None
+    };
     let (raw_line_percent, raw_branch_percent) = summary
         .as_ref()
         .map(|report| {
@@ -108,9 +142,13 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     .or_else(|| {
         coverage_metric_failure(context, engine.clone(), "branch_percent", assessment.branch)
     });
-    let pass = status == "ok" && metric_failure.is_none() && !assessment.has_fail;
+    let pass = status == "ok"
+        && command_failure.is_none()
+        && report_failure.is_none()
+        && metric_failure.is_none()
+        && !assessment.has_fail;
 
-    Ok(SignalRow {
+    SignalRow {
         kind: SignalKind::Coverage,
         language: ayni_core::Language::Node,
         scope: context.scope.clone(),
@@ -121,24 +159,53 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             branch_percent,
             engine,
             status,
-            failure: failure.or(metric_failure),
+            failure: command_failure.or(report_failure).or(metric_failure),
         }),
         budget: Budget::Coverage(coverage_budget),
         offenders: Offenders::Coverage(assessment.offenders),
-    })
+    }
 }
 
-fn coverage_override_command(context: &RunContext) -> Option<(String, Vec<String>, String)> {
+fn coverage_command(
+    context: &RunContext,
+    include_test_reporter: bool,
+) -> (String, Vec<String>, String) {
+    if let Some((program, args, engine)) = coverage_override_command(context, include_test_reporter)
+    {
+        return (program, args, engine);
+    }
+    let mut tool_args = vec![
+        "run",
+        "--coverage",
+        "--coverage.reporter=json-summary",
+        "--passWithNoTests",
+    ];
+    if include_test_reporter {
+        tool_args.push("--reporter=json");
+    }
+    let (program, args) = tool_command(context, "vitest", &tool_args);
+    let engine = format_command(&program, &args);
+    (program, args, engine)
+}
+
+fn coverage_override_command(
+    context: &RunContext,
+    include_test_reporter: bool,
+) -> Option<(String, Vec<String>, String)> {
     let override_cmd = context
         .policy
         .tool_override_for(ayni_core::Language::Node, SignalKind::Coverage)?;
     let args = if override_cmd.args.is_empty() {
-        vec![
+        let mut args = vec![
             String::from("run"),
             String::from("--coverage"),
             String::from("--coverage.reporter=json-summary"),
             String::from("--passWithNoTests"),
-        ]
+        ];
+        if include_test_reporter {
+            args.push(String::from("--reporter=json"));
+        }
+        args
     } else {
         override_cmd.args.clone()
     };
@@ -244,7 +311,7 @@ mutation = false
 enabled = ["node"]
 "#,
         );
-        assert!(coverage_override_command(&context).is_none());
+        assert!(coverage_override_command(&context, false).is_none());
     }
 
     #[test]
@@ -268,10 +335,37 @@ args = ["exec", "vitest", "run", "--coverage"]
 "#,
         );
         let (program, args, engine) =
-            coverage_override_command(&context).expect("expected node coverage override");
+            coverage_override_command(&context, false).expect("expected node coverage override");
         assert_eq!(program, "pnpm");
         assert_eq!(args, vec!["exec", "vitest", "run", "--coverage"]);
         assert_eq!(engine, "pnpm exec vitest run --coverage");
+    }
+
+    #[test]
+    fn empty_coverage_override_args_add_test_reporter_for_combined_evidence() {
+        let context = context_with_policy(
+            r#"
+[checks]
+test = true
+coverage = true
+size = false
+complexity = false
+deps = false
+mutation = false
+
+[languages]
+enabled = ["node"]
+
+[node.tooling]
+coverage_satisfies_test = true
+
+[node.tooling.coverage]
+command = "vitest"
+"#,
+        );
+        let (_, args, _) =
+            coverage_override_command(&context, true).expect("expected node coverage override");
+        assert!(args.iter().any(|arg| arg == "--reporter=json"));
     }
 
     #[test]

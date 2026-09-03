@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 
-const CONTRACT_PROJECTION_VERSION: &str = "0.3.0";
+const CONTRACT_PROJECTION_VERSION: &str = "0.4.0";
 const SIGNALS: [SignalKind; 6] = [
     SignalKind::Test,
     SignalKind::Coverage,
@@ -65,6 +65,7 @@ enum SignalDetail {
     Coverage {
         line_percent: Option<ThresholdProjection>,
         branch_percent: Option<ThresholdProjection>,
+        coverage_satisfies_test: bool,
         tool_override: Option<ToolOverrideProjection>,
     },
     Size {
@@ -182,6 +183,7 @@ fn project_signal(policy: &AyniPolicy, language: Language, kind: SignalKind) -> 
                 .as_ref()
                 .and_then(|value| value.branch_percent)
                 .map(project_threshold),
+            coverage_satisfies_test: tooling.tooling.coverage_satisfies_test,
             tool_override: project_tool_override(policy.tool_override_for(language, kind)),
         },
         SignalKind::Size => SignalDetail::Size {
@@ -337,11 +339,22 @@ fn render_signal_detail(output: &mut String, detail: &SignalDetail) {
         SignalDetail::Coverage {
             line_percent,
             branch_percent,
+            coverage_satisfies_test,
             tool_override,
         } => {
             writeln!(output, "      thresholds:").expect("writing to String cannot fail");
             render_threshold(output, "line_percent (minimum)", line_percent.as_ref());
             render_threshold(output, "branch_percent (minimum)", branch_percent.as_ref());
+            writeln!(
+                output,
+                "      coverage satisfies test: {}",
+                if *coverage_satisfies_test {
+                    "yes"
+                } else {
+                    "no"
+                }
+            )
+            .expect("writing to String cannot fail");
             render_tool_override(output, tool_override.as_ref());
         }
         SignalDetail::Size { rules } => {

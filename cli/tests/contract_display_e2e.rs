@@ -127,6 +127,7 @@ args = ["mutation"]
         "rules: not configured",
         "restrictions: not configured",
         "tool override: not configured",
+        "coverage satisfies test: no",
     ] {
         assert!(stdout.contains(expected), "missing {expected:?}:\n{stdout}");
     }
@@ -134,7 +135,7 @@ args = ["mutation"]
         !stdout.trim_start().starts_with('{'),
         "display must not emit JSON"
     );
-    assert!(stdout.contains("projection version 0.3.0"));
+    assert!(stdout.contains("projection version 0.4.0"));
     assert!(stdout.contains("warnings:"));
     assert!(stdout.contains("policy.effectiveness.size.no_rules"));
 }
@@ -177,7 +178,7 @@ fn_cognitive = { warn = 10, fail = 20 }
     );
 
     let value: serde_json::Value = serde_json::from_slice(&first.stdout).expect("JSON projection");
-    assert_eq!(value["projection_version"], "0.3.0");
+    assert_eq!(value["projection_version"], "0.4.0");
     assert_eq!(value["environment"]["tools"], serde_json::json!([]));
     assert_eq!(
         value["environment"]["debian_packages"],
@@ -192,6 +193,10 @@ fn_cognitive = { warn = 10, fail = 20 }
     assert_eq!(
         value["languages"][0]["signals"][1]["detail"]["type"],
         "coverage"
+    );
+    assert_eq!(
+        value["languages"][0]["signals"][1]["detail"]["coverage_satisfies_test"],
+        false
     );
     assert!(
         value["warnings"]

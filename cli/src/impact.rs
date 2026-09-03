@@ -814,6 +814,20 @@ fn execute_checks(
         .iter()
         .map(|target| ((target.language, target.root.clone()), target))
         .collect::<BTreeMap<_, _>>();
+    let host_checks = plan.selected_checks.iter().filter_map(|check| {
+        let target = target_by_key.get(&(check.language, check.configured_root.clone()))?;
+        let adapter = registry
+            .adapters()
+            .iter()
+            .find(|adapter| adapter.language() == check.language)?;
+        Some(crate::host_prerequisites::SelectedCheck {
+            language: check.language,
+            signal: check.signal,
+            context: &target.run_context,
+            collector: adapter.collector(),
+        })
+    });
+    crate::host_prerequisites::validate(policy, host_checks).map_err(Error::execution)?;
     let mut collected = CollectedImpact {
         rows: Vec::new(),
         executed_checks: Vec::new(),
