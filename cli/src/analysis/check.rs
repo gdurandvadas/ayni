@@ -123,7 +123,7 @@ fn validate_host_prerequisites_or_persist(
                 }),
         );
     }
-    if let Err(error) = crate::host_prerequisites::validate(policy, host_checks) {
+    if let Err(error) = crate::host_prerequisites::validate(workspace_root, policy, host_checks) {
         persist_incomplete_execution_artifact(
             workspace_root,
             metadata.clone(),

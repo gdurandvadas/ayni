@@ -15,10 +15,46 @@ use ayni_core::{
 #[derive(Debug, Default)]
 pub struct RustCollector;
 
+fn cargo_subcommand(args: &[String]) -> Option<&str> {
+    let mut index = 0;
+    while let Some(arg) = args.get(index).map(String::as_str) {
+        if arg == "--" {
+            return None;
+        }
+        if arg.starts_with('+') || arg.starts_with('-') {
+            let takes_separate_value =
+                matches!(arg, "--color" | "--config" | "--explain" | "-C" | "-Z");
+            index += if takes_separate_value { 2 } else { 1 };
+            continue;
+        }
+        return Some(arg);
+    }
+    None
+}
+
+fn cargo_subcommand_executable(kind: SignalKind, program: &str, args: &[String]) -> Option<String> {
+    let is_cargo = std::path::Path::new(program)
+        .file_stem()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("cargo"));
+    if !is_cargo {
+        return None;
+    }
+    let subcommand = cargo_subcommand(args)
+        .filter(|subcommand| matches!(*subcommand, "llvm-cov" | "nextest"))
+        .or_else(|| (kind == SignalKind::Coverage && args.is_empty()).then_some("llvm-cov"))?;
+    Some(format!("cargo-{subcommand}"))
+}
+
 impl SignalCollector for RustCollector {
     fn required_host_executables(&self, kind: SignalKind, context: &RunContext) -> Vec<String> {
         if let Some(command) = context.policy.tool_override_for(Language::Rust, kind) {
-            return vec![command.command.clone()];
+            let mut executables = vec![command.command.clone()];
+            if let Some(subcommand) =
+                cargo_subcommand_executable(kind, &command.command, &command.args)
+            {
+                executables.push(subcommand);
+            }
+            return executables;
         }
         match kind {
             SignalKind::Test => vec![String::from("cargo")],
@@ -112,7 +148,7 @@ impl SignalCollector for RustCollector {
 
 #[cfg(test)]
 mod tests {
-    use super::RustCollector;
+    use super::{RustCollector, cargo_subcommand_executable};
     use ayni_core::{
         AyniPolicy, ExecutionResolution, Language, RunContext, Scope, SignalCollector, SignalKind,
         SignalResult,
@@ -120,6 +156,92 @@ mod tests {
     use std::fs;
     use std::time::Duration;
     use tempfile::TempDir;
+
+    fn fixture_execution(cwd: std::path::PathBuf) -> ExecutionResolution {
+        let mut execution = ExecutionResolution::direct("test", cwd, "test", 100);
+        execution.environment.insert(
+            ayni_adapters_common::exec::DISCARD_LLVM_PROFILE_ENV.to_string(),
+            String::new(),
+        );
+        execution
+    }
+
+    #[test]
+    fn cargo_subcommand_overrides_declare_their_executables() {
+        let policy: AyniPolicy = toml::from_str(
+            r#"
+[checks]
+test = true
+coverage = true
+[languages]
+enabled = ["rust"]
+[rust.tooling.test]
+command = "cargo"
+args = ["nextest", "run"]
+[rust.tooling.coverage]
+command = "/usr/local/bin/cargo"
+"#,
+        )
+        .expect("policy");
+        let cwd = std::env::current_dir().expect("working directory");
+        let context = RunContext {
+            repo_root: cwd.clone(),
+            target_root: cwd.clone(),
+            workdir: cwd.clone(),
+            policy,
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("cargo", cwd, "test", 100),
+            cancellation: Default::default(),
+            debug: false,
+        };
+
+        assert_eq!(
+            RustCollector.required_host_executables(SignalKind::Test, &context),
+            vec!["cargo", "cargo-nextest"]
+        );
+        assert_eq!(
+            RustCollector.required_host_executables(SignalKind::Coverage, &context),
+            vec!["/usr/local/bin/cargo", "cargo-llvm-cov"]
+        );
+    }
+
+    #[test]
+    fn cargo_preflight_uses_only_the_actual_subcommand() {
+        assert_eq!(
+            cargo_subcommand_executable(
+                SignalKind::Test,
+                "cargo",
+                &[
+                    String::from("--color"),
+                    String::from("always"),
+                    String::from("-C"),
+                    String::from("workspace"),
+                    String::from("nextest")
+                ],
+            ),
+            Some(String::from("cargo-nextest"))
+        );
+        assert_eq!(
+            cargo_subcommand_executable(
+                SignalKind::Test,
+                "cargo",
+                &[String::from("test"), String::from("nextest")],
+            ),
+            None
+        );
+        assert_eq!(
+            cargo_subcommand_executable(
+                SignalKind::Test,
+                "cargo",
+                &[
+                    String::from("test"),
+                    String::from("--"),
+                    String::from("nextest"),
+                ],
+            ),
+            None
+        );
+    }
 
     #[test]
     fn controlled_timeout_child() {
@@ -277,7 +399,7 @@ args = [{args}]
             workdir: cwd.clone(),
             policy,
             scope: Scope::default(),
-            execution: ExecutionResolution::direct("test", cwd.clone(), "test", 100),
+            execution: fixture_execution(cwd.clone()),
             cancellation: Default::default(),
             debug: false,
         };

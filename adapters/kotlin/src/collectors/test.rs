@@ -1,13 +1,13 @@
 use super::util::{find_reports, gradle_command, prepare_gradle_execution, report_root};
+use super::xml::XmlDocument;
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{command_failure_from_output, test_execution_incomplete};
-use ayni_adapters_common::xml::{attr_f64, attr_string, attr_u64};
+use ayni_adapters_common::xml::attr_string;
 use ayni_core::{
     Budget, Language, Offenders, RunContext, SignalKind, SignalResult, SignalRow, TestBudget,
     TestFailure, TestResult, VerificationSelection,
 };
-use regex::Regex;
 use std::fs;
 use std::path::PathBuf;
 
@@ -75,6 +75,9 @@ pub(super) fn build_row_from_output(
 ) -> SignalRow {
     let report = match parse_reports(report_paths) {
         Ok(report) => report,
+        Err(message) if message == "missing JUnit XML evidence" => {
+            return missing_junit_evidence_row(context, runner);
+        }
         Err(message) => return evidence_error_row(context, runner, message),
     };
     let failed = report.failures + report.errors;
@@ -106,6 +109,20 @@ pub(super) fn build_row_from_output(
         budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(offenders),
     }
+}
+
+fn missing_junit_evidence_row(context: &RunContext, runner: String) -> SignalRow {
+    let mut row = evidence_error_row(
+        context,
+        runner,
+        String::from("test command completed but no JUnit XML report was generated"),
+    );
+    if let SignalResult::Test(result) = &mut row.result
+        && let Some(failure) = &mut result.failure
+    {
+        failure.classification = String::from("missing_junit_report");
+    }
+    row
 }
 
 fn evidence_error_row(context: &RunContext, runner: String, message: String) -> SignalRow {
@@ -155,6 +172,9 @@ struct JunitSummary {
 }
 
 fn parse_reports(paths: &[PathBuf]) -> Result<JunitSummary, String> {
+    if paths.is_empty() {
+        return Err(String::from("missing JUnit XML evidence"));
+    }
     let mut summary = JunitSummary::default();
     for path in paths {
         let content = fs::read_to_string(path)
@@ -177,32 +197,6 @@ fn parse_reports(paths: &[PathBuf]) -> Result<JunitSummary, String> {
     Ok(summary)
 }
 
-fn validate_complete_elements(
-    content: &str,
-    element: &str,
-    required: bool,
-) -> Result<usize, String> {
-    let opening_re = Regex::new(&format!(r#"<{element}\b[^>]*>"#))
-        .map_err(|error| format!("failed to compile {element} opening regex: {error}"))?;
-    let closing_re = Regex::new(&format!(r#"</{element}\s*>"#))
-        .map_err(|error| format!("failed to compile {element} closing regex: {error}"))?;
-    let opening_tags = opening_re
-        .find_iter(content)
-        .map(|matched| matched.as_str())
-        .collect::<Vec<_>>();
-    let self_closing = opening_tags
-        .iter()
-        .filter(|tag| tag.trim_end().ends_with("/>"))
-        .count();
-    let closed = closing_re.find_iter(content).count();
-    if (required && opening_tags.is_empty()) || opening_tags.len() != self_closing + closed {
-        return Err(format!(
-            "JUnit evidence did not contain complete {element} XML"
-        ));
-    }
-    Ok(opening_tags.len())
-}
-
 fn checked_count_add(current: u64, value: u64, field: &str) -> Result<u64, String> {
     current
         .checked_add(value)
@@ -210,64 +204,122 @@ fn checked_count_add(current: u64, value: u64, field: &str) -> Result<u64, Strin
 }
 
 fn parse_junit_xml(content: &str) -> Result<JunitSummary, String> {
-    let testsuite_re = Regex::new(r#"<testsuite\b([^>]*)>"#)
-        .map_err(|error| format!("failed to compile testsuite regex: {error}"))?;
-    let testcase_re = Regex::new(r#"(?s)<testcase\b([^>]*)>(.*?)</testcase>"#)
-        .map_err(|error| format!("failed to compile testcase regex: {error}"))?;
-    let failure_re = Regex::new(r#"(?s)<(failure|error)\b([^>]*)>(.*?)</(failure|error)>"#)
-        .map_err(|error| format!("failed to compile failure regex: {error}"))?;
-    let skipped_re = Regex::new(r#"<skipped\b"#)
-        .map_err(|error| format!("failed to compile skipped regex: {error}"))?;
-    validate_complete_elements(content, "testsuite", true)?;
-    let testcase_count = validate_complete_elements(content, "testcase", false)?;
+    let document = XmlDocument::parse(content)?;
+    let suite_indices = elements_named(&document, "testsuite");
+    if suite_indices.is_empty() {
+        return Err(String::from(
+            "JUnit evidence did not contain a testsuite element",
+        ));
+    }
+    let mut summary = summarize_suites(&document, &suite_indices)?;
+    let testcase_indices = elements_named(&document, "testcase");
+    append_testcase_evidence(&mut summary, &document, content, &testcase_indices)?;
+    validate_summary(&mut summary, testcase_indices.len())?;
+    Ok(summary)
+}
+
+fn elements_named(document: &XmlDocument, name: &str) -> Vec<usize> {
+    document
+        .elements
+        .iter()
+        .enumerate()
+        .filter_map(|(index, element)| (element.name == name).then_some(index))
+        .collect()
+}
+
+fn junit_count_attr(attrs: &str, name: &str) -> Result<u64, String> {
+    let Some(value) = attr_string(attrs, name) else {
+        return Ok(0);
+    };
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("JUnit {name} attribute was not a valid non-negative integer"))
+}
+
+fn junit_duration_attr(attrs: &str) -> Result<Option<f64>, String> {
+    let Some(value) = attr_string(attrs, "time") else {
+        return Ok(None);
+    };
+    let seconds = value
+        .parse::<f64>()
+        .map_err(|_| String::from("JUnit duration was not numeric"))?;
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(String::from(
+            "JUnit duration was not a finite non-negative value",
+        ));
+    }
+    Ok(Some(seconds))
+}
+
+fn junit_duration_ms(seconds: f64) -> Result<u64, String> {
+    let milliseconds = seconds * 1000.0;
+    if !milliseconds.is_finite() || milliseconds >= u64::MAX as f64 {
+        return Err(String::from("JUnit duration exceeded the supported range"));
+    }
+    Ok(milliseconds as u64)
+}
+
+fn summarize_suites(document: &XmlDocument, suites: &[usize]) -> Result<JunitSummary, String> {
     let mut summary = JunitSummary::default();
-    for caps in testsuite_re.captures_iter(content) {
-        let attrs = caps.get(1).map(|value| value.as_str()).unwrap_or("");
-        summary.tests = checked_count_add(
-            summary.tests,
-            attr_u64(attrs, "tests").unwrap_or(0),
-            "tests",
-        )?;
+    for &index in suites {
+        let attrs = &document.elements[index].attrs;
+        summary.tests =
+            checked_count_add(summary.tests, junit_count_attr(attrs, "tests")?, "tests")?;
         summary.failures = checked_count_add(
             summary.failures,
-            attr_u64(attrs, "failures").unwrap_or(0),
+            junit_count_attr(attrs, "failures")?,
             "failures",
         )?;
-        summary.errors = checked_count_add(
-            summary.errors,
-            attr_u64(attrs, "errors").unwrap_or(0),
-            "errors",
-        )?;
+        summary.errors =
+            checked_count_add(summary.errors, junit_count_attr(attrs, "errors")?, "errors")?;
         summary.skipped = checked_count_add(
             summary.skipped,
-            attr_u64(attrs, "skipped").unwrap_or(0),
+            junit_count_attr(attrs, "skipped")?,
             "skipped",
         )?;
-        if let Some(seconds) = attr_f64(attrs, "time") {
-            if !seconds.is_finite() || seconds < 0.0 {
-                return Err(String::from(
-                    "JUnit duration was not a finite non-negative value",
-                ));
-            }
+        if let Some(seconds) = junit_duration_attr(attrs)? {
             summary.duration_ms = Some(checked_count_add(
                 summary.duration_ms.unwrap_or(0),
-                (seconds * 1000.0) as u64,
+                junit_duration_ms(seconds)?,
                 "duration",
             )?);
         }
     }
-    let mut testcase_skipped = 0;
-    for caps in testcase_re.captures_iter(content) {
-        let attrs = caps.get(1).map(|value| value.as_str()).unwrap_or("");
-        let body = caps.get(2).map(|value| value.as_str()).unwrap_or("");
-        for failure in failure_re.captures_iter(body) {
-            let failure_attrs = failure.get(2).map(|value| value.as_str()).unwrap_or("");
-            let message = attr_string(failure_attrs, "message").unwrap_or_else(|| {
-                failure
-                    .get(3)
-                    .map(|value| value.as_str().trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| String::from("JUnit test failed"))
+    Ok(summary)
+}
+
+fn append_testcase_evidence(
+    summary: &mut JunitSummary,
+    document: &XmlDocument,
+    content: &str,
+    testcases: &[usize],
+) -> Result<(), String> {
+    let mut skipped = 0_u64;
+    for &testcase in testcases {
+        let attrs = &document.elements[testcase].attrs;
+        let skipped_here = document
+            .elements
+            .iter()
+            .enumerate()
+            .any(|(index, element)| {
+                element.name == "skipped" && document.has_ancestor_index(index, testcase)
+            });
+        if skipped_here {
+            skipped = checked_count_add(skipped, 1, "skipped")?;
+        }
+        for (index, element) in document.elements.iter().enumerate() {
+            if !matches!(element.name.as_str(), "failure" | "error")
+                || !document.has_ancestor_index(index, testcase)
+            {
+                continue;
+            }
+            let message = attr_string(&element.attrs, "message").unwrap_or_else(|| {
+                let text = document.text(content, element);
+                if text.is_empty() {
+                    String::from("JUnit test failed")
+                } else {
+                    text
+                }
             });
             summary.offenders.push(TestFailure {
                 file: attr_string(attrs, "classname"),
@@ -276,11 +328,12 @@ fn parse_junit_xml(content: &str) -> Result<JunitSummary, String> {
                 test_name: attr_string(attrs, "name"),
             });
         }
-        if skipped_re.is_match(body) {
-            testcase_skipped += 1;
-        }
     }
-    summary.skipped = summary.skipped.max(testcase_skipped);
+    summary.skipped = summary.skipped.max(skipped);
+    Ok(())
+}
+
+fn validate_summary(summary: &mut JunitSummary, testcase_count: usize) -> Result<(), String> {
     if summary.tests == 0 {
         summary.tests = testcase_count as u64;
     }
@@ -315,12 +368,13 @@ fn parse_junit_xml(content: &str) -> Result<JunitSummary, String> {
             ));
         }
     }
-    Ok(summary)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_junit_xml, test_row_passes, zero_tests_failure};
+    use super::{parse_junit_xml, parse_reports, test_row_passes, zero_tests_failure};
+    use std::path::PathBuf;
 
     #[test]
     fn parses_junit_failures() {
@@ -366,6 +420,37 @@ mod tests {
                 r#"<testsuite tests="2" failures="0" errors="0" skipped="0"><testcase name="a"/></testsuite>"#,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_nested_junit_elements() {
+        for content in [
+            r#"<testsuite tests="1"><testcase><failure></error></testcase></testsuite>"#,
+            r#"<testsuite tests="1"><testcase><error>broken</testcase></testsuite>"#,
+            r#"<testsuite tests="1"><testcase><failure>broken</failure></testcase>"#,
+        ] {
+            assert!(parse_junit_xml(content).is_err(), "{content}");
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_junit_numeric_attributes() {
+        for content in [
+            r#"<testsuite tests="bad"><testcase/></testsuite>"#,
+            r#"<testsuite tests="1" failures="-1"><testcase/></testsuite>"#,
+            r#"<testsuite tests="1" time="NaN"><testcase/></testsuite>"#,
+            r#"<testsuite tests="1" time="1e308"><testcase/></testsuite>"#,
+        ] {
+            assert!(parse_junit_xml(content).is_err(), "{content}");
+        }
+    }
+
+    #[test]
+    fn missing_junit_reports_are_not_zero_tests() {
+        assert_eq!(
+            parse_reports(&[] as &[PathBuf]).err().as_deref(),
+            Some("missing JUnit XML evidence")
         );
     }
 

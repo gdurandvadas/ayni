@@ -104,6 +104,15 @@ mod tests {
     };
     use std::{fs, path::Path, time::Duration};
 
+    fn fixture_execution(cwd: std::path::PathBuf) -> ExecutionResolution {
+        let mut execution = ExecutionResolution::direct("test", cwd, "test", 100);
+        execution.environment.insert(
+            ayni_adapters_common::exec::DISCARD_LLVM_PROFILE_ENV.to_string(),
+            String::new(),
+        );
+        execution
+    }
+
     #[test]
     fn host_preflight_keeps_go_cover_tool_after_a_coverage_override() {
         let policy: AyniPolicy = toml::from_str(
@@ -233,6 +242,7 @@ for arg in "$@"; do
   case "$arg" in -coverprofile=*) profile=${arg#-coverprofile=} ;; esac
 done
 printf 'mode: set\n%s:3.1,3.24 1 1\n' "$PWD/sample.go" > "$profile"
+printf '%s\n' '{"Action":"start","Package":"example.com/sample"}'
 printf '%s\n' '{"Action":"run","Package":"example.com/sample","Test":"TestValue"}'
 printf '%s\n' '{"Action":"pass","Package":"example.com/sample","Test":"TestValue","Elapsed":0.01}'
 printf '%s\n' '{"Action":"pass","Package":"example.com/sample"}'
@@ -296,7 +306,7 @@ args = ["combined.sh"]
         let directory = tempfile::TempDir::new().expect("fixture");
         fs::write(
             directory.path().join("combined.sh"),
-            "#!/bin/sh\nprintf '%s\\n' '{\"Action\":\"pass\",\"Package\":\"example.com/sample\",\"Test\":\"TestValue\"}'\nprintf '%s\\n' '{\"Action\":\"pass\",\"Package\":\"example.com/sample\"}'\n",
+            "#!/bin/sh\nprintf '%s\\n' '{\"Action\":\"start\",\"Package\":\"example.com/sample\"}'\nprintf '%s\\n' '{\"Action\":\"run\",\"Package\":\"example.com/sample\",\"Test\":\"TestValue\"}'\nprintf '%s\\n' '{\"Action\":\"pass\",\"Package\":\"example.com/sample\",\"Test\":\"TestValue\"}'\nprintf '%s\\n' '{\"Action\":\"pass\",\"Package\":\"example.com/sample\"}'\n",
         )
         .expect("script");
         let policy: AyniPolicy = toml::from_str(
@@ -334,6 +344,8 @@ args = ["combined.sh"]
         fs::write(
             directory.path().join("combined.sh"),
             r#"#!/bin/sh
+printf '%s\n' '{"Action":"start","Package":"example.com/sample"}'
+printf '%s\n' '{"Action":"run","Package":"example.com/sample","Test":"TestValue"}'
 printf '%s\n' '{"Action":"fail","Package":"example.com/sample","Test":"TestValue","Elapsed":0.01}'
 printf '%s\n' '{"Action":"fail","Package":"example.com/sample"}'
 exit 1
@@ -414,7 +426,7 @@ args = [{args}]
             workdir: cwd.clone(),
             policy,
             scope: Scope::default(),
-            execution: ExecutionResolution::direct("test", cwd.clone(), "test", 100),
+            execution: fixture_execution(cwd.clone()),
             cancellation: Default::default(),
             debug: false,
         };

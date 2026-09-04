@@ -2,19 +2,19 @@ use super::util::{
     combined_gradle_command, find_reports, prepare_combined_gradle_execution, report_root,
     resolve_gradle_task,
 };
+use super::xml::XmlDocument;
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{
     command_failure_from_output, coverage_metric_failure, setup_failure,
 };
 use ayni_adapters_common::paths::to_repo_relative_path;
-use ayni_adapters_common::xml::{attr_string, attr_u64};
+use ayni_adapters_common::xml::attr_string;
 use ayni_core::{
     Budget, ConfiguredMetricEvaluation, CoverageBudget, CoverageOffender, CoveragePolicy,
     CoverageResult, Language, Level, Offenders, RunContext, SignalKind, SignalResult, SignalRow,
     evaluate_configured_metric,
 };
-use regex::Regex;
 use std::fs;
 use std::path::Path;
 
@@ -91,10 +91,10 @@ fn build_coverage_row(
     }
     let has_kover = report_paths
         .iter()
-        .any(|path| path.components().any(|part| part.as_os_str() == "kover"));
+        .any(|path| coverage_report_family(path) == Some("kover"));
     let has_jacoco = report_paths
         .iter()
-        .any(|path| path.components().any(|part| part.as_os_str() == "jacoco"));
+        .any(|path| coverage_report_family(path) == Some("jacoco"));
     if has_kover && has_jacoco {
         return error_row(
             context,
@@ -203,23 +203,32 @@ fn resolve_coverage_task(
     )
 }
 
-fn coverage_report_paths(context: &RunContext, task: &str) -> Vec<std::path::PathBuf> {
+fn coverage_report_paths(context: &RunContext, _task: &str) -> Vec<std::path::PathBuf> {
     let root = report_root(context, SignalKind::Coverage);
-    if context
-        .policy
-        .tool_override_for(Language::Kotlin, SignalKind::Coverage)
-        .is_some()
-    {
-        let mut reports = find_reports(&root, &["build", "reports", "kover"], "xml");
-        reports.extend(find_reports(&root, &["build", "reports", "jacoco"], "xml"));
-        reports.sort();
-        reports.dedup();
-        return reports;
-    }
-    match task {
-        "jacocoTestReport" => find_reports(&root, &["build", "reports", "jacoco"], "xml"),
-        _ => find_reports(&root, &["build", "reports", "kover"], "xml"),
-    }
+    let mut reports = find_reports(&root, &["build", "reports", "kover"], "xml");
+    reports.extend(find_reports(&root, &["build", "reports", "jacoco"], "xml"));
+    reports.sort();
+    reports.dedup();
+    reports
+}
+
+fn coverage_report_family(path: &std::path::Path) -> Option<&'static str> {
+    let components = path
+        .components()
+        .map(|component| component.as_os_str())
+        .collect::<Vec<_>>();
+    components.windows(3).rev().find_map(|parts| {
+        if parts[0] != "build" || parts[1] != "reports" {
+            return None;
+        }
+        if parts[2] == "kover" {
+            Some("kover")
+        } else if parts[2] == "jacoco" {
+            Some("jacoco")
+        } else {
+            None
+        }
+    })
 }
 
 fn error_row(
@@ -335,30 +344,49 @@ fn parse_jacoco_xml(path: &Path) -> Result<CoverageReport, String> {
 }
 
 fn parse_jacoco_content(content: &str) -> Result<CoverageReport, String> {
-    if !content.contains("<report")
-        || (!content.contains("</report>") && !content.contains("<report/>"))
-    {
+    let document = XmlDocument::parse(content)?;
+    let (root_index, root) = document
+        .elements
+        .iter()
+        .enumerate()
+        .find(|(_, element)| element.parent.is_none())
+        .ok_or_else(|| String::from("coverage XML has no root element"))?;
+    if root.name != "report" {
         return Err(String::from(
-            "expected a complete JaCoCo or Kover <report> XML document",
+            "expected a JaCoCo or Kover <report> XML document",
         ));
     }
-    let counter_re = Regex::new(r#"<counter\b([^>]*)/>"#)
-        .map_err(|error| format!("failed to compile counter regex: {error}"))?;
     let mut line = MetricCounter::Absent;
     let mut branch = MetricCounter::Absent;
-    for caps in counter_re.captures_iter(content) {
-        let attrs = caps.get(1).map(|value| value.as_str()).unwrap_or("");
-        let counter = match (attr_u64(attrs, "covered"), attr_u64(attrs, "missed")) {
-            (Some(covered), Some(missed)) => MetricCounter::Values { covered, missed },
-            _ => MetricCounter::Invalid,
-        };
-        match attr_string(attrs, "type").as_deref() {
-            Some("LINE") => line = counter,
-            Some("BRANCH") => branch = counter,
-            _ => {}
+    for element in &document.elements {
+        if element.name != "counter" || element.parent != Some(root_index) {
+            continue;
         }
+        let (metric, counter) = match attr_string(&element.attrs, "type").as_deref() {
+            Some("LINE") => ("LINE", &mut line),
+            Some("BRANCH") => ("BRANCH", &mut branch),
+            _ => continue,
+        };
+        if !matches!(&*counter, MetricCounter::Absent) {
+            return Err(format!(
+                "coverage XML contained duplicate {metric} counters"
+            ));
+        }
+        *counter = parse_metric_counter(&element.attrs, metric)?;
     }
     Ok(CoverageReport { line, branch })
+}
+
+fn parse_metric_counter(attrs: &str, metric: &str) -> Result<MetricCounter, String> {
+    let covered = attr_string(attrs, "covered")
+        .ok_or_else(|| format!("coverage {metric} counter was missing covered"))?
+        .parse::<u64>()
+        .map_err(|_| format!("coverage {metric} covered count was invalid"))?;
+    let missed = attr_string(attrs, "missed")
+        .ok_or_else(|| format!("coverage {metric} counter was missing missed"))?
+        .parse::<u64>()
+        .map_err(|_| format!("coverage {metric} missed count was invalid"))?;
+    Ok(MetricCounter::Values { covered, missed })
 }
 
 fn percent(covered: u64, missed: u64) -> Option<f64> {
@@ -417,7 +445,10 @@ fn finite_percent(value: Option<f64>) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CoverageCounters, assess_coverage, parse_jacoco_content, resolve_coverage_task};
+    use super::{
+        CoverageCounters, assess_coverage, coverage_report_family, parse_jacoco_content,
+        resolve_coverage_task,
+    };
     use ayni_core::{
         AyniPolicy, ConfiguredMetricEvaluation, CoveragePolicy, ExecutionResolution, Level,
         RunContext, Scope, ThresholdFloat,
@@ -495,6 +526,40 @@ mod tests {
         let finished = totals.finish();
         assert_eq!(finished.line_percent, Some(80.0));
         assert_eq!(finished.branch_percent, Some(75.0));
+    }
+
+    #[test]
+    fn reads_only_unique_report_level_counters() {
+        let nested = parse_jacoco_content(
+            r#"<report><package><counter type="LINE" missed="100" covered="0"/></package><counter type="LINE" missed="2" covered="8"/></report>"#,
+        )
+        .expect("coverage");
+        let mut totals = CoverageCounters::default();
+        totals.merge(nested);
+        assert_eq!(totals.finish().line_percent, Some(80.0));
+
+        assert!(
+            parse_jacoco_content(
+                r#"<report><counter type="LINE" missed="2" covered="8"/><counter type="LINE" missed="1" covered="9"/></report>"#,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn coverage_family_uses_the_matched_report_segment() {
+        assert_eq!(
+            coverage_report_family(&PathBuf::from(
+                "/tmp/jacoco/project/build/reports/kover/report.xml"
+            )),
+            Some("kover")
+        );
+        assert_eq!(
+            coverage_report_family(&PathBuf::from(
+                "/tmp/kover/project/build/reports/jacoco/report.xml"
+            )),
+            Some("jacoco")
+        );
     }
 
     #[test]
@@ -581,26 +646,25 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unbalanced_and_mismatched_coverage_xml() {
+        for content in [
+            "<report><counter type=\"LINE\" missed=\"2\" covered=\"8\">",
+            "<report><counter type=\"LINE\" missed=\"2\" covered=\"8\"></report>",
+        ] {
+            assert!(parse_jacoco_content(content).is_err(), "{content}");
+        }
+    }
+
+    #[test]
     fn rejects_malformed_and_invalid_counter_arithmetic() {
         let context = context();
         let policy = policy();
-        let malformed = parse_jacoco_content(
-            r#"<report><counter type="LINE" missed="bad" covered="8"/><counter type="BRANCH" missed="1" covered="3"/></report>"#,
-        )
-        .expect("report");
-        let mut totals = CoverageCounters::default();
-        totals.merge(malformed);
-        let finished = totals.finish();
-        let assessment = assess_coverage(
-            finished.raw_line_percent,
-            finished.raw_branch_percent,
-            Some(&policy),
-            &context,
+        assert!(
+            parse_jacoco_content(
+                r#"<report><counter type="LINE" missed="bad" covered="8"/><counter type="BRANCH" missed="1" covered="3"/></report>"#,
+            )
+            .is_err()
         );
-        assert!(matches!(
-            assessment.line,
-            ConfiguredMetricEvaluation::Unparseable
-        ));
 
         let overflow = parse_jacoco_content(
             r#"<report><counter type="LINE" missed="1" covered="18446744073709551615"/><counter type="BRANCH" missed="0" covered="1"/></report>"#,

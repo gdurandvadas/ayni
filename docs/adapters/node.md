@@ -77,7 +77,9 @@ Enabled checks come from `[checks]`. Configure roots in `[node].roots`
 `command` and may set `args`. With both signals enabled,
 `[node.tooling].coverage_satisfies_test = true` opts repository `check` into one
 coverage-backed execution that must emit both a Vitest JSON test report and a
-new coverage summary. Missing either evidence type fails both rows closed. Node
+new coverage summary. Ayni appends an absolute
+`--coverage.reportsDirectory=<target>/coverage` option to coverage commands so
+repository Vitest root configuration cannot redirect the managed summary path. Missing either evidence type fails both rows closed. Node
 mutation is unavailable, including through
 `[node.tooling.mutation]`: Ayni rejects the signal instead of treating command
 success as mutation evidence.

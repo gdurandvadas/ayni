@@ -25,6 +25,8 @@ struct PytestSummary {
     passed: Option<u64>,
     failed: Option<u64>,
     error: Option<u64>,
+    xfailed: Option<u64>,
+    xpassed: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,6 +40,7 @@ struct PytestCase {
 
 #[derive(Debug, Deserialize)]
 struct PytestStage {
+    outcome: Option<String>,
     crash: Option<PytestCrash>,
     longrepr: Option<serde_json::Value>,
 }
@@ -70,16 +73,30 @@ pub fn collect_selected(
     let default_args = ["--json-report", report_arg.as_str()];
     let (program, mut args) =
         command_for_override_or_default(context, SignalKind::Test, "pytest", &default_args);
+    append_test_selection(context, selection, &mut args);
+    collect_with_command(context, program, args, report_path, Some(on_line))
+}
+
+fn append_test_selection(
+    context: &RunContext,
+    selection: &VerificationSelection,
+    args: &mut Vec<String>,
+) {
     if let Some(file) = &context.scope.file {
-        args.push(file.clone());
-    } else if let Some(package) = &context.scope.package {
+        args.push(
+            selection
+                .name
+                .as_ref()
+                .map_or_else(|| file.clone(), |name| format!("{file}::{name}")),
+        );
+        return;
+    }
+    if let Some(package) = &context.scope.package {
         args.push(package.clone());
     }
     if let Some(name) = &selection.name {
-        let selector = format!("::{name}");
-        args.push(selector);
+        args.extend([String::from("-k"), name.clone()]);
     }
-    collect_with_command(context, program, args, report_path, Some(on_line))
 }
 
 fn collect_with_command(
@@ -123,6 +140,8 @@ pub(super) fn build_row_from_output(
                     passed: Some(0),
                     failed: Some(0),
                     error: Some(0),
+                    xfailed: Some(0),
+                    xpassed: Some(0),
                 }),
                 tests: Some(Vec::new()),
             },
@@ -147,22 +166,32 @@ pub(super) fn build_row_from_output(
         passed: None,
         failed: None,
         error: None,
+        xfailed: None,
+        xpassed: None,
     });
     let total_tests = summary.total.unwrap_or(0);
-    let passed = summary.passed.unwrap_or(0);
+    let passed = summary
+        .passed
+        .unwrap_or(0)
+        .checked_add(summary.xpassed.unwrap_or(0));
+    let reported_passed = passed.unwrap_or(u64::MAX);
     let failed_cases = summary.failed.unwrap_or(0);
     let error_cases = summary.error.unwrap_or(0);
     let failed = failed_cases.saturating_add(error_cases);
-    if !test_counts_valid(total_tests, passed, failed_cases, error_cases)
-        && report_failure.is_none()
+    let cases = report.tests;
+    let summary_valid = passed.is_some()
+        && test_counts_valid(total_tests, reported_passed, failed_cases, error_cases);
+    let case_counts = cases.as_deref().and_then(parsed_case_counts);
+    if (!summary_valid || !summary_matches_cases(&summary, case_counts)) && report_failure.is_none()
     {
-        report_failure = Some(setup_failure(
-            context,
-            runner.clone(),
+        let message = if !summary_valid {
             format!(
-                "pytest JSON summary counts were inconsistent: total={total_tests}, passed={passed}, failed={failed_cases}, error={error_cases}"
-            ),
-        ));
+                "pytest JSON summary counts were inconsistent: total={total_tests}, passed={reported_passed}, failed={failed_cases}, error={error_cases}"
+            )
+        } else {
+            String::from("pytest JSON summary counts did not match parsed test case outcomes")
+        };
+        report_failure = Some(setup_failure(context, runner.clone(), message));
     }
     let duration_ms = report.duration.map(|value| (value * 1000.0) as u64);
     let report_complete = report_failure.is_none();
@@ -170,8 +199,7 @@ pub(super) fn build_row_from_output(
         test_execution_incomplete(success, total_tests, failed)
             .then(|| command_failure_from_output(context, SignalKind::Test, program, args, output))
     });
-    let mut offenders = report
-        .tests
+    let mut offenders = cases
         .unwrap_or_default()
         .into_iter()
         .filter(|case| matches!(case.outcome.as_deref(), Some("failed" | "error")))
@@ -188,7 +216,7 @@ pub(super) fn build_row_from_output(
         pass: report_complete && test_row_passes(success, total_tests, failed),
         result: SignalResult::Test(TestResult {
             total_tests,
-            passed,
+            passed: reported_passed,
             failed,
             duration_ms,
             runner,
@@ -197,6 +225,69 @@ pub(super) fn build_row_from_output(
         budget: Budget::Test(TestBudget::default()),
         offenders: Offenders::Test(offenders),
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PytestCaseCounts {
+    total: u64,
+    passed: u64,
+    failed: u64,
+    errors: u64,
+    xfailed: u64,
+    xpassed: u64,
+}
+
+fn parsed_case_counts(cases: &[PytestCase]) -> Option<PytestCaseCounts> {
+    let mut counts = PytestCaseCounts {
+        total: 0,
+        passed: 0,
+        failed: 0,
+        errors: 0,
+        xfailed: 0,
+        xpassed: 0,
+    };
+    for case in cases {
+        increment_count(&mut counts.total)?;
+        record_case_outcome(&mut counts, case)?;
+    }
+    Some(counts)
+}
+
+fn record_case_outcome(counts: &mut PytestCaseCounts, case: &PytestCase) -> Option<()> {
+    match case.outcome.as_deref()? {
+        "passed" => increment_count(&mut counts.passed),
+        "xpassed" => increment_count(&mut counts.xpassed),
+        "failed" if has_setup_or_teardown_error(case) => increment_count(&mut counts.errors),
+        "failed" => increment_count(&mut counts.failed),
+        "error" => increment_count(&mut counts.errors),
+        "xfailed" => increment_count(&mut counts.xfailed),
+        "skipped" => Some(()),
+        _ => None,
+    }
+}
+
+fn increment_count(count: &mut u64) -> Option<()> {
+    *count = count.checked_add(1)?;
+    Some(())
+}
+
+fn has_setup_or_teardown_error(case: &PytestCase) -> bool {
+    [case.setup.as_ref(), case.teardown.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|stage| matches!(stage.outcome.as_deref(), Some("failed" | "error")))
+}
+
+fn summary_matches_cases(summary: &PytestSummary, cases: Option<PytestCaseCounts>) -> bool {
+    let Some(cases) = cases else {
+        return false;
+    };
+    summary.total == Some(cases.total)
+        && summary.passed.unwrap_or(0) == cases.passed
+        && summary.failed.unwrap_or(0) == cases.failed
+        && summary.error.unwrap_or(0) == cases.errors
+        && summary.xfailed.unwrap_or(0) == cases.xfailed
+        && summary.xpassed.unwrap_or(0) == cases.xpassed
 }
 
 fn test_counts_valid(total: u64, passed: u64, failed: u64, errors: u64) -> bool {
@@ -238,8 +329,19 @@ fn read_report(path: &std::path::Path) -> Result<PytestReport, String> {
 }
 
 fn test_failure(case: PytestCase) -> TestFailure {
-    let stage = case.call.or(case.setup).or(case.teardown);
-    let crash = stage.as_ref().and_then(|stage| stage.crash.as_ref());
+    let stages = [
+        case.setup.as_ref(),
+        case.call.as_ref(),
+        case.teardown.as_ref(),
+    ];
+    let stage = stages
+        .into_iter()
+        .flatten()
+        .find(|stage| matches!(stage.outcome.as_deref(), Some("failed" | "error")))
+        .or(case.call.as_ref())
+        .or(case.setup.as_ref())
+        .or(case.teardown.as_ref());
+    let crash = stage.and_then(|stage| stage.crash.as_ref());
     let message = crash
         .and_then(|crash| crash.message.clone())
         .or_else(|| {
@@ -264,7 +366,10 @@ fn test_failure(case: PytestCase) -> TestFailure {
 
 #[cfg(test)]
 mod tests {
-    use super::{test_counts_valid, test_row_passes, zero_tests_failure};
+    use super::{
+        PytestCase, PytestStage, PytestSummary, parsed_case_counts, summary_matches_cases,
+        test_counts_valid, test_row_passes, zero_tests_failure,
+    };
 
     #[test]
     fn rejects_inconsistent_or_overflowing_summary_counts() {
@@ -272,6 +377,125 @@ mod tests {
         assert!(!test_counts_valid(1, 2, 0, 0));
         assert!(!test_counts_valid(1, u64::MAX, 1, 0));
         assert!(!test_counts_valid(1, 0, u64::MAX, 1));
+    }
+
+    #[test]
+    fn requires_summary_counts_to_match_parsed_case_outcomes() {
+        let cases = [
+            PytestCase {
+                nodeid: None,
+                outcome: Some(String::from("passed")),
+                call: None,
+                setup: None,
+                teardown: None,
+            },
+            PytestCase {
+                nodeid: None,
+                outcome: Some(String::from("failed")),
+                call: None,
+                setup: None,
+                teardown: None,
+            },
+            PytestCase {
+                nodeid: None,
+                outcome: Some(String::from("skipped")),
+                call: None,
+                setup: None,
+                teardown: None,
+            },
+        ];
+        let matching = PytestSummary {
+            total: Some(3),
+            passed: Some(1),
+            failed: Some(1),
+            error: Some(0),
+            xfailed: None,
+            xpassed: None,
+        };
+        assert!(summary_matches_cases(&matching, parsed_case_counts(&cases)));
+        let omitted_zero_categories = PytestSummary {
+            total: Some(1),
+            passed: Some(1),
+            failed: None,
+            error: None,
+            xfailed: None,
+            xpassed: None,
+        };
+        assert!(summary_matches_cases(
+            &omitted_zero_categories,
+            parsed_case_counts(&cases[..1])
+        ));
+        let mismatched = PytestSummary {
+            failed: Some(0),
+            ..matching
+        };
+        assert!(!summary_matches_cases(
+            &mismatched,
+            parsed_case_counts(&cases)
+        ));
+        assert!(
+            parsed_case_counts(&[PytestCase {
+                nodeid: None,
+                outcome: None,
+                call: None,
+                setup: None,
+                teardown: None
+            }])
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn accepts_native_xfail_and_xpass_outcomes() {
+        let cases = [
+            PytestCase {
+                nodeid: None,
+                outcome: Some(String::from("xfailed")),
+                call: None,
+                setup: None,
+                teardown: None,
+            },
+            PytestCase {
+                nodeid: None,
+                outcome: Some(String::from("xpassed")),
+                call: None,
+                setup: None,
+                teardown: None,
+            },
+        ];
+        let summary = PytestSummary {
+            total: Some(2),
+            passed: None,
+            failed: None,
+            error: None,
+            xfailed: Some(1),
+            xpassed: Some(1),
+        };
+        assert!(summary_matches_cases(&summary, parsed_case_counts(&cases)));
+    }
+
+    #[test]
+    fn treats_failed_cases_with_setup_or_teardown_failures_as_errors() {
+        let cases = [PytestCase {
+            nodeid: None,
+            outcome: Some(String::from("failed")),
+            call: None,
+            setup: Some(PytestStage {
+                outcome: Some(String::from("failed")),
+                crash: None,
+                longrepr: None,
+            }),
+            teardown: None,
+        }];
+        let summary = PytestSummary {
+            total: Some(1),
+            passed: None,
+            failed: None,
+            error: Some(1),
+            xfailed: None,
+            xpassed: None,
+        };
+        assert!(summary_matches_cases(&summary, parsed_case_counts(&cases)));
     }
 
     #[test]
@@ -288,10 +512,12 @@ mod tests {
 #[cfg(test)]
 mod report_tests {
     use super::{
-        PytestCase, PytestCrash, PytestStage, collect_with_command, is_no_tests_collected,
-        read_report, test_failure,
+        PytestCase, PytestCrash, PytestStage, append_test_selection, collect_with_command,
+        is_no_tests_collected, read_report, test_failure,
     };
-    use ayni_core::{AyniPolicy, ExecutionResolution, RunContext, Scope, SignalResult};
+    use ayni_core::{
+        AyniPolicy, ExecutionResolution, RunContext, Scope, SignalResult, VerificationSelection,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -323,6 +549,20 @@ mod report_tests {
         )
         .expect("fixture script");
         path
+    }
+
+    #[test]
+    fn selected_file_and_test_name_form_one_pytest_node_id() {
+        let root = TempDir::new().expect("fixture");
+        let mut context = context(root.path());
+        context.scope.file = Some(String::from("tests/test_api.py"));
+        let selection = VerificationSelection {
+            name: Some(String::from("test_create")),
+            ..VerificationSelection::default()
+        };
+        let mut args = Vec::new();
+        append_test_selection(&context, &selection, &mut args);
+        assert_eq!(args, ["tests/test_api.py::test_create"]);
     }
 
     #[test]
@@ -390,6 +630,48 @@ mod report_tests {
     }
 
     #[test]
+    fn mismatched_case_outcomes_produce_a_typed_failed_row_without_discarding_counts_or_offenders()
+    {
+        let temp = TempDir::new().expect("temporary repository");
+        let report = temp.path().join("pytest-report.json");
+        let command = script(
+            temp.path(),
+            &report,
+            r#"{"summary":{"total":1,"passed":1,"failed":0,"error":0},"tests":[{"nodeid":"tests/test_a.py::test_fails","outcome":"failed"}]}"#,
+        );
+        let row = collect_with_command(
+            &context(temp.path()),
+            String::from("sh"),
+            vec![command.display().to_string()],
+            report,
+            None,
+        )
+        .expect("typed failed row");
+        let SignalResult::Test(result) = row.result else {
+            panic!("test result")
+        };
+        assert_eq!(
+            (result.total_tests, result.passed, result.failed),
+            (1, 1, 0)
+        );
+        assert!(
+            result
+                .failure
+                .expect("evidence failure")
+                .message
+                .contains("did not match")
+        );
+        let ayni_core::Offenders::Test(offenders) = row.offenders else {
+            panic!("test offenders")
+        };
+        assert_eq!(offenders.len(), 1);
+        assert_eq!(
+            offenders[0].test_name.as_deref(),
+            Some("tests/test_a.py::test_fails")
+        );
+    }
+
+    #[test]
     fn no_tests_exit_without_a_report_is_handled_as_an_empty_run() {
         let output = Command::new("sh")
             .args(["-c", "printf 'no tests ran\\n'; exit 5"])
@@ -444,6 +726,7 @@ mod report_tests {
             nodeid: Some(String::from("tests/test_api.py::test_create")),
             outcome: Some(String::from("failed")),
             call: Some(PytestStage {
+                outcome: Some(String::from("failed")),
                 crash: Some(PytestCrash {
                     path: Some(String::from("src/api.py")),
                     lineno: Some(42),
@@ -457,6 +740,28 @@ mod report_tests {
         assert_eq!(failure.file.as_deref(), Some("src/api.py"));
         assert_eq!(failure.line, Some(42));
         assert_eq!(failure.message, "expected success");
+
+        let teardown = test_failure(PytestCase {
+            nodeid: Some(String::from("tests/test_api.py::test_cleanup")),
+            outcome: Some(String::from("error")),
+            call: Some(PytestStage {
+                outcome: Some(String::from("passed")),
+                crash: None,
+                longrepr: None,
+            }),
+            setup: None,
+            teardown: Some(PytestStage {
+                outcome: Some(String::from("failed")),
+                crash: Some(PytestCrash {
+                    path: Some(String::from("tests/conftest.py")),
+                    lineno: Some(9),
+                    message: Some(String::from("cleanup failed")),
+                }),
+                longrepr: None,
+            }),
+        });
+        assert_eq!(teardown.file.as_deref(), Some("tests/conftest.py"));
+        assert_eq!(teardown.message, "cleanup failed");
 
         let fallback = test_failure(PytestCase {
             nodeid: Some(String::from("tests/test_api.py::test_fallback")),

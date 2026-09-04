@@ -20,6 +20,9 @@ offenders_limit = 8
 [go]
 roots = ["."]
 
+[go.tooling]
+coverage_satisfies_test = true
+
 [go.size]
 "**/*.go" = { warn = 120, fail = 200, exclude = ["vendor/**", ".git/**", ".ayni/**"] }
 

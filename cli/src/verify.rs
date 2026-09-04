@@ -53,7 +53,8 @@ pub(crate) fn run(mut request: Request) -> Result<RunOutcome, Error> {
             collector: adapter.collector(),
         }
     });
-    crate::host_prerequisites::validate(&policy, host_checks).map_err(Error::execution)?;
+    crate::host_prerequisites::validate(&workspace_root, &policy, host_checks)
+        .map_err(Error::execution)?;
     for target in &mut planning.targets {
         target.run_context.cancellation = signal_cancellation.token();
     }

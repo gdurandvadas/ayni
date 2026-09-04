@@ -20,6 +20,9 @@ offenders_limit = 8
 [python]
 roots = ["."]
 
+[python.tooling]
+coverage_satisfies_test = true
+
 [python.size]
 "**/*.py" = { warn = 120, fail = 200, exclude = [".venv/**", "venv/**", "env/**", "__pycache__/**", ".pytest_cache/**", ".ruff_cache/**", ".tox/**", ".nox/**", ".git/**", ".ayni/**"] }
 

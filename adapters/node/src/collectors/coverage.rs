@@ -49,10 +49,7 @@ where
 }
 
 fn prepare_coverage_report(context: &RunContext) -> Result<std::path::PathBuf, CollectorError> {
-    let path = context
-        .workdir
-        .join("coverage")
-        .join("coverage-summary.json");
+    let path = managed_coverage_directory(context).join("coverage-summary.json");
     match fs::remove_file(&path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -80,13 +77,18 @@ fn build_coverage_row(
     output: &std::process::Output,
     summary: Option<Result<JsonValue, serde_json::Error>>,
 ) -> SignalRow {
-    let status = if output.status.success() && matches!(summary, Some(Ok(_))) {
-        String::from("ok")
-    } else {
-        String::from("error")
-    };
     let command_failure = (!output.status.success())
         .then(|| command_failure_from_output(context, SignalKind::Coverage, program, args, output));
+    let (raw_line_percent, raw_branch_percent) = summary
+        .as_ref()
+        .map(|report| {
+            report
+                .as_ref()
+                .map(find_coverage_percents)
+                .unwrap_or((Some(f64::NAN), Some(f64::NAN)))
+        })
+        .unwrap_or((None, None));
+    let measurements_valid = coverage_measurements_valid(raw_line_percent, raw_branch_percent);
     let report_failure = if output.status.success() {
         match &summary {
             None => Some(ayni_adapters_common::failure::setup_failure(
@@ -99,20 +101,23 @@ fn build_coverage_row(
                 engine.clone(),
                 format!("coverage summary was not valid JSON: {error}"),
             )),
+            Some(Ok(_)) if !measurements_valid => {
+                Some(ayni_adapters_common::failure::setup_failure(
+                    context,
+                    engine.clone(),
+                    "coverage summary did not contain a finite line or branch measurement",
+                ))
+            }
             Some(Ok(_)) => None,
         }
     } else {
         None
     };
-    let (raw_line_percent, raw_branch_percent) = summary
-        .as_ref()
-        .map(|report| {
-            report
-                .as_ref()
-                .map(find_coverage_percents)
-                .unwrap_or((Some(f64::NAN), Some(f64::NAN)))
-        })
-        .unwrap_or((None, None));
+    let status = if output.status.success() && report_failure.is_none() {
+        String::from("ok")
+    } else {
+        String::from("error")
+    };
     let line_percent = finite_percent(raw_line_percent);
     let branch_percent = finite_percent(raw_branch_percent);
     let percent = line_percent.or(branch_percent);
@@ -175,15 +180,24 @@ fn coverage_command(
         return (program, args, engine);
     }
     let mut tool_args = vec![
-        "run",
-        "--coverage",
-        "--coverage.reporter=json-summary",
-        "--passWithNoTests",
+        String::from("run"),
+        String::from("--coverage"),
+        String::from("--coverage.reporter=json-summary"),
+        String::from("--passWithNoTests"),
     ];
     if include_test_reporter {
-        tool_args.push("--reporter=json");
+        tool_args.push(String::from("--reporter=json"));
     }
-    let (program, args) = tool_command(context, "vitest", &tool_args);
+    enforce_managed_coverage_report_destination(
+        &mut tool_args,
+        &managed_coverage_directory(context),
+        0,
+    );
+    let (program, args) = tool_command(
+        context,
+        "vitest",
+        &tool_args.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
     let engine = format_command(&program, &args);
     (program, args, engine)
 }
@@ -195,7 +209,7 @@ fn coverage_override_command(
     let override_cmd = context
         .policy
         .tool_override_for(ayni_core::Language::Node, SignalKind::Coverage)?;
-    let args = if override_cmd.args.is_empty() {
+    let mut args = if override_cmd.args.is_empty() {
         let mut args = vec![
             String::from("run"),
             String::from("--coverage"),
@@ -209,8 +223,64 @@ fn coverage_override_command(
     } else {
         override_cmd.args.clone()
     };
+    let vitest_args_start = vitest_args_start(&override_cmd.command, &args);
+    enforce_managed_coverage_report_destination(
+        &mut args,
+        &managed_coverage_directory(context),
+        vitest_args_start,
+    );
     let engine = format_command(&override_cmd.command, &args);
     Some((override_cmd.command.clone(), args, engine))
+}
+
+fn managed_coverage_directory(context: &RunContext) -> std::path::PathBuf {
+    let directory = context.workdir.join("coverage");
+    if directory.is_absolute() {
+        directory
+    } else {
+        std::path::absolute(&directory).unwrap_or(directory)
+    }
+}
+
+fn is_vitest_launcher(value: &str) -> bool {
+    let name = value.rsplit(['/', '\\']).next().unwrap_or(value);
+    let lowercase = name.to_ascii_lowercase();
+    let launcher = lowercase
+        .strip_suffix(".cmd")
+        .or_else(|| lowercase.strip_suffix(".exe"))
+        .unwrap_or(&lowercase);
+    launcher == "vitest"
+        || launcher
+            .strip_prefix("vitest@")
+            .is_some_and(|version| !version.is_empty())
+}
+
+fn vitest_args_start(program: &str, args: &[String]) -> usize {
+    if is_vitest_launcher(program) {
+        return 0;
+    }
+    args.iter()
+        .position(|arg| is_vitest_launcher(arg))
+        .map_or(args.len(), |index| index + 1)
+}
+
+/// Ayni reads this report from the target workdir, so it must not be redirected
+/// by a repository Vitest configuration or an earlier override argument.
+fn enforce_managed_coverage_report_destination(
+    args: &mut Vec<String>,
+    directory: &std::path::Path,
+    vitest_args_start: usize,
+) {
+    let insert_at = args
+        .iter()
+        .enumerate()
+        .skip(vitest_args_start)
+        .find_map(|(index, arg)| (arg == "--").then_some(index))
+        .unwrap_or(args.len());
+    args.insert(
+        insert_at,
+        format!("--coverage.reportsDirectory={}", directory.display()),
+    );
 }
 
 fn find_coverage_percents(summary: &JsonValue) -> (Option<f64>, Option<f64>) {
@@ -267,19 +337,27 @@ fn assess_coverage(
     }
 }
 
+fn coverage_measurements_valid(line: Option<f64>, branch: Option<f64>) -> bool {
+    [line, branch].into_iter().flatten().all(f64::is_finite) && (line.is_some() || branch.is_some())
+}
+
 fn finite_percent(value: Option<f64>) -> Option<f64> {
     value.filter(|value| value.is_finite())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{assess_coverage, coverage_override_command, find_coverage_percents};
+    use super::{
+        assess_coverage, coverage_command, coverage_measurements_valid, coverage_override_command,
+        enforce_managed_coverage_report_destination, find_coverage_percents, is_vitest_launcher,
+        managed_coverage_directory, vitest_args_start,
+    };
     use ayni_core::{
         AyniPolicy, ConfiguredMetricEvaluation, CoveragePolicy, ExecutionResolution, Level,
         RunContext, Scope, ThresholdFloat,
     };
     use serde_json::json;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn context_with_policy(document: &str) -> RunContext {
         let policy: AyniPolicy = toml::from_str(document).expect("policy");
@@ -337,8 +415,16 @@ args = ["exec", "vitest", "run", "--coverage"]
         let (program, args, engine) =
             coverage_override_command(&context, false).expect("expected node coverage override");
         assert_eq!(program, "pnpm");
-        assert_eq!(args, vec!["exec", "vitest", "run", "--coverage"]);
-        assert_eq!(engine, "pnpm exec vitest run --coverage");
+        assert_eq!(&args[..4], ["exec", "vitest", "run", "--coverage"]);
+        let destination = format!(
+            "--coverage.reportsDirectory={}",
+            managed_coverage_directory(&context).display()
+        );
+        assert_eq!(args.last(), Some(&destination));
+        assert_eq!(
+            engine,
+            format!("pnpm exec vitest run --coverage {destination}")
+        );
     }
 
     #[test]
@@ -366,6 +452,133 @@ command = "vitest"
         let (_, args, _) =
             coverage_override_command(&context, true).expect("expected node coverage override");
         assert!(args.iter().any(|arg| arg == "--reporter=json"));
+        let destination = format!(
+            "--coverage.reportsDirectory={}",
+            managed_coverage_directory(&context).display()
+        );
+        assert_eq!(args.last(), Some(&destination));
+    }
+
+    #[test]
+    fn coverage_command_forces_the_managed_report_destination_after_override_args() {
+        let context = context_with_policy(
+            r#"
+[checks]
+test = false
+coverage = true
+size = false
+complexity = false
+deps = false
+mutation = false
+
+[languages]
+enabled = ["node"]
+
+[node.tooling.coverage]
+command = "vitest"
+args = ["run", "--coverage.reportsDirectory=custom-coverage"]
+"#,
+        );
+        let (_, args, _) = coverage_command(&context, false);
+        let destination = format!(
+            "--coverage.reportsDirectory={}",
+            managed_coverage_directory(&context).display()
+        );
+        assert_eq!(args.last(), Some(&destination));
+    }
+
+    #[test]
+    fn default_coverage_command_forces_the_managed_report_destination() {
+        let context = context_with_policy(
+            r#"
+[checks]
+test = false
+coverage = true
+size = false
+complexity = false
+deps = false
+mutation = false
+
+[languages]
+enabled = ["node"]
+"#,
+        );
+        let (_, args, _) = coverage_command(&context, false);
+        let destination = format!(
+            "--coverage.reportsDirectory={}",
+            managed_coverage_directory(&context).display()
+        );
+        assert_eq!(args.last(), Some(&destination));
+        assert!(managed_coverage_directory(&context).is_absolute());
+    }
+
+    #[test]
+    fn managed_report_destination_precedes_vitest_argument_terminators() {
+        assert!(is_vitest_launcher("vitest@latest"));
+        assert!(is_vitest_launcher(r"C:\\tools\\vitest.cmd"));
+        let mut direct = vec![
+            String::from("run"),
+            String::from("--coverage"),
+            String::from("--"),
+            String::from("tests/example.test.ts"),
+        ];
+        let directory = Path::new("managed-coverage");
+        enforce_managed_coverage_report_destination(&mut direct, directory, 0);
+        assert_eq!(
+            direct,
+            vec![
+                "run",
+                "--coverage",
+                "--coverage.reportsDirectory=managed-coverage",
+                "--",
+                "tests/example.test.ts"
+            ]
+        );
+
+        let mut positional_vitest = vec![
+            String::from("run"),
+            String::from("--"),
+            String::from("vitest"),
+        ];
+        enforce_managed_coverage_report_destination(&mut positional_vitest, directory, 0);
+        assert_eq!(
+            positional_vitest,
+            vec![
+                "run",
+                "--coverage.reportsDirectory=managed-coverage",
+                "--",
+                "vitest"
+            ]
+        );
+
+        let mut npx = vec![
+            String::from("vitest@latest"),
+            String::from("run"),
+            String::from("--"),
+            String::from("tests"),
+        ];
+        let npx_vitest_args = vitest_args_start("npx", &npx);
+        enforce_managed_coverage_report_destination(&mut npx, directory, npx_vitest_args);
+        assert_eq!(npx[2], "--coverage.reportsDirectory=managed-coverage");
+
+        let mut npm = vec![
+            String::from("exec"),
+            String::from("--"),
+            String::from("vitest"),
+            String::from("run"),
+        ];
+        let npm_vitest_args = vitest_args_start("npm", &npm);
+        enforce_managed_coverage_report_destination(&mut npm, directory, npm_vitest_args);
+        assert_eq!(
+            npm,
+            vec![
+                "exec",
+                "--",
+                "vitest",
+                "run",
+                "--coverage.reportsDirectory=managed-coverage"
+            ]
+        );
     }
 
     #[test]
@@ -418,6 +631,15 @@ command = "vitest"
             unparseable.branch,
             ConfiguredMetricEvaluation::Unparseable
         ));
+    }
+
+    #[test]
+    fn rejects_empty_and_non_finite_coverage_measurements() {
+        assert!(!coverage_measurements_valid(None, None));
+        assert!(!coverage_measurements_valid(Some(f64::NAN), None));
+        assert!(!coverage_measurements_valid(Some(80.0), Some(f64::NAN)));
+        assert!(coverage_measurements_valid(Some(0.0), None));
+        assert!(coverage_measurements_valid(None, Some(0.0)));
     }
 
     #[test]

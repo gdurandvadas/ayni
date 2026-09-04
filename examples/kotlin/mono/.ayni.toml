@@ -20,6 +20,9 @@ offenders_limit = 8
 [kotlin]
 roots = ["."]
 
+[kotlin.tooling]
+coverage_satisfies_test = true
+
 [kotlin.size]
 "**/*.kt" = { warn = 120, fail = 200, exclude = ["build/**", ".gradle/**", ".git/**", ".ayni/**"] }
 "**/*.kts" = { warn = 120, fail = 200, exclude = ["build/**", ".gradle/**", ".git/**", ".ayni/**"] }

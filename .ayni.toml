@@ -23,6 +23,10 @@ nofile = 8192
 roots = [
   ".",
 ]
+
+[rust.tooling]
+coverage_satisfies_test = true
+
 # Optional tool override examples:
 # [rust.tooling.test]
 # command = "cargo"

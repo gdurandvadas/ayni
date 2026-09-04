@@ -5,6 +5,7 @@ mod mutation;
 mod size;
 mod test;
 mod util;
+mod xml;
 
 use ayni_adapters_common::collector::{
     CollectorError, CollectorResult, finish_collection, finish_coverage_backed_test,
@@ -97,6 +98,15 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
+    fn fixture_execution(cwd: std::path::PathBuf) -> ExecutionResolution {
+        let mut execution = ExecutionResolution::direct("test", cwd, "test", 100);
+        execution.environment.insert(
+            ayni_adapters_common::exec::DISCARD_LLVM_PROFILE_ENV.to_string(),
+            String::new(),
+        );
+        execution
+    }
+
     #[test]
     fn controlled_timeout_child() {
         std::thread::sleep(Duration::from_secs(2));
@@ -177,6 +187,114 @@ args = ["combined.sh"]
             panic!("coverage row")
         };
         assert_eq!(result.line_percent, Some(80.0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_detected_task_rejects_kover_and_jacoco_evidence() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TempDir::new().expect("fixture");
+        let command = directory.path().join("gradle.sh");
+        fs::write(&command, r#"#!/bin/sh
+if [ "$1" = tasks ]; then
+  printf '%s\n' 'jacocoTestReport - Generates coverage XML'
+  exit 0
+fi
+mkdir -p build/test-results/test build/reports/kover build/reports/jacoco
+printf '%s\n' '<testsuite tests="1"><testcase name="a"/></testsuite>' > build/test-results/test/results.xml
+printf '%s\n' '<report><counter type="LINE" missed="0" covered="1"/></report>' > build/reports/kover/report.xml
+printf '%s\n' '<report><counter type="LINE" missed="0" covered="1"/></report>' > build/reports/jacoco/report.xml
+"#).expect("script");
+        let mut permissions = fs::metadata(&command).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&command, permissions).expect("executable");
+        let policy: AyniPolicy = toml::from_str(
+            r#"
+[checks]
+test = true
+coverage = true
+[languages]
+enabled = ["kotlin"]
+[kotlin.tooling]
+coverage_satisfies_test = true
+"#,
+        )
+        .expect("policy");
+        let root = directory.path().to_path_buf();
+        let context = RunContext {
+            repo_root: root.clone(),
+            target_root: root.clone(),
+            workdir: root.clone(),
+            policy,
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct(
+                command.display().to_string(),
+                root,
+                "test",
+                100,
+            ),
+            cancellation: Default::default(),
+            debug: false,
+        };
+
+        let (test, coverage) = KotlinCollector
+            .collect_coverage_backed_test(Language::Kotlin, &context, &mut |_| {})
+            .expect("combined rows");
+        assert!(!test.pass);
+        assert!(!coverage.pass);
+        let SignalResult::Coverage(result) = coverage.result else {
+            panic!("coverage row")
+        };
+        assert_eq!(
+            result.failure.expect("ambiguity failure").classification,
+            "missing_report"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_junit_evidence_is_classified_explicitly() {
+        let directory = TempDir::new().expect("fixture");
+        fs::write(directory.path().join("test.sh"), "#!/bin/sh\nexit 0\n").expect("script");
+        let policy: AyniPolicy = toml::from_str(
+            r#"
+[checks]
+test = true
+[languages]
+enabled = ["kotlin"]
+[kotlin.tooling.test]
+command = "sh"
+args = ["test.sh"]
+"#,
+        )
+        .expect("policy");
+        let root = directory.path().to_path_buf();
+        let context = RunContext {
+            repo_root: root.clone(),
+            target_root: root.clone(),
+            workdir: root.clone(),
+            policy,
+            scope: Scope::default(),
+            execution: ExecutionResolution::direct("gradle", root, "test", 100),
+            cancellation: Default::default(),
+            debug: false,
+        };
+
+        let row = KotlinCollector
+            .collect(SignalKind::Test, &context)
+            .expect("test row");
+        let SignalResult::Test(result) = row.result else {
+            panic!("test row")
+        };
+        assert_eq!(result.total_tests, 0);
+        assert_eq!(
+            result
+                .failure
+                .expect("missing JUnit failure")
+                .classification,
+            "missing_junit_report"
+        );
     }
 
     #[cfg(unix)]
@@ -322,7 +440,7 @@ args = [{args}]
             workdir: cwd.clone(),
             policy,
             scope: Scope::default(),
-            execution: ExecutionResolution::direct("gradle", cwd.clone(), "test", 100),
+            execution: fixture_execution(cwd.clone()),
             cancellation: Default::default(),
             debug: false,
         };

@@ -814,20 +814,39 @@ fn execute_checks(
         .iter()
         .map(|target| ((target.language, target.root.clone()), target))
         .collect::<BTreeMap<_, _>>();
-    let host_checks = plan.selected_checks.iter().filter_map(|check| {
-        let target = target_by_key.get(&(check.language, check.configured_root.clone()))?;
-        let adapter = registry
+    // Preflight each selected impact context, rather than its configured-root
+    // base context: collectors can require different executables for package or
+    // file-scoped work.
+    let mut host_contexts = Vec::new();
+    let mut host_check_specs = Vec::new();
+    for check in &plan.selected_checks {
+        let Some(base_target) = target_by_key.get(&(check.language, check.configured_root.clone()))
+        else {
+            continue;
+        };
+        let Some(adapter) = registry
             .adapters()
             .iter()
-            .find(|adapter| adapter.language() == check.language)?;
-        Some(crate::host_prerequisites::SelectedCheck {
-            language: check.language,
-            signal: check.signal,
-            context: &target.run_context,
-            collector: adapter.collector(),
-        })
-    });
-    crate::host_prerequisites::validate(policy, host_checks).map_err(Error::execution)?;
+            .find(|adapter| adapter.language() == check.language)
+        else {
+            continue;
+        };
+        let mut context = base_target.run_context.clone();
+        context.scope.package = check.package.clone();
+        context.scope.file = check.file.clone();
+        host_contexts.push(context);
+        host_check_specs.push((check.language, check.signal, adapter.collector()));
+    }
+    let host_checks = host_contexts.iter().zip(host_check_specs).map(
+        |(context, (language, signal, collector))| crate::host_prerequisites::SelectedCheck {
+            language,
+            signal,
+            context,
+            collector,
+        },
+    );
+    crate::host_prerequisites::validate(workspace_root, policy, host_checks)
+        .map_err(Error::execution)?;
     let mut collected = CollectedImpact {
         rows: Vec::new(),
         executed_checks: Vec::new(),

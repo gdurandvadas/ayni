@@ -19,7 +19,7 @@ struct CoverageJson {
     totals: Option<CoverageSummary>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct CoverageSummary {
     percent_covered: Option<f64>,
     #[serde(rename = "percent_covered_display")]
@@ -90,63 +90,13 @@ fn build_coverage_row(
     output: &std::process::Output,
 ) -> SignalRow {
     let engine = format_command(program, args);
-    let mut status = if output.status.success() {
-        "ok"
-    } else {
-        "error"
-    };
-    let mut failure = if output.status.success() {
-        None
-    } else {
-        Some(command_failure_from_output(
-            context,
-            SignalKind::Coverage,
-            program,
-            args,
-            output,
-        ))
-    };
-
-    let report = match read_report(report_path) {
-        Ok(report) => report,
-        Err(_) if is_no_tests_collected(output) => CoverageJson {
-            totals: Some(CoverageSummary {
-                percent_covered: Some(0.0),
-                percent_display: Some(String::from("0")),
-                covered_lines: Some(0.0),
-                num_statements: Some(1.0),
-                covered_branches: None,
-                num_branches: None,
-            }),
-        },
-        Err(error) => {
-            status = "error";
-            let malformed = report_path.exists();
-            failure.get_or_insert_with(|| ayni_core::CommandFailure {
-                category: String::from("repo_setup_issue"),
-                classification: String::from("unparseable_coverage_report"),
-                command: engine.clone(),
-                cwd: context.execution.exec_cwd.display().to_string(),
-                exit_code: None,
-                message: error,
-            });
-            CoverageJson {
-                totals: Some(CoverageSummary {
-                    percent_covered: malformed.then_some(f64::NAN),
-                    percent_display: None,
-                    covered_lines: malformed.then_some(f64::NAN),
-                    num_statements: malformed.then_some(1.0),
-                    covered_branches: malformed.then_some(f64::NAN),
-                    num_branches: malformed.then_some(1.0),
-                }),
-            }
-        }
-    };
-    let (raw_line_percent, raw_branch_percent) = report
-        .totals
-        .as_ref()
-        .map(coverage_percents)
-        .unwrap_or((None, None));
+    let command_failure = (!output.status.success())
+        .then(|| command_failure_from_output(context, SignalKind::Coverage, program, args, output));
+    let (report, report_failure) = load_coverage_report(context, report_path, output, &engine);
+    let ((raw_line_percent, raw_branch_percent), evidence_failure) =
+        validated_coverage_percents(context, &report, &engine);
+    let mut failure = command_failure.or(report_failure).or(evidence_failure);
+    let mut status = if failure.is_none() { "ok" } else { "error" };
     let line_percent = finite_percent(raw_line_percent);
     let branch_percent = finite_percent(raw_branch_percent);
     if line_percent.is_none() && branch_percent.is_none() && failure.is_none() {
@@ -196,6 +146,73 @@ fn build_coverage_row(
     }
 }
 
+fn load_coverage_report(
+    context: &RunContext,
+    report_path: &Path,
+    output: &std::process::Output,
+    engine: &str,
+) -> (CoverageJson, Option<ayni_core::CommandFailure>) {
+    match read_report(report_path) {
+        Ok(report) => (report, None),
+        Err(_) if is_no_tests_collected(output) => (empty_run_coverage_report(), None),
+        Err(error) => {
+            let malformed = report_path.exists();
+            let report = CoverageJson {
+                totals: Some(CoverageSummary {
+                    percent_covered: malformed.then_some(f64::NAN),
+                    percent_display: None,
+                    covered_lines: malformed.then_some(f64::NAN),
+                    num_statements: malformed.then_some(1.0),
+                    covered_branches: malformed.then_some(f64::NAN),
+                    num_branches: malformed.then_some(1.0),
+                }),
+            };
+            let failure = ayni_core::CommandFailure {
+                category: String::from("repo_setup_issue"),
+                classification: String::from("unparseable_coverage_report"),
+                command: engine.to_string(),
+                cwd: context.execution.exec_cwd.display().to_string(),
+                exit_code: None,
+                message: error,
+            };
+            (report, Some(failure))
+        }
+    }
+}
+
+fn empty_run_coverage_report() -> CoverageJson {
+    CoverageJson {
+        totals: Some(CoverageSummary {
+            percent_covered: Some(0.0),
+            percent_display: Some(String::from("0")),
+            covered_lines: Some(0.0),
+            num_statements: Some(1.0),
+            covered_branches: None,
+            num_branches: None,
+        }),
+    }
+}
+
+fn validated_coverage_percents(
+    context: &RunContext,
+    report: &CoverageJson,
+    engine: &str,
+) -> (
+    (Option<f64>, Option<f64>),
+    Option<ayni_core::CommandFailure>,
+) {
+    let Some(summary) = report.totals.as_ref() else {
+        return ((None, None), None);
+    };
+    match validate_coverage_summary(summary) {
+        Ok(()) => (coverage_percents(summary), None),
+        Err(message) => (
+            (None, None),
+            Some(setup_failure(context, engine.to_string(), message)),
+        ),
+    }
+}
+
 fn default_coverage_args(report_argument: &str) -> [&str; 3] {
     ["--cov=.", "--cov-branch", report_argument]
 }
@@ -223,6 +240,67 @@ fn read_report(path: &Path) -> Result<CoverageJson, String> {
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     serde_json::from_str(&content)
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))
+}
+
+fn validate_coverage_summary(summary: &CoverageSummary) -> Result<(), String> {
+    validate_percent("percent_covered", summary.percent_covered)?;
+    if let Some(display) = &summary.percent_display {
+        let value = display
+            .parse::<f64>()
+            .map_err(|_| String::from("coverage JSON percent_covered_display was not numeric"))?;
+        validate_percent("percent_covered_display", Some(value))?;
+    }
+    validate_count_pair(
+        "covered_lines",
+        summary.covered_lines,
+        "num_statements",
+        summary.num_statements,
+    )?;
+    validate_count_pair(
+        "covered_branches",
+        summary.covered_branches,
+        "num_branches",
+        summary.num_branches,
+    )
+}
+
+fn validate_percent(name: &str, value: Option<f64>) -> Result<(), String> {
+    if value.is_some_and(|value| !value.is_finite() || !(0.0..=100.0).contains(&value)) {
+        return Err(format!(
+            "coverage JSON {name} must be finite and between 0 and 100"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_count_pair(
+    covered_name: &str,
+    covered: Option<f64>,
+    total_name: &str,
+    total: Option<f64>,
+) -> Result<(), String> {
+    for (name, value) in [(covered_name, covered), (total_name, total)] {
+        if value.is_some_and(|value| {
+            !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value >= u64::MAX as f64
+        }) {
+            return Err(format!(
+                "coverage JSON {name} must be a finite non-negative integer within range"
+            ));
+        }
+    }
+    if covered.is_some() != total.is_some() {
+        return Err(format!(
+            "coverage JSON {covered_name} and {total_name} must be present together"
+        ));
+    }
+    if let (Some(covered), Some(total)) = (covered, total)
+        && covered > total
+    {
+        return Err(format!(
+            "coverage JSON {covered_name} cannot exceed {total_name}"
+        ));
+    }
+    Ok(())
 }
 
 fn coverage_percents(summary: &CoverageSummary) -> (Option<f64>, Option<f64>) {
@@ -297,12 +375,18 @@ fn finite_percent(value: Option<f64>) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{assess_coverage, coverage_command, coverage_percents, default_coverage_args};
+    use super::{
+        assess_coverage, coverage_command, coverage_percents, default_coverage_args,
+        validate_coverage_summary,
+    };
     use ayni_core::{
         AyniPolicy, ConfiguredMetricEvaluation, CoveragePolicy, ExecutionResolution, Level,
-        RunContext, Scope, ThresholdFloat,
+        RunContext, Scope, SignalResult, ThresholdFloat,
     };
+    use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
+    use tempfile::TempDir;
 
     fn context() -> RunContext {
         RunContext {
@@ -428,6 +512,76 @@ args = ["--reports-are-configured-elsewhere"]
             malformed.line,
             ConfiguredMetricEvaluation::Unparseable
         ));
+    }
+
+    #[test]
+    fn rejects_invalid_coverage_counts_before_percentage_construction() {
+        let valid = super::CoverageSummary {
+            percent_covered: Some(75.0),
+            percent_display: None,
+            covered_lines: Some(3.0),
+            num_statements: Some(4.0),
+            covered_branches: Some(1.0),
+            num_branches: Some(4.0),
+        };
+        assert!(validate_coverage_summary(&valid).is_ok());
+
+        for invalid in [
+            super::CoverageSummary {
+                covered_lines: Some(-1.0),
+                ..valid.clone()
+            },
+            super::CoverageSummary {
+                num_statements: Some(f64::NAN),
+                ..valid.clone()
+            },
+            super::CoverageSummary {
+                covered_branches: Some(5.0),
+                num_branches: Some(4.0),
+                ..valid.clone()
+            },
+            super::CoverageSummary {
+                covered_lines: Some((u64::MAX as f64) * 2.0),
+                ..valid.clone()
+            },
+            super::CoverageSummary {
+                num_statements: None,
+                ..valid.clone()
+            },
+        ] {
+            assert!(validate_coverage_summary(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn invalid_counts_produce_a_typed_failed_row_without_invalid_percentages() {
+        let temp = TempDir::new().expect("temporary report directory");
+        let report_path = temp.path().join("coverage.json");
+        fs::write(
+            &report_path,
+            r#"{"totals":{"covered_lines":-1,"num_statements":1}}"#,
+        )
+        .expect("report fixture");
+        let output = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .output()
+            .expect("successful command output");
+        let row = super::build_coverage_row(&context(), "pytest", &[], &report_path, &output);
+        assert!(!row.pass);
+        let SignalResult::Coverage(result) = row.result else {
+            panic!("coverage result")
+        };
+        assert_eq!(
+            (result.percent, result.line_percent, result.branch_percent),
+            (None, None, None)
+        );
+        assert!(
+            result
+                .failure
+                .expect("invalid evidence failure")
+                .message
+                .contains("non-negative integer")
+        );
     }
 
     #[test]

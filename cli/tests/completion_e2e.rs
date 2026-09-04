@@ -374,8 +374,8 @@ fn adapter_configuration_error_is_incomplete_and_does_not_synthesize_a_row() {
         r#"[checks]
 test = false
 coverage = false
-size = false
-complexity = true
+size = true
+complexity = false
 deps = false
 mutation = false
 
@@ -389,7 +389,12 @@ roots = ["good"]
     .expect("policy");
 
     let output = fixture.run(&["check", "--host", "--output", "json"]);
-    assert_eq!(output.status.code(), Some(4));
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let artifact = fixture.artifact(".ayni/last/signals.json");
     assert_eq!(artifact["completion"]["state"], "incomplete");
@@ -400,7 +405,7 @@ roots = ["good"]
         artifact["completion"]["issues"][0]["message"]
             .as_str()
             .expect("completion message")
-            .contains("missing expected complexity row")
+            .contains("missing expected size row")
     );
     assert!(artifact["rows"].as_array().expect("rows").is_empty());
     assert_eq!(artifact["aggregate"]["status"], "fail");

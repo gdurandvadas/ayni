@@ -100,6 +100,15 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
+    fn fixture_execution(cwd: std::path::PathBuf) -> ExecutionResolution {
+        let mut execution = ExecutionResolution::direct("test", cwd, "test", 100);
+        execution.environment.insert(
+            ayni_adapters_common::exec::DISCARD_LLVM_PROFILE_ENV.to_string(),
+            String::new(),
+        );
+        execution
+    }
+
     #[test]
     fn host_preflight_matches_direct_and_managed_python_complexity_launchers() {
         let cwd = std::env::current_dir().expect("working directory");
@@ -162,7 +171,7 @@ mod tests {
             r#"#!/bin/sh
 printf 'launched\n' >> launches
 mkdir -p .ayni/work/python/workspace
-printf '%s\n' '{"duration":1.5,"summary":{"total":2,"passed":2,"failed":0,"error":0},"tests":[]}' > .ayni/work/python/workspace/pytest-report.json
+printf '%s\n' '{"duration":1.5,"summary":{"total":2,"passed":2,"failed":0,"error":0},"tests":[{"outcome":"passed"},{"outcome":"passed"}]}' > .ayni/work/python/workspace/pytest-report.json
 printf '%s\n' '{"totals":{"covered_lines":8,"num_statements":10,"covered_branches":3,"num_branches":4}}' > .ayni/work/python/workspace/coverage.json
 "#,
         )
@@ -224,7 +233,7 @@ args = ["combined.sh"]
         let directory = TempDir::new().expect("fixture");
         fs::write(
             directory.path().join("combined.sh"),
-            "#!/bin/sh\nmkdir -p .ayni/work/python/workspace\nprintf '%s\n' '{\"duration\":1.5,\"summary\":{\"total\":2,\"passed\":2,\"failed\":0,\"error\":0},\"tests\":[]}' > .ayni/work/python/workspace/pytest-report.json\n",
+            "#!/bin/sh\nmkdir -p .ayni/work/python/workspace\nprintf '%s\n' '{\"duration\":1.5,\"summary\":{\"total\":2,\"passed\":2,\"failed\":0,\"error\":0},\"tests\":[{\"outcome\":\"passed\"},{\"outcome\":\"passed\"}]}' > .ayni/work/python/workspace/pytest-report.json\n",
         )
         .expect("script");
         let policy: AyniPolicy = toml::from_str(
@@ -330,7 +339,7 @@ args = [{args}]
             workdir: cwd.clone(),
             policy,
             scope: Scope::default(),
-            execution: ExecutionResolution::direct("test", cwd.clone(), "test", 100),
+            execution: fixture_execution(cwd.clone()),
             cancellation: Default::default(),
             debug: false,
         };

@@ -96,6 +96,15 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
+    fn fixture_execution(cwd: std::path::PathBuf) -> ExecutionResolution {
+        let mut execution = ExecutionResolution::direct("test", cwd, "test", 100);
+        execution.environment.insert(
+            ayni_adapters_common::exec::DISCARD_LLVM_PROFILE_ENV.to_string(),
+            String::new(),
+        );
+        execution
+    }
+
     #[test]
     fn controlled_timeout_child() {
         std::thread::sleep(Duration::from_secs(2));
@@ -341,7 +350,7 @@ args = [{args}]
             workdir: cwd.clone(),
             policy,
             scope: Scope::default(),
-            execution: ExecutionResolution::direct("test", cwd.clone(), "test", 100),
+            execution: fixture_execution(cwd.clone()),
             cancellation: Default::default(),
             debug: false,
         };

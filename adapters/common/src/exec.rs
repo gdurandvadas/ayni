@@ -44,6 +44,11 @@ const STREAM_LINE_LIMIT: usize = 64 * 1024;
 /// no policy) available. Matches the `execution.tool_timeout_seconds` default.
 pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(1800);
 
+/// Internal marker used by adapter process-fixture tests so instrumented child
+/// test binaries do not write partial LLVM profiles when they are terminated.
+#[doc(hidden)]
+pub const DISCARD_LLVM_PROFILE_ENV: &str = "AYNI_INTERNAL_DISCARD_LLVM_PROFILE";
+
 /// Stable classification for failures owned by the command runner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutionErrorKind {
@@ -403,6 +408,15 @@ fn spawn_command(
             detail: String::from("cancellation requested before process start"),
         }));
     }
+    #[cfg(windows)]
+    let resolved_program = resolve_windows_program(program, workdir, settings.environment);
+    #[cfg(windows)]
+    let mut command = Command::new(
+        resolved_program
+            .as_deref()
+            .unwrap_or_else(|| Path::new(program)),
+    );
+    #[cfg(not(windows))]
     let mut command = Command::new(program);
     command
         .args(args.iter().map(String::as_str))
@@ -413,6 +427,10 @@ fn spawn_command(
         .stderr(Stdio::piped());
     #[cfg(test)]
     configure_test_profile_discard(&mut command);
+    if settings.environment.contains_key(DISCARD_LLVM_PROFILE_ENV) {
+        configure_profile_discard(&mut command);
+        command.env_remove(DISCARD_LLVM_PROFILE_ENV);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -434,11 +452,75 @@ fn spawn_command(
     })
 }
 
+#[cfg(windows)]
+fn resolve_windows_program(
+    program: &str,
+    workdir: &Path,
+    environment: &BTreeMap<String, String>,
+) -> Option<PathBuf> {
+    let program_path = Path::new(program);
+    let path_value = environment
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("PATH"))
+        .map(|(_, value)| std::ffi::OsString::from(value))
+        .or_else(|| std::env::var_os("PATH"));
+    let path_ext = environment
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("PATHEXT"))
+        .map(|(_, value)| value.clone())
+        .or_else(|| std::env::var("PATHEXT").ok())
+        .unwrap_or_else(|| String::from(".COM;.EXE;.BAT;.CMD"));
+    let extensions = path_ext
+        .split(';')
+        .filter(|extension| !extension.is_empty())
+        .collect::<Vec<_>>();
+
+    let explicit_path =
+        program_path.is_absolute() || program.contains('/') || program.contains('\\');
+    let directories = if explicit_path {
+        vec![if program_path.is_absolute() {
+            PathBuf::new()
+        } else {
+            workdir.to_path_buf()
+        }]
+    } else {
+        std::env::split_paths(&path_value?).collect::<Vec<_>>()
+    };
+    for directory in directories {
+        let directory = if directory.as_os_str().is_empty() || directory.is_relative() {
+            workdir.join(directory)
+        } else {
+            directory
+        };
+        let candidate = directory.join(program_path);
+        if candidate.extension().is_some() && candidate.is_file() {
+            return Some(candidate);
+        }
+        if candidate.extension().is_none()
+            && let (Some(parent), Some(name)) = (candidate.parent(), candidate.file_name())
+        {
+            let name = name.to_string_lossy();
+            if let Some(candidate) = extensions
+                .iter()
+                .map(|extension| parent.join(format!("{name}{extension}")))
+                .find(|candidate| candidate.is_file())
+            {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 fn configure_test_profile_discard(command: &mut Command) {
-    // Ignored fixture binaries are process plumbing rather than coverage
-    // evidence. They and every descendant inherit the platform null device,
-    // so forced termination cannot leave a corrupt or checkout-local profile.
+    configure_profile_discard(command);
+}
+
+fn configure_profile_discard(command: &mut Command) {
+    // Fixture binaries are process plumbing rather than coverage evidence. They
+    // and every descendant inherit the platform null device, so forced
+    // termination cannot leave a corrupt or checkout-local profile.
     #[cfg(unix)]
     command.env("LLVM_PROFILE_FILE", "/dev/null");
     #[cfg(windows)]
