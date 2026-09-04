@@ -1,52 +1,6 @@
-use ayni_adapters_common::size::{collect_size, collect_size_file};
-use ayni_core::{
-    Budget, Language, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow,
-    SizeBudget, SizeBudgetRule,
-};
+use ayni_adapters_common::size::collect_size_signal;
+use ayni_core::{Language, RunContext, SignalRow};
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
-    let size_map = context.policy.size_rules_for(Language::Node);
-    if size_map.is_empty() {
-        return Err(String::from(
-            "missing size config: add [node.size] with at least one glob entry to .ayni.toml",
-        ));
-    }
-    let excluded = &["node_modules", ".git", ".ayni"];
-    let collected = if let Some(file) = context.scope.file.as_deref() {
-        collect_size_file(
-            &context.repo_root,
-            &context.workdir,
-            file,
-            size_map,
-            excluded,
-        )?
-    } else {
-        collect_size(&context.repo_root, &context.workdir, size_map, excluded)?
-    };
-
-    Ok(SignalRow {
-        kind: SignalKind::Size,
-        language: Language::Node,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
-        pass: collected.result.fail_count == 0,
-        result: SignalResult::Size(collected.result),
-        budget: Budget::Size(SizeBudget {
-            rules: size_map
-                .iter()
-                .map(|(glob, threshold)| SizeBudgetRule {
-                    glob: glob.clone(),
-                    warn: threshold.warn,
-                    fail: threshold.fail,
-                })
-                .collect(),
-            warn: None,
-            fail: None,
-        }),
-        offenders: Offenders::Size(collected.offenders),
-    })
+    collect_size_signal(context, Language::Node, &["node_modules", ".git", ".ayni"])
 }

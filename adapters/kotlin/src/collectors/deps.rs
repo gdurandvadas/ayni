@@ -3,7 +3,7 @@ use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
-    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope,
+    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext,
     SignalKind, SignalResult, SignalRow,
 };
 use glob::Pattern;
@@ -57,12 +57,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     Ok(SignalRow {
         kind: SignalKind::Deps,
         language: Language::Kotlin,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: offenders.is_empty(),
         result: SignalResult::Deps(DepsResult {
             crate_count: 1 + edges
@@ -85,12 +80,7 @@ fn error_row(context: &RunContext, failure: ayni_core::CommandFailure) -> Signal
     SignalRow {
         kind: SignalKind::Deps,
         language: Language::Kotlin,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: false,
         result: SignalResult::Deps(DepsResult {
             crate_count: 0,

@@ -4,7 +4,7 @@ use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_adapters_common::paths::{resolve_repo_path, to_repo_relative_path};
 use ayni_core::{
     Budget, ComplexityBudget, ComplexityOffender, ComplexityResult, FloatThresholdBudget, Language,
-    Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, classify_maximum,
+    Level, Offenders, RunContext, SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use regex::Regex;
 use std::path::Path;
@@ -108,12 +108,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     Ok(SignalRow {
         kind: SignalKind::Complexity,
         language: Language::Go,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: status_ok && fail_count == 0,
         result: SignalResult::Complexity(ComplexityResult {
             engine: String::from("gocyclo"),

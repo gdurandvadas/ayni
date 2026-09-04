@@ -73,7 +73,15 @@ Enabled checks come from `[checks]`. Configure Go roots in `[go].roots`
 `[go.complexity]`, coverage in `[go.coverage]`, and forbidden edges in
 `[go.deps.forbidden]`. Command overrides are optional in `[go.tooling.test]`,
 `[go.tooling.coverage]`; each override requires `command` and may set `args`.
-Go mutation is unsupported, including command overrides.
+With both signals enabled, `[go.tooling].coverage_satisfies_test = true`
+opts repository `check` into one `go test` execution that emits `-json` test
+events and a coverage profile. Ayni then parses that profile with `go tool cover`
+without rerunning tests and emits independent test and coverage rows. Ayni adds
+`-json` when needed and replaces any custom `-coverprofile` destination with a
+fresh managed path. An explicit coverage command is an attestation that it runs
+the complete suite and preserves both evidence formats. Missing either evidence
+type fails both rows closed. Go
+mutation is unsupported, including command overrides.
 
 Size requires a budget entry and complexity requires `fn_cyclomatic`; either
 missing value produces a clear collector error. Coverage thresholds and
@@ -95,9 +103,12 @@ enabled = ["go"]
 [go]
 roots = ["services/api", "services/worker"]
 
+[go.tooling]
+coverage_satisfies_test = true
+
 [go.tooling.coverage]
 command = "go"
-args = ["test", "./...", "-coverprofile=.ayni/go.cover.out"]
+args = ["test", "./...", "-json"]
 
 [go.size]
 "**/*.go" = { warn = 300, fail = 600, exclude = ["vendor/**", ".git/**", ".ayni/**"] }

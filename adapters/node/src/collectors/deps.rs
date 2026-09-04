@@ -61,12 +61,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     Ok(SignalRow {
         kind: SignalKind::Deps,
         language: Language::Node,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: offenders.is_empty(),
         result: SignalResult::Deps(DepsResult {
             crate_count: visible.len() as u64,

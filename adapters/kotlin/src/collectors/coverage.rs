@@ -1,52 +1,148 @@
 use super::util::{
-    find_reports, gradle_command, prepare_gradle_execution, report_root, resolve_gradle_task,
+    combined_gradle_command, find_reports, prepare_combined_gradle_execution, report_root,
+    resolve_gradle_task,
 };
+use super::xml::XmlDocument;
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{
     command_failure_from_output, coverage_metric_failure, setup_failure,
 };
 use ayni_adapters_common::paths::to_repo_relative_path;
-use ayni_adapters_common::xml::{attr_string, attr_u64};
+use ayni_adapters_common::xml::attr_string;
 use ayni_core::{
     Budget, ConfiguredMetricEvaluation, CoverageBudget, CoverageOffender, CoveragePolicy,
-    CoverageResult, Language, Level, Offenders, RunContext, Scope, SignalKind, SignalResult,
-    SignalRow, evaluate_configured_metric,
+    CoverageResult, Language, Level, Offenders, RunContext, SignalKind, SignalResult, SignalRow,
+    evaluate_configured_metric,
 };
-use regex::Regex;
 use std::fs;
 use std::path::Path;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
-    prepare_gradle_execution(context, SignalKind::Coverage).map_err(CollectorError::Adapter)?;
+    prepare_combined_gradle_execution(context).map_err(CollectorError::Adapter)?;
     let task = resolve_coverage_task(context)?;
-    let (program, args) = gradle_command(context, SignalKind::Coverage, &task);
+    let (program, args) = combined_gradle_command(context, &task);
     let engine = format_command(&program, &args);
     let output = run_command_for_context_structured(context, &program, &args)?;
+    Ok(build_coverage_row(
+        context,
+        &program,
+        &args,
+        engine,
+        &output,
+        &coverage_report_paths(context, &task),
+    ))
+}
+
+pub fn collect_with_test_lines<F>(
+    context: &RunContext,
+    on_line: F,
+) -> ayni_adapters_common::collector::CoverageBackedTestResult
+where
+    F: FnMut(&str),
+{
+    use ayni_adapters_common::exec::run_command_for_context_streaming_structured;
+
+    prepare_combined_gradle_execution(context).map_err(CollectorError::Adapter)?;
+    let task = resolve_coverage_task(context)?;
+    let (program, args) = combined_gradle_command(context, &task);
+    let engine = format_command(&program, &args);
+    let output = run_command_for_context_streaming_structured(context, &program, &args, on_line)?;
+    let root = report_root(context, SignalKind::Coverage);
+    let test_paths = find_reports(&root, &["build", "test-results", "test"], "xml");
+    let coverage_paths = coverage_report_paths(context, &task);
+    let test = super::test::build_row_from_output(
+        context,
+        &program,
+        &args,
+        output.clone(),
+        &test_paths,
+        engine.clone(),
+    );
+    let coverage = build_coverage_row(context, &program, &args, engine, &output, &coverage_paths);
+    Ok((test, coverage))
+}
+
+fn build_coverage_row(
+    context: &RunContext,
+    program: &str,
+    args: &[String],
+    engine: String,
+    output: &std::process::Output,
+    report_paths: &[std::path::PathBuf],
+) -> SignalRow {
     if !output.status.success() {
-        return Ok(error_row(
+        return error_row(
             context,
             engine,
-            command_failure_from_output(context, SignalKind::Coverage, &program, &args, &output),
-        ));
+            command_failure_from_output(context, SignalKind::Coverage, program, args, output),
+        );
     }
-    let report_paths = coverage_report_paths(context, &task);
     if report_paths.is_empty() {
-        return Ok(error_row(
+        return error_row(
             context,
             engine,
             setup_failure(
                 context,
-                format_command(&program, &args),
-                missing_coverage_report_message(&task),
+                format_command(program, args),
+                "coverage command completed but no Kover or JaCoCo XML report was generated",
             ),
-        ));
+        );
+    }
+    let has_kover = report_paths
+        .iter()
+        .any(|path| coverage_report_family(path) == Some("kover"));
+    let has_jacoco = report_paths
+        .iter()
+        .any(|path| coverage_report_family(path) == Some("jacoco"));
+    if has_kover && has_jacoco {
+        return error_row(
+            context,
+            engine.clone(),
+            setup_failure(
+                context,
+                engine,
+                "coverage command produced both Kover and JaCoCo XML; configure one coverage report family",
+            ),
+        );
     }
     let mut totals = CoverageCounters::default();
-    for path in &report_paths {
-        totals.merge(parse_jacoco_xml(path).map_err(CollectorError::Adapter)?);
+    for path in report_paths {
+        match parse_jacoco_xml(path) {
+            Ok(report) => totals.merge(report),
+            Err(message) => {
+                return error_row(
+                    context,
+                    engine.clone(),
+                    setup_failure(
+                        context,
+                        engine,
+                        format!("coverage XML evidence was malformed: {message}"),
+                    ),
+                );
+            }
+        }
     }
     let report = totals.finish();
+    if report.line_percent.is_none() && report.branch_percent.is_none() {
+        return error_row(
+            context,
+            engine.clone(),
+            setup_failure(
+                context,
+                engine,
+                "coverage XML did not contain a finite LINE or BRANCH measurement",
+            ),
+        );
+    }
+    coverage_row_from_totals(context, engine, report)
+}
+
+fn coverage_row_from_totals(
+    context: &RunContext,
+    engine: String,
+    report: CoverageTotals,
+) -> SignalRow {
     let coverage_config = context.policy.kotlin.coverage.as_ref();
     let budget = CoverageBudget {
         line_percent_warn: coverage_config.and_then(|config| config.line_percent.map(|v| v.warn)),
@@ -72,16 +168,10 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         coverage_metric_failure(context, engine.clone(), "branch_percent", assessment.branch)
     });
     let pass = metric_failure.is_none() && !assessment.has_fail;
-
-    Ok(SignalRow {
+    SignalRow {
         kind: SignalKind::Coverage,
         language: Language::Kotlin,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass,
         result: SignalResult::Coverage(CoverageResult {
             percent: report.line_percent.or(report.branch_percent),
@@ -93,7 +183,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         }),
         budget: Budget::Coverage(budget),
         offenders: Offenders::Coverage(assessment.offenders),
-    })
+    }
 }
 
 fn resolve_coverage_task(
@@ -102,7 +192,7 @@ fn resolve_coverage_task(
     if context
         .policy
         .tool_override_for(Language::Kotlin, SignalKind::Coverage)
-        .is_some()
+        .is_some_and(|command| !command.args.is_empty())
     {
         return Ok(String::from("koverXmlReport"));
     }
@@ -113,21 +203,32 @@ fn resolve_coverage_task(
     )
 }
 
-fn coverage_report_paths(context: &RunContext, task: &str) -> Vec<std::path::PathBuf> {
+fn coverage_report_paths(context: &RunContext, _task: &str) -> Vec<std::path::PathBuf> {
     let root = report_root(context, SignalKind::Coverage);
-    match task {
-        "jacocoTestReport" => find_reports(&root, &["build", "reports", "jacoco"], "xml"),
-        _ => find_reports(&root, &["build", "reports", "kover"], "xml"),
-    }
+    let mut reports = find_reports(&root, &["build", "reports", "kover"], "xml");
+    reports.extend(find_reports(&root, &["build", "reports", "jacoco"], "xml"));
+    reports.sort();
+    reports.dedup();
+    reports
 }
 
-fn missing_coverage_report_message(task: &str) -> &'static str {
-    match task {
-        "jacocoTestReport" => {
-            "jacocoTestReport did not produce a JaCoCo XML report under build/reports/jacoco"
+fn coverage_report_family(path: &std::path::Path) -> Option<&'static str> {
+    let components = path
+        .components()
+        .map(|component| component.as_os_str())
+        .collect::<Vec<_>>();
+    components.windows(3).rev().find_map(|parts| {
+        if parts[0] != "build" || parts[1] != "reports" {
+            return None;
         }
-        _ => "koverXmlReport did not produce a Kover XML report under build/reports/kover",
-    }
+        if parts[2] == "kover" {
+            Some("kover")
+        } else if parts[2] == "jacoco" {
+            Some("jacoco")
+        } else {
+            None
+        }
+    })
 }
 
 fn error_row(
@@ -138,12 +239,7 @@ fn error_row(
     SignalRow {
         kind: SignalKind::Coverage,
         language: Language::Kotlin,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: false,
         result: SignalResult::Coverage(CoverageResult {
             percent: None,
@@ -248,23 +344,49 @@ fn parse_jacoco_xml(path: &Path) -> Result<CoverageReport, String> {
 }
 
 fn parse_jacoco_content(content: &str) -> Result<CoverageReport, String> {
-    let counter_re = Regex::new(r#"<counter\b([^>]*)/>"#)
-        .map_err(|error| format!("failed to compile counter regex: {error}"))?;
+    let document = XmlDocument::parse(content)?;
+    let (root_index, root) = document
+        .elements
+        .iter()
+        .enumerate()
+        .find(|(_, element)| element.parent.is_none())
+        .ok_or_else(|| String::from("coverage XML has no root element"))?;
+    if root.name != "report" {
+        return Err(String::from(
+            "expected a JaCoCo or Kover <report> XML document",
+        ));
+    }
     let mut line = MetricCounter::Absent;
     let mut branch = MetricCounter::Absent;
-    for caps in counter_re.captures_iter(content) {
-        let attrs = caps.get(1).map(|value| value.as_str()).unwrap_or("");
-        let counter = match (attr_u64(attrs, "covered"), attr_u64(attrs, "missed")) {
-            (Some(covered), Some(missed)) => MetricCounter::Values { covered, missed },
-            _ => MetricCounter::Invalid,
-        };
-        match attr_string(attrs, "type").as_deref() {
-            Some("LINE") => line = counter,
-            Some("BRANCH") => branch = counter,
-            _ => {}
+    for element in &document.elements {
+        if element.name != "counter" || element.parent != Some(root_index) {
+            continue;
         }
+        let (metric, counter) = match attr_string(&element.attrs, "type").as_deref() {
+            Some("LINE") => ("LINE", &mut line),
+            Some("BRANCH") => ("BRANCH", &mut branch),
+            _ => continue,
+        };
+        if !matches!(&*counter, MetricCounter::Absent) {
+            return Err(format!(
+                "coverage XML contained duplicate {metric} counters"
+            ));
+        }
+        *counter = parse_metric_counter(&element.attrs, metric)?;
     }
     Ok(CoverageReport { line, branch })
+}
+
+fn parse_metric_counter(attrs: &str, metric: &str) -> Result<MetricCounter, String> {
+    let covered = attr_string(attrs, "covered")
+        .ok_or_else(|| format!("coverage {metric} counter was missing covered"))?
+        .parse::<u64>()
+        .map_err(|_| format!("coverage {metric} covered count was invalid"))?;
+    let missed = attr_string(attrs, "missed")
+        .ok_or_else(|| format!("coverage {metric} counter was missing missed"))?
+        .parse::<u64>()
+        .map_err(|_| format!("coverage {metric} missed count was invalid"))?;
+    Ok(MetricCounter::Values { covered, missed })
 }
 
 fn percent(covered: u64, missed: u64) -> Option<f64> {
@@ -323,7 +445,10 @@ fn finite_percent(value: Option<f64>) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CoverageCounters, assess_coverage, parse_jacoco_content};
+    use super::{
+        CoverageCounters, assess_coverage, coverage_report_family, parse_jacoco_content,
+        resolve_coverage_task,
+    };
     use ayni_core::{
         AyniPolicy, ConfiguredMetricEvaluation, CoveragePolicy, ExecutionResolution, Level,
         RunContext, Scope, ThresholdFloat,
@@ -356,6 +481,39 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn empty_coverage_override_detects_a_jacoco_only_project() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::TempDir::new().expect("fixture");
+        let command = root.path().join("gradle-tasks.sh");
+        fs::write(
+            &command,
+            "#!/bin/sh\nprintf '%s\\n' 'jacocoTestReport - Generates coverage XML'\n",
+        )
+        .expect("task command");
+        let mut permissions = fs::metadata(&command).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&command, permissions).expect("executable");
+        let mut context = context();
+        context.repo_root = root.path().to_path_buf();
+        context.target_root = root.path().to_path_buf();
+        context.workdir = root.path().to_path_buf();
+        context.execution.exec_cwd = root.path().to_path_buf();
+        context.policy = toml::from_str(&format!(
+            "[languages]\nenabled=[\"kotlin\"]\n[kotlin.tooling.coverage]\ncommand={:?}\n",
+            command.display().to_string()
+        ))
+        .expect("policy");
+
+        assert_eq!(
+            resolve_coverage_task(&context).expect("coverage task"),
+            "jacocoTestReport"
+        );
+    }
+
     #[test]
     fn parses_jacoco_counters() {
         let report = parse_jacoco_content(
@@ -368,6 +526,40 @@ mod tests {
         let finished = totals.finish();
         assert_eq!(finished.line_percent, Some(80.0));
         assert_eq!(finished.branch_percent, Some(75.0));
+    }
+
+    #[test]
+    fn reads_only_unique_report_level_counters() {
+        let nested = parse_jacoco_content(
+            r#"<report><package><counter type="LINE" missed="100" covered="0"/></package><counter type="LINE" missed="2" covered="8"/></report>"#,
+        )
+        .expect("coverage");
+        let mut totals = CoverageCounters::default();
+        totals.merge(nested);
+        assert_eq!(totals.finish().line_percent, Some(80.0));
+
+        assert!(
+            parse_jacoco_content(
+                r#"<report><counter type="LINE" missed="2" covered="8"/><counter type="LINE" missed="1" covered="9"/></report>"#,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn coverage_family_uses_the_matched_report_segment() {
+        assert_eq!(
+            coverage_report_family(&PathBuf::from(
+                "/tmp/jacoco/project/build/reports/kover/report.xml"
+            )),
+            Some("kover")
+        );
+        assert_eq!(
+            coverage_report_family(&PathBuf::from(
+                "/tmp/kover/project/build/reports/jacoco/report.xml"
+            )),
+            Some("jacoco")
+        );
     }
 
     #[test]
@@ -454,26 +646,25 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unbalanced_and_mismatched_coverage_xml() {
+        for content in [
+            "<report><counter type=\"LINE\" missed=\"2\" covered=\"8\">",
+            "<report><counter type=\"LINE\" missed=\"2\" covered=\"8\"></report>",
+        ] {
+            assert!(parse_jacoco_content(content).is_err(), "{content}");
+        }
+    }
+
+    #[test]
     fn rejects_malformed_and_invalid_counter_arithmetic() {
         let context = context();
         let policy = policy();
-        let malformed = parse_jacoco_content(
-            r#"<report><counter type="LINE" missed="bad" covered="8"/><counter type="BRANCH" missed="1" covered="3"/></report>"#,
-        )
-        .expect("report");
-        let mut totals = CoverageCounters::default();
-        totals.merge(malformed);
-        let finished = totals.finish();
-        let assessment = assess_coverage(
-            finished.raw_line_percent,
-            finished.raw_branch_percent,
-            Some(&policy),
-            &context,
+        assert!(
+            parse_jacoco_content(
+                r#"<report><counter type="LINE" missed="bad" covered="8"/><counter type="BRANCH" missed="1" covered="3"/></report>"#,
+            )
+            .is_err()
         );
-        assert!(matches!(
-            assessment.line,
-            ConfiguredMetricEvaluation::Unparseable
-        ));
 
         let overflow = parse_jacoco_content(
             r#"<report><counter type="LINE" missed="1" covered="18446744073709551615"/><counter type="BRANCH" missed="0" covered="1"/></report>"#,

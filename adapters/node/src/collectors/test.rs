@@ -6,8 +6,8 @@ use ayni_adapters_common::exec::{
 };
 use ayni_adapters_common::failure::{setup_failure, test_execution_incomplete};
 use ayni_core::{
-    Budget, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, TestBudget,
-    TestFailure, TestResult, VerificationSelection,
+    Budget, Offenders, RunContext, SignalKind, SignalResult, SignalRow, TestBudget, TestFailure,
+    TestResult, VerificationSelection,
 };
 use serde_json::Value as JsonValue;
 
@@ -88,12 +88,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     Ok(SignalRow {
         kind: SignalKind::Test,
         language: ayni_core::Language::Node,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass,
         result: SignalResult::Test(TestResult {
             total_tests: summary.total_tests,
@@ -166,7 +161,7 @@ fn selected_test_command(context: &RunContext) -> Result<(String, Vec<String>), 
     Ok((program, args))
 }
 
-fn build_row_from_output(
+pub(super) fn build_row_from_output(
     context: &RunContext,
     output: std::process::Output,
     runner: String,

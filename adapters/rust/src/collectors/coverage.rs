@@ -1,9 +1,12 @@
-use ayni_adapters_common::collector::CollectorResult;
-use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
+use ayni_adapters_common::collector::{CollectorResult, CoverageBackedTestResult};
+use ayni_adapters_common::exec::{
+    format_command, run_command_for_context_streaming_structured,
+    run_command_for_context_structured,
+};
 use ayni_adapters_common::failure::{concise_failure_message, coverage_metric_failure};
 use ayni_core::{
     Budget, CommandFailure, ConfiguredMetricEvaluation, CoverageBudget, CoverageOffender,
-    CoveragePolicy, CoverageResult, Level, Offenders, RunContext, Scope, SignalKind, SignalResult,
+    CoveragePolicy, CoverageResult, Level, Offenders, RunContext, SignalKind, SignalResult,
     SignalRow, evaluate_configured_metric,
 };
 use serde_json::Value as JsonValue;
@@ -11,7 +14,46 @@ use serde_json::Value as JsonValue;
 pub fn collect(context: &RunContext) -> CollectorResult {
     let (program, args, engine_label) = coverage_command(context);
     let output = run_command_for_context_structured(context, &program, &args)?;
+    Ok(build_coverage_row(
+        context,
+        &program,
+        &args,
+        engine_label,
+        &output,
+    ))
+}
 
+pub fn collect_with_test_lines<F>(context: &RunContext, on_line: F) -> CoverageBackedTestResult
+where
+    F: FnMut(&str),
+{
+    let (program, args, engine_label) = coverage_command(context);
+    let runner = format_command(&program, &args);
+    let output = run_command_for_context_streaming_structured(context, &program, &args, on_line)?;
+    let combined_test_output = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let test = super::test::build_test_row(
+        context,
+        output.status.success(),
+        output.status.code(),
+        &combined_test_output,
+        &String::from_utf8_lossy(&output.stderr),
+        &runner,
+    );
+    let coverage = build_coverage_row(context, &program, &args, engine_label, &output);
+    Ok((test, coverage))
+}
+
+fn build_coverage_row(
+    context: &RunContext,
+    program: &str,
+    args: &[String],
+    engine_label: String,
+    output: &std::process::Output,
+) -> SignalRow {
     let (status, raw_line_percent, raw_branch_percent, report_failure) = if output.status.success()
     {
         match serde_json::from_slice::<JsonValue>(&output.stdout) {
@@ -67,15 +109,10 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     });
     let pass = status == "ok" && metric_failure.is_none() && !assessment.has_fail;
 
-    Ok(SignalRow {
+    SignalRow {
         kind: SignalKind::Coverage,
         language: ayni_core::Language::Rust,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass,
         result: SignalResult::Coverage(CoverageResult {
             percent,
@@ -84,13 +121,13 @@ pub fn collect(context: &RunContext) -> CollectorResult {
             engine: engine_label,
             status,
             failure: (!output.status.success())
-                .then(|| command_failure(context, &program, &args, &output, "repo_code_issue"))
+                .then(|| command_failure(context, program, args, output, "repo_code_issue"))
                 .or(report_failure)
                 .or(metric_failure),
         }),
         budget: Budget::Coverage(coverage_budget),
         offenders: Offenders::Coverage(assessment.offenders),
-    })
+    }
 }
 
 fn command_failure(

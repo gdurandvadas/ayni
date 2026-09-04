@@ -76,11 +76,20 @@ Enabled checks come from `[checks]`. Configure Rust roots in `[rust].roots`
 `[rust.complexity]`, coverage thresholds in `[rust.coverage]`, and forbidden
 dependency edges in `[rust.deps.forbidden]`. Command overrides are optional in
 `[rust.tooling.test]` and `[rust.tooling.coverage]`; each override requires
-`command` and may set `args`. Rust mutation is unsupported, including command
-overrides.
+`command` and may set `args`. With both signals enabled,
+`[rust.tooling].coverage_satisfies_test = true` opts repository `check` into one
+coverage-backed execution that must emit both Cargo test summaries and
+cargo-llvm-cov JSON. Missing either evidence type fails both rows closed. Rust
+mutation is unsupported, including command overrides.
 
 Size requires at least one budget entry and complexity requires
-`fn_cyclomatic`; either missing value produces a clear collector error.
+`fn_cyclomatic`; either missing value produces a clear collector error. Rust
+complexity always excludes adapter-known generated and control directories
+(`target`, `.git`, and `.ayni`) from tool input and reported functions. Relative
+tool paths are normalized from the resolved command `exec_cwd`, so member roots
+executed from a Cargo workspace ancestor remain canonical repository-relative
+paths without a duplicated configured-root prefix. This is fixed adapter
+behavior and does not inherit `rust.size` rule exclusions.
 Coverage thresholds and dependency rules are optional: without `line_percent`,
 coverage has no policy threshold, and without `rust.deps.forbidden`, no edges
 are forbidden.
@@ -97,6 +106,9 @@ enabled = ["rust"]
 
 [rust]
 roots = ["core", "adapters/rust", "cli"]
+
+[rust.tooling]
+coverage_satisfies_test = true
 
 [rust.tooling.test]
 command = "cargo"

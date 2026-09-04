@@ -2,7 +2,7 @@ use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_core::{
     Budget, ComplexityBudget, ComplexityOffender, ComplexityResult, FloatThresholdBudget, Language,
-    Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, classify_maximum,
+    Level, Offenders, RunContext, SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -78,12 +78,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     Ok(SignalRow {
         kind: SignalKind::Complexity,
         language: Language::Rust,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: fail_count == 0,
         result: SignalResult::Complexity(ComplexityResult {
             engine: String::from("rust-code-analysis-cli"),
@@ -215,6 +210,34 @@ fn run_rust_code_analysis(
     context: &RunContext,
     target: &Path,
 ) -> Result<Vec<FunctionMetric>, CollectorError> {
+    let canonical_repo_root = context
+        .repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| context.repo_root.to_path_buf());
+    if is_adapter_known_output_target(&canonical_repo_root, target) {
+        return Ok(Vec::new());
+    }
+
+    let args = rust_code_analysis_args(target);
+
+    let output = run_command_for_context_structured(context, "rust-code-analysis-cli", &args)?;
+    if !output.status.success() {
+        return Err(CollectorError::Adapter(format!(
+            "rust-code-analysis-cli failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    parse_rust_code_analysis_output(
+        &String::from_utf8_lossy(&output.stdout),
+        &canonical_repo_root,
+        &context.execution.exec_cwd,
+    )
+    .map_err(CollectorError::Adapter)
+}
+
+fn rust_code_analysis_args(target: &Path) -> Vec<String> {
     let mut args = vec![
         String::from("--metrics"),
         String::from("--paths"),
@@ -227,33 +250,20 @@ fn run_rust_code_analysis(
     if target.is_dir() {
         args.push(String::from("--include"));
         args.push(String::from("*.rs"));
+        for directory in ADAPTER_KNOWN_OUTPUT_DIRECTORIES {
+            args.push(String::from("--exclude"));
+            args.push(format!("**/{directory}/**"));
+        }
     }
-
-    let output = run_command_for_context_structured(context, "rust-code-analysis-cli", &args)?;
-    if !output.status.success() {
-        return Err(CollectorError::Adapter(format!(
-            "rust-code-analysis-cli failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-
-    let canonical_repo_root = context
-        .repo_root
-        .canonicalize()
-        .unwrap_or_else(|_| context.repo_root.to_path_buf());
-    parse_rust_code_analysis_output(
-        &String::from_utf8_lossy(&output.stdout),
-        &canonical_repo_root,
-        &context.workdir,
-    )
-    .map_err(CollectorError::Adapter)
+    args
 }
+
+const ADAPTER_KNOWN_OUTPUT_DIRECTORIES: [&str; 3] = ["target", ".git", ".ayni"];
 
 fn parse_rust_code_analysis_output(
     stdout: &str,
     repo_root: &Path,
-    workdir: &Path,
+    execution_cwd: &Path,
 ) -> Result<Vec<FunctionMetric>, String> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
@@ -264,7 +274,7 @@ fn parse_rust_code_analysis_output(
 
     if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
         let mut metrics = Vec::new();
-        walk_metric_tree(&value, repo_root, workdir, None, &mut metrics);
+        walk_metric_tree(&value, repo_root, execution_cwd, None, &mut metrics);
         if metrics.is_empty() && !confirms_zero_functions(&value) {
             return Err(String::from(
                 "rust-code-analysis-cli output was valid JSON but did not contain function metrics",
@@ -286,7 +296,7 @@ fn parse_rust_code_analysis_output(
         })?;
         parsed_lines += 1;
         every_document_confirms_zero_functions &= confirms_zero_functions(&value);
-        walk_metric_tree(&value, repo_root, workdir, None, &mut metrics);
+        walk_metric_tree(&value, repo_root, execution_cwd, None, &mut metrics);
     }
 
     if parsed_lines == 0 {
@@ -340,7 +350,7 @@ fn collect_unit_function_counts(value: &Value, counts: &mut Vec<Option<f64>>) {
 fn walk_metric_tree(
     value: &Value,
     repo_root: &Path,
-    workdir: &Path,
+    execution_cwd: &Path,
     file_hint: Option<&str>,
     out: &mut Vec<FunctionMetric>,
 ) {
@@ -351,27 +361,34 @@ fn walk_metric_tree(
                 map.get("name")
                     .and_then(Value::as_str)
                     .filter(|name| name.contains('/') || name.ends_with(".rs"))
-                    .map(|path| repo_relative_metric_path(repo_root, workdir, path))
+                    .map(|path| repo_relative_metric_path(repo_root, execution_cwd, path))
             } else {
                 None
             };
+            if file_from_unit
+                .as_deref()
+                .is_some_and(is_adapter_known_output_path)
+            {
+                return;
+            }
             let effective_file = file_from_unit.as_deref().or(file_hint);
 
             if kind == Some("function")
-                && let Some(metric) = parse_function_metric(map, repo_root, workdir, effective_file)
+                && let Some(metric) =
+                    parse_function_metric(map, repo_root, execution_cwd, effective_file)
             {
                 out.push(metric);
             }
 
             if let Some(spaces) = map.get("spaces").and_then(Value::as_array) {
                 for child in spaces {
-                    walk_metric_tree(child, repo_root, workdir, effective_file, out);
+                    walk_metric_tree(child, repo_root, execution_cwd, effective_file, out);
                 }
             }
         }
         Value::Array(items) => {
             for item in items {
-                walk_metric_tree(item, repo_root, workdir, file_hint, out);
+                walk_metric_tree(item, repo_root, execution_cwd, file_hint, out);
             }
         }
         _ => {}
@@ -381,17 +398,20 @@ fn walk_metric_tree(
 fn parse_function_metric(
     map: &Map<String, Value>,
     repo_root: &Path,
-    workdir: &Path,
+    execution_cwd: &Path,
     file_fallback: Option<&str>,
 ) -> Option<FunctionMetric> {
     let metrics = map.get("metrics")?.as_object()?;
     let cyclomatic = metric_aggregate(metrics, &["cyclomatic", "cyclomatic_complexity"])?;
     let cognitive = metric_aggregate(metrics, &["cognitive", "cognitive_complexity"]);
     let file = metric_string(map, &["path", "file", "filepath"])
-        .map(|path| repo_relative_metric_path(repo_root, workdir, &path))
+        .map(|path| repo_relative_metric_path(repo_root, execution_cwd, &path))
         .or_else(|| {
-            file_fallback.map(|path| repo_relative_metric_path(repo_root, workdir, path))
+            file_fallback.map(|path| repo_relative_metric_path(repo_root, execution_cwd, path))
         })?;
+    if is_adapter_known_output_path(&file) {
+        return None;
+    }
     let function = metric_string(map, &["name", "function", "function_name"])?;
     let line = metric_u64(map, &["start_line", "line", "begin_line"]).unwrap_or(1);
     Some(FunctionMetric {
@@ -403,23 +423,55 @@ fn parse_function_metric(
     })
 }
 
-fn repo_relative_metric_path(repo_root: &Path, workdir: &Path, path: &str) -> String {
+fn repo_relative_metric_path(repo_root: &Path, execution_cwd: &Path, path: &str) -> String {
     let normalized = path.replace('\\', "/");
-    let candidate = Path::new(&normalized);
-    if candidate.is_absolute()
-        && let Ok(relative) = candidate.strip_prefix(repo_root)
+    let normalized = normalized.trim_start_matches("./");
+    let candidate = Path::new(normalized);
+    if candidate.is_absolute() {
+        return candidate.strip_prefix(repo_root).map_or_else(
+            |_| normalized.trim_start_matches("./").to_string(),
+            display_path,
+        );
+    }
+
+    // rust-code-analysis reports relative paths from the command's working
+    // directory. Some versions also emit repository-relative paths, so keep a
+    // path that already starts with the execution-cwd prefix instead of
+    // duplicating that prefix.
+    if let Ok(cwd_relative) = execution_cwd.strip_prefix(repo_root)
+        && !cwd_relative.as_os_str().is_empty()
+        && candidate.starts_with(cwd_relative)
     {
-        return relative.to_string_lossy().replace('\\', "/");
+        return display_path(candidate);
     }
-    let from_workdir = workdir.join(candidate);
-    if let Ok(relative) = from_workdir.strip_prefix(repo_root) {
-        return relative.to_string_lossy().replace('\\', "/");
-    }
-    let from_repo = repo_root.join(candidate);
-    if let Ok(relative) = from_repo.strip_prefix(repo_root) {
-        return relative.to_string_lossy().replace('\\', "/");
-    }
-    normalized.trim_start_matches("./").to_string()
+
+    let from_execution_cwd = execution_cwd.join(candidate);
+    from_execution_cwd.strip_prefix(repo_root).map_or_else(
+        |_| normalized.trim_start_matches("./").to_string(),
+        display_path,
+    )
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn is_adapter_known_output_target(repo_root: &Path, target: &Path) -> bool {
+    target.strip_prefix(repo_root).map_or_else(
+        |_| is_adapter_known_output_path(&display_path(target)),
+        |relative| is_adapter_known_output_path(&display_path(relative)),
+    )
+}
+
+fn is_adapter_known_output_path(path: &str) -> bool {
+    Path::new(path).components().any(|component| {
+        let std::path::Component::Normal(name) = component else {
+            return false;
+        };
+        ADAPTER_KNOWN_OUTPUT_DIRECTORIES
+            .iter()
+            .any(|directory| name == std::ffi::OsStr::new(directory))
+    })
 }
 
 fn metric_aggregate(map: &Map<String, Value>, keys: &[&str]) -> Option<f64> {
@@ -491,8 +543,9 @@ fn level_rank(level: Level) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        count_level, parse_function_metric, parse_rust_code_analysis_output,
-        resolve_analysis_target_with, threshold_level,
+        count_level, is_adapter_known_output_target, parse_function_metric,
+        parse_rust_code_analysis_output, resolve_analysis_target_with, rust_code_analysis_args,
+        threshold_level,
     };
     use ayni_core::{AyniPolicy, ExecutionResolution, Level, RunContext, Scope};
     use serde_json::json;
@@ -622,6 +675,131 @@ mod tests {
         assert_eq!(metric.line, 42);
         assert_eq!(metric.cyclomatic, 12.0);
         assert_eq!(metric.cognitive, Some(7.0));
+    }
+
+    #[test]
+    fn normalizes_paths_from_workspace_execution_cwd_for_a_nested_configured_root() {
+        let temp = TempDir::new().expect("tempdir");
+        let root = temp.path();
+        let execution_cwd = root;
+        let payload = json!([
+            {
+                "kind": "unit",
+                "name": "src/relative_to_execution_cwd.rs",
+                "spaces": [{
+                    "kind": "function",
+                    "name": "relative_to_execution_cwd",
+                    "start_line": 4,
+                    "metrics": { "cyclomatic": { "max": 3.0 } }
+                }]
+            },
+            {
+                "kind": "unit",
+                "name": "crates/api/src/already_repo_relative.rs",
+                "spaces": [{
+                    "kind": "function",
+                    "name": "already_repo_relative",
+                    "start_line": 8,
+                    "metrics": { "cyclomatic": { "max": 4.0 } }
+                }]
+            },
+            {
+                "kind": "unit",
+                "name": "./crates/api/src/dot_repo_relative.rs",
+                "spaces": [{
+                    "kind": "function",
+                    "name": "dot_repo_relative",
+                    "start_line": 12,
+                    "metrics": { "cyclomatic": { "max": 5.0 } }
+                }]
+            }
+        ]);
+
+        let metrics = parse_rust_code_analysis_output(&payload.to_string(), root, execution_cwd)
+            .expect("metrics");
+
+        assert_eq!(metrics.len(), 3);
+        assert_eq!(metrics[0].file, "src/relative_to_execution_cwd.rs");
+        assert_eq!(metrics[1].file, "crates/api/src/already_repo_relative.rs");
+        assert_eq!(metrics[2].file, "crates/api/src/dot_repo_relative.rs");
+    }
+
+    #[test]
+    fn skips_adapter_known_generated_output_paths() {
+        let temp = TempDir::new().expect("tempdir");
+        let root = temp.path();
+        let payload = json!([
+            {
+                "kind": "unit",
+                "name": "src/kept.rs",
+                "spaces": [{
+                    "kind": "function",
+                    "name": "kept",
+                    "metrics": { "cyclomatic": { "max": 3.0 } }
+                }]
+            },
+            {
+                "kind": "unit",
+                "name": "target/generated.rs",
+                "spaces": [{
+                    "kind": "function",
+                    "name": "generated",
+                    "metrics": { "cyclomatic": { "max": 30.0 } }
+                }]
+            },
+            {
+                "kind": "unit",
+                "name": ".git/hooks/ignored.rs",
+                "spaces": [{
+                    "kind": "function",
+                    "name": "git_hook",
+                    "metrics": { "cyclomatic": { "max": 30.0 } }
+                }]
+            },
+            {
+                "kind": "unit",
+                "name": ".ayni/cache/ignored.rs",
+                "spaces": [{
+                    "kind": "function",
+                    "name": "artifact",
+                    "metrics": { "cyclomatic": { "max": 30.0 } }
+                }]
+            }
+        ]);
+
+        let metrics =
+            parse_rust_code_analysis_output(&payload.to_string(), root, root).expect("metrics");
+
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].file, "src/kept.rs");
+    }
+
+    #[test]
+    fn does_not_analyze_an_adapter_known_output_target() {
+        let temp = TempDir::new().expect("tempdir");
+        let root = temp.path();
+
+        assert!(is_adapter_known_output_target(
+            root,
+            &root.join("target/generated.rs")
+        ));
+        assert!(!is_adapter_known_output_target(
+            root,
+            &root.join("src/lib.rs")
+        ));
+    }
+
+    #[test]
+    fn excludes_adapter_known_outputs_from_directory_analysis() {
+        let temp = TempDir::new().expect("tempdir");
+        let args = rust_code_analysis_args(temp.path());
+
+        for pattern in ["**/target/**", "**/.git/**", "**/.ayni/**"] {
+            assert!(
+                args.windows(2)
+                    .any(|pair| { pair[0] == "--exclude" && pair[1] == pattern })
+            );
+        }
     }
 
     #[test]

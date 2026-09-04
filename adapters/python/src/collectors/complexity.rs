@@ -5,7 +5,7 @@ use super::util::{
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_core::{
     Budget, ComplexityBudget, ComplexityOffender, ComplexityResult, FloatThresholdBudget, Language,
-    Level, Offenders, RunContext, Scope, SignalKind, SignalResult, SignalRow, classify_maximum,
+    Level, Offenders, RunContext, SignalKind, SignalResult, SignalRow, classify_maximum,
 };
 use serde_json::Value;
 use std::fs;
@@ -102,12 +102,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     Ok(SignalRow {
         kind: SignalKind::Complexity,
         language: Language::Python,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: fail_count == 0,
         result: SignalResult::Complexity(ComplexityResult {
             engine: String::from("complexipy"),
@@ -166,12 +161,7 @@ fn error_row(
     SignalRow {
         kind: SignalKind::Complexity,
         language: Language::Python,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: false,
         result: SignalResult::Complexity(ComplexityResult {
             engine,

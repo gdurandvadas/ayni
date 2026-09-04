@@ -24,6 +24,56 @@ gradle.projectsEvaluated {
 }
 "#;
 
+pub fn combined_gradle_command(context: &RunContext, coverage_task: &str) -> (String, Vec<String>) {
+    let default_args = || {
+        managed_gradle_args(
+            context,
+            SignalKind::Coverage,
+            vec![
+                String::from("test"),
+                coverage_task.to_string(),
+                String::from("--console=plain"),
+            ],
+        )
+    };
+    if let Some(override_cmd) = context
+        .policy
+        .tool_override_for(Language::Kotlin, SignalKind::Coverage)
+    {
+        // Explicit arguments attest that the wrapper itself runs both tasks. Keep
+        // its task arguments intact while still adding Ayni's managed Gradle
+        // isolation flags when managed execution is active.
+        let args = if override_cmd.args.is_empty() {
+            default_args()
+        } else {
+            managed_gradle_args(context, SignalKind::Coverage, override_cmd.args.clone())
+        };
+        return (override_cmd.command.clone(), args);
+    }
+    (context.execution.runner.clone(), default_args())
+}
+
+pub fn prepare_combined_gradle_execution(context: &RunContext) -> Result<(), String> {
+    prepare_gradle_execution(context, SignalKind::Coverage)?;
+    if managed_output_root(context).is_none() {
+        for (segments, evidence) in [
+            (&["build", "test-results", "test"][..], "test"),
+            (&["build", "reports", "kover"][..], "Kover coverage"),
+            (&["build", "reports", "jacoco"][..], "JaCoCo coverage"),
+        ] {
+            for report_dir in find_report_dirs(&context.workdir, segments) {
+                fs::remove_dir_all(&report_dir).map_err(|error| {
+                    format!(
+                        "failed to clear stale Kotlin {evidence} reports {}: {error}",
+                        report_dir.display()
+                    )
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn gradle_command(
     context: &RunContext,
     kind: SignalKind,
@@ -166,7 +216,13 @@ pub fn resolve_gradle_task(
             String::from("--quiet"),
         ],
     );
-    let output = run_command_for_context_structured(context, &context.execution.runner, &args)?;
+    let program = context
+        .policy
+        .tool_override_for(Language::Kotlin, SignalKind::Coverage)
+        .map_or(context.execution.runner.as_str(), |command| {
+            command.command.as_str()
+        });
+    let output = run_command_for_context_structured(context, program, &args)?;
     if !output.status.success() {
         return Ok(None);
     }
@@ -252,6 +308,16 @@ mod managed_tests {
     }
 
     #[test]
+    fn default_coverage_commands_schedule_test_before_each_report_task() {
+        let context = context(false);
+        for task in ["koverXmlReport", "jacocoTestReport"] {
+            let (program, args) = combined_gradle_command(&context, task);
+            assert_eq!(program, "./gradlew");
+            assert_eq!(args, ["test", task, "--console=plain"]);
+        }
+    }
+
+    #[test]
     fn host_test_preparation_clears_only_gradle_test_reports() {
         let repo = TempDir::new().expect("repo");
         let report_dir = repo.path().join("module/build/test-results/test");
@@ -268,6 +334,29 @@ mod managed_tests {
 
         assert!(!report_dir.exists());
         assert!(repo.path().join("fixture.xml").is_file());
+    }
+
+    #[test]
+    fn combined_host_preparation_clears_test_and_coverage_reports() {
+        let repo = TempDir::new().expect("repo");
+        let test_report = repo.path().join("module/build/test-results/test/stale.xml");
+        let kover_report = repo.path().join("module/build/reports/kover/stale.xml");
+        let jacoco_report = repo.path().join("module/build/reports/jacoco/stale.xml");
+        for report in [&test_report, &kover_report, &jacoco_report] {
+            fs::create_dir_all(report.parent().expect("report parent")).expect("report dir");
+            fs::write(report, "stale").expect("stale report");
+        }
+        let mut context = context(false);
+        context.repo_root = repo.path().to_path_buf();
+        context.target_root = repo.path().to_path_buf();
+        context.workdir = repo.path().to_path_buf();
+        context.execution.exec_cwd = repo.path().to_path_buf();
+
+        prepare_combined_gradle_execution(&context).expect("prepare combined output");
+
+        assert!(!test_report.exists());
+        assert!(!kover_report.exists());
+        assert!(!jacoco_report.exists());
     }
 
     #[test]

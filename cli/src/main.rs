@@ -12,6 +12,7 @@ mod discovery;
 mod environment;
 mod environment_backend;
 mod environment_lock;
+mod host_prerequisites;
 mod impact;
 mod init;
 mod policy;

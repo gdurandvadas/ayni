@@ -4,7 +4,7 @@ use crate::exec::ExecutionError;
 use crate::failure::command_failure_from_execution_error;
 use ayni_core::{
     AdapterError, Budget, ComplexityBudget, ComplexityResult, CoverageBudget, CoverageResult,
-    DepsBudget, DepsResult, Language, MutationBudget, MutationResult, Offenders, RunContext, Scope,
+    DepsBudget, DepsResult, Language, MutationBudget, MutationResult, Offenders, RunContext,
     SignalKind, SignalResult, SignalRow, SizeBudget, SizeResult, TestBudget, TestResult,
 };
 
@@ -30,6 +30,77 @@ impl From<Box<ExecutionError>> for CollectorError {
 
 /// Internal result type for collectors that opt into structured runner errors.
 pub type CollectorResult = Result<SignalRow, CollectorError>;
+
+/// Internal result for a single execution that emits both test and coverage evidence.
+pub type CoverageBackedTestResult = Result<(SignalRow, SignalRow), CollectorError>;
+
+/// Finishes coverage-backed collection at an adapter dispatch boundary.
+/// Runner failures are projected into both typed rows because neither signal
+/// received complete evidence from the shared execution.
+pub fn finish_coverage_backed_test(
+    language: Language,
+    context: &RunContext,
+    result: CoverageBackedTestResult,
+) -> Result<(SignalRow, SignalRow), AdapterError> {
+    match result {
+        Ok((mut test, mut coverage)) => {
+            enforce_coverage_backed_evidence(context, &mut test, &mut coverage);
+            Ok((test, coverage))
+        }
+        Err(CollectorError::Execution(error)) => Ok((
+            execution_error_row(language, SignalKind::Test, context, (*error).clone()),
+            execution_error_row(language, SignalKind::Coverage, context, *error),
+        )),
+        Err(CollectorError::Adapter(message)) => Err(AdapterError::new(language, message)),
+    }
+}
+
+fn enforce_coverage_backed_evidence(
+    context: &RunContext,
+    test_row: &mut SignalRow,
+    coverage_row: &mut SignalRow,
+) {
+    let coverage_complete = matches!(
+        &coverage_row.result,
+        SignalResult::Coverage(result)
+            if result.status == "ok"
+                && result.failure.is_none()
+                && result.headline_percent().is_some_and(f64::is_finite)
+    );
+    if !coverage_complete
+        && test_row.pass
+        && let SignalResult::Test(result) = &mut test_row.result
+    {
+        test_row.pass = false;
+        result.failure = Some(ayni_core::CommandFailure {
+            category: String::from("repo_setup_issue"),
+            classification: String::from("incomplete_combined_evidence"),
+            command: result.runner.clone(),
+            cwd: context.execution.exec_cwd.display().to_string(),
+            exit_code: None,
+            message: String::from(
+                "coverage-backed execution did not produce complete coverage evidence; test evidence was rejected",
+            ),
+        });
+    }
+    if !test_row.pass
+        && coverage_row.pass
+        && let SignalResult::Coverage(result) = &mut coverage_row.result
+    {
+        coverage_row.pass = false;
+        result.status = String::from("error");
+        result.failure = Some(ayni_core::CommandFailure {
+            category: String::from("repo_code_issue"),
+            classification: String::from("incomplete_combined_evidence"),
+            command: result.engine.clone(),
+            cwd: context.execution.exec_cwd.display().to_string(),
+            exit_code: None,
+            message: String::from(
+                "coverage-backed execution did not produce passing, complete test evidence",
+            ),
+        });
+    }
+}
 
 /// Finishes collection at an adapter dispatch boundary.
 ///
@@ -58,7 +129,7 @@ fn execution_error_row(
     error: ExecutionError,
 ) -> SignalRow {
     let failure = command_failure_from_execution_error(kind, &error);
-    let scope = scope(context);
+    let scope = context.scope.clone();
     match kind {
         SignalKind::Test => SignalRow {
             kind,
@@ -155,15 +226,6 @@ fn execution_error_row(
             budget: Budget::Mutation(MutationBudget::default()),
             offenders: Offenders::Mutation(Vec::new()),
         },
-    }
-}
-
-fn scope(context: &RunContext) -> Scope {
-    Scope {
-        workspace_root: context.scope.workspace_root.clone(),
-        path: context.scope.path.clone(),
-        package: context.scope.package.clone(),
-        file: context.scope.file.clone(),
     }
 }
 

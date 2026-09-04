@@ -62,6 +62,26 @@ as input, whereas `env shell` and `env run` intentionally mount the checkout
 read-write. Environment plan, lock, and image schema versions are listed in the
 managed environment guide and are independent of the signal-artifact schema.
 
+## Host prerequisite preflight
+
+Explicit host execution validates the selected physical command topology before
+any signal collector starts. Adapters declare executable entry points used by
+each signal, including resolved package managers, wrappers, and executable
+subcommand dispatch. Bare commands
+use `PATH`, absolute commands are checked directly, and relative commands are
+resolved from `exec_cwd`; Windows executable-extension lookup follows
+`PATHEXT`. Unqualified repository-wide `[environment.tools]` keys are also
+checked, while qualified Mise provider coordinates are not guessed as binary
+names.
+
+The check is topology-aware: when one coverage execution supplies both test and
+coverage evidence, the unused ordinary test command is not required. Preflight
+does not interpret arbitrary command arguments or verify package imports and
+plugins that execute behind a valid entry point. A missing executable aborts
+before scheduling and identifies its language root and signal. Repository
+`check` persists that failure as current incomplete resolution evidence in
+`.ayni/last/signals.json`; no signal row is fabricated.
+
 ## Failure Categories
 
 Tool failures should become failed signal rows when a valid row can be emitted.

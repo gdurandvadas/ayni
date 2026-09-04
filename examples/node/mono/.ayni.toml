@@ -20,6 +20,9 @@ offenders_limit = 8
 [node]
 roots = ["."]
 
+[node.tooling]
+coverage_satisfies_test = true
+
 [node.size]
 "**/*.ts" = { warn = 120, fail = 200, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }
 "**/*.tsx" = { warn = 120, fail = 200, exclude = ["node_modules/**", "dist/**", "coverage/**", "build/**", ".git/**", ".ayni/**"] }

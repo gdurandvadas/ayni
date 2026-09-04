@@ -91,12 +91,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
     Ok(SignalRow {
         kind: SignalKind::Deps,
         language: Language::Go,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: offenders.is_empty(),
         result: SignalResult::Deps(DepsResult {
             crate_count: visible.len() as u64,
@@ -115,12 +110,7 @@ fn error_row(context: &RunContext, failure: ayni_core::CommandFailure) -> Signal
     SignalRow {
         kind: SignalKind::Deps,
         language: Language::Go,
-        scope: Scope {
-            workspace_root: context.scope.workspace_root.clone(),
-            path: context.scope.path.clone(),
-            package: context.scope.package.clone(),
-            file: context.scope.file.clone(),
-        },
+        scope: context.scope.clone(),
         pass: false,
         result: SignalResult::Deps(DepsResult {
             crate_count: 0,

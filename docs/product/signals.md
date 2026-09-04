@@ -2,7 +2,9 @@
 
 A signal is a normalized quality measurement, not just a shell command. The
 language adapter chooses and runs ecosystem-specific tooling; Ayni parses the
-result into common evidence and evaluates it against `.ayni.toml`.
+result into common evidence and evaluates it against `.ayni.toml`. One physical
+tool execution may provide more than one signal only when the adapter can parse
+complete independent evidence for every emitted row.
 
 ## Signals, policy, and execution
 

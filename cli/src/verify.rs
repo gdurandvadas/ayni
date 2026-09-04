@@ -40,6 +40,21 @@ pub(crate) fn run(mut request: Request) -> Result<RunOutcome, Error> {
     let (workspace_root, policy) = prepare_request(&mut request).map_err(Error::input)?;
     let (registry, mut planning) =
         plan_verification(&workspace_root, &policy, &request).map_err(Error::input)?;
+    let host_checks = planning.targets.iter().map(|target| {
+        let adapter = registry
+            .adapters()
+            .iter()
+            .find(|adapter| adapter.language() == target.language)
+            .expect("planned target adapter");
+        crate::host_prerequisites::SelectedCheck {
+            language: target.language,
+            signal: request.kind,
+            context: &target.run_context,
+            collector: adapter.collector(),
+        }
+    });
+    crate::host_prerequisites::validate(&workspace_root, &policy, host_checks)
+        .map_err(Error::execution)?;
     for target in &mut planning.targets {
         target.run_context.cancellation = signal_cancellation.token();
     }

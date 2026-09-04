@@ -11,7 +11,7 @@ and tool command overrides.
 Use `ayni contract show` to print a concise, deterministic projection of the
 validated configured policy. Pass `--config <path>` to select a policy other
 than `./.ayni.toml`, or `--output json` for a machine-readable, deterministic
-projection. JSON output has a `projection_version` field (currently `0.3.0`),
+projection. JSON output has a `projection_version` field (currently `0.4.0`),
 ordered `languages` and `signals` arrays, and structured `warnings`. The
 command shows every signal's enabled state for each enabled language,
 normalized roots, configured thresholds, size rules,
@@ -127,6 +127,26 @@ bound `env build` or the container engine itself.
 Environment provisioning is open-ended; quality analysis remains available for
 the languages represented by registered Ayni adapters. A generic Mise tool does
 not imply that Ayni provides quality signals for that language.
+
+For explicit host quality execution (`check --host`, `verify --host`, and
+`impact run --host`), Ayni preflights every executable entry point in the selected
+adapter execution topology before any collector starts. This includes directly
+launched commands and executable dispatch such as Cargo subcommands,
+adapter-selected runners and tools, selected command overrides, and every
+unqualified `environment.tools` key (for example `protoc`). Bare commands are
+resolved through the host `PATH`; absolute commands are checked directly; and
+relative commands such as `./gradlew` or `tools/check` are resolved from the
+planned execution working directory. Windows `PATHEXT` command resolution is
+honored. Missing executables name the affected language root and signal and
+recommend rerunning without `--host` to use the locked managed environment.
+When coverage-backed test reuse is active, the intentionally unused ordinary
+test command is not a prerequisite.
+
+Qualified Mise coordinates such as `ubi:owner/tool` or `npm:package` identify
+installation sources, not executable names, so Ayni does not guess a host
+binary for them. Preflight validates executable entry points, not arbitrary
+arguments or package/plugin imports behind those entry points; adapters remain
+responsible for classifying setup failures discovered by the tool itself.
 
 ## Excluding paths (size signal)
 
@@ -263,13 +283,17 @@ args = ["test"]
 command = "go"
 args = ["test", "./..."]
 
+# Available for every supported adapter. Opt in only when the coverage
+# command runs the complete suite and emits both native evidence types.
+[node.tooling]
+coverage_satisfies_test = true
+
 [node.tooling.test]
 command = "pnpm"
 args = ["exec", "vitest", "run", "--reporter=json", "--passWithNoTests"]
 
 [python.tooling.test]
-command = "uv"
-args = ["run", "pytest", "--json-report", "--json-report-file", ".ayni/pytest-report.json"]
+command = "pytest"
 ```
 
 Notes:
@@ -277,6 +301,17 @@ Notes:
 - `command` is required inside each override table and must be non-empty; an empty table is invalid policy rather than a command with an empty executable.
 - `args` is optional; when omitted, Ayni uses signal-specific defaults for that language.
 - Overrides are command execution overrides only; result parsing still expects the signal collector’s native output shape.
+- For any supported language, set `coverage_satisfies_test = true` in its
+  `tooling` table only when the coverage command executes the complete test
+  suite. When both checks are enabled, repository `check` uses one test-suite
+  execution and emits separate typed test and coverage rows instead of first
+  running the ordinary test command. Rust requires Cargo test summaries plus
+  cargo-llvm-cov JSON; Node requires Vitest JSON plus a new coverage summary;
+  Go requires `go test -json` events plus a coverage profile parsed by
+  `go tool cover`; Python requires pytest-json-report and pytest-cov JSON; and
+  Kotlin requires JUnit XML plus Kover or JaCoCo XML from one test-bearing Gradle invocation.
+  Missing either evidence type fails both rows closed. The default is `false`;
+  focused `verify` and impact scopes continue using signal-specific execution.
 - Mutation is unavailable for Rust, Node, and Go. Those adapters reject the
   signal before tool invocation even if a `tooling.mutation` table is present.
 - Managed execution accepts overrides after the adapter has contributed and

@@ -219,7 +219,7 @@ different setup.
 ### Signal collectors
 
 `collector() -> &dyn SignalCollector` provides the adapter's typed collectors.
-Each collector module owns one canonical `SignalKind` and returns one
+Normally each collector module owns one canonical `SignalKind` and returns one
 `SignalRow` containing:
 
 - the adapter language;
@@ -233,11 +233,29 @@ Adapters translate tool-specific output at this boundary. Do not expose raw
 language-specific payloads as top-level artifact fields. Follow the [signal
 contract](/product/signals) for all shared types.
 
+Implement `required_host_executables` for every signal that launches a process
+in explicit host mode. Return only actual executable entry points: selected
+overrides when present, otherwise the adapter-resolved runner, directly launched
+analysis tools, and executable subcommands dispatched by a runner. Relative commands are interpreted from the
+planned `exec_cwd`. Do not expose package imports, plugins, or provider
+coordinates as executables merely because they appear in a catalog; the CLI
+must not infer language-specific command behavior.
+
 For coverage, populate `CoverageResult.percent` with the headline 0–100
 percentage when available and use `line_percent` and `branch_percent` for
 available breakdowns. Evaluate every configured threshold independently.
 Configured metrics require finite, parseable evidence; never substitute another
 metric or fabricate zero for missing evidence.
+
+A collector may opt into `supports_coverage_backed_test` and
+`collect_coverage_backed_test` only when one physical coverage execution can
+produce complete native evidence for both canonical signals. Return independent
+`test` and `coverage` rows in that order, preserve test counts and failures, and
+use the common finish helper so execution failure is projected to both rows.
+Missing either evidence type must fail the shared execution closed. Keep this
+optimization disabled for custom commands unless policy explicitly attests that
+the coverage command runs the complete required suite; a coverage percentage or
+zero exit status alone is never test evidence.
 
 ### Focused verification and findings
 

@@ -69,6 +69,14 @@ coverage in `[python.coverage]`, and forbidden edges in
 `[python.deps.forbidden]`. Command overrides are optional in
 `[python.tooling.test]`, `[python.tooling.coverage]`, and
 `[python.tooling.mutation]`; each override requires `command` and may set `args`.
+With both signals enabled, `[python.tooling].coverage_satisfies_test = true`
+opts repository `check` into one pytest execution that emits both the
+pytest-json-report test artifact and pytest-cov coverage JSON. A coverage
+command with omitted arguments receives both Ayni-owned report paths. Explicit
+arguments are an attestation that the command runs the complete suite and writes
+both report formats to those canonical `.ayni/work/python/<root-slug>/` paths.
+Missing either report, or malformed evidence in either report, fails both rows
+closed.
 
 Size requires a budget entry and complexity requires `fn_cognitive`; either
 missing value produces a clear collector error. Coverage thresholds and
@@ -90,9 +98,8 @@ enabled = ["python"]
 [python]
 roots = ["."]
 
-[python.tooling.test]
-command = "uv"
-args = ["run", "pytest", "--json-report", "--json-report-file", ".ayni/pytest-report.json"]
+[python.tooling]
+coverage_satisfies_test = true
 
 [python.size]
 "**/*.py" = { warn = 400, fail = 800, exclude = [".venv/**", "venv/**", "__pycache__/**", ".git/**", ".ayni/**"] }

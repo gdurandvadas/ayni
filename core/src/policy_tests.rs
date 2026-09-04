@@ -121,6 +121,30 @@ args = ["exec", "stryker", "run"]
 }
 
 #[test]
+fn coverage_backed_test_attestation_parses_for_every_language_and_defaults_off() {
+    let policy = AyniPolicy::parse(
+        r#"
+[languages]
+enabled = ["rust", "go", "node", "python", "kotlin"]
+[rust.tooling]
+coverage_satisfies_test = true
+[go.tooling]
+coverage_satisfies_test = true
+[python.tooling]
+coverage_satisfies_test = true
+[kotlin.tooling]
+coverage_satisfies_test = true
+"#,
+    )
+    .expect("policy");
+    assert!(policy.rust.tooling.coverage_satisfies_test);
+    assert!(policy.go.tooling.coverage_satisfies_test);
+    assert!(!policy.node.tooling.coverage_satisfies_test);
+    assert!(policy.python.tooling.coverage_satisfies_test);
+    assert!(policy.kotlin.tooling.coverage_satisfies_test);
+}
+
+#[test]
 fn repository_environment_tools_packages_and_docker_capabilities_parse() {
     let document = r#"
 [languages]
