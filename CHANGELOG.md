@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.4](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.3...ayni-v0.11.4) (2026-09-04)
+
+
+### Bug Fixes
+
+* **check:** reuse coverage tests and preflight host tools ([#95](https://github.com/gdurandvadas/ayni/issues/95)) ([ec9112f](https://github.com/gdurandvadas/ayni/commit/ec9112f569cecb1d7fbd8aba68b86fdb62357145))
+
 ## [0.11.3](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.2...ayni-v0.11.3) (2026-09-02)
 
 
