@@ -50,6 +50,20 @@ Everything under a language key uses normal TOML **single-bracket** tables and i
 
 ## Managed repository environment
 
+Signal-tool ownership defaults to `project`: native project declarations and
+locks remain authoritative. It can be written explicitly as:
+
+```toml
+[environment.signal_tools]
+ownership = "project"
+```
+
+The core ownership contract also recognizes `ayni` for the upcoming tooling
+reconciliation capability. It is reserved in this milestone: `env show` and
+`env lock` reject Ayni ownership until reconciliation is implemented. There is
+no `tools reconcile` command yet, and `init` keeps its existing behavior. See
+the [reconciliation implementation contract](../contributing/tooling-reconciliation.md).
+
 Language adapters contribute the runtimes, package managers, and signal tools
 needed for their configured quality checks. Repositories may supplement that
 inferred plan with tools for any ecosystem supported by Mise and packages from

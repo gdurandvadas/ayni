@@ -132,10 +132,19 @@ The lock intentionally omits credentials, host-specific paths, arbitrary system
 commands, and checkout-mutating instructions. Equivalent inputs produce stable
 lock output; a failed resolution preserves the previous lock.
 
-The current environment plan schema is `0.3.0`, the committed environment lock
-schema is `0.5.0`, and the internal OCI image-label schema is `0.5.0`. These are
+The current environment plan schema is `0.4.0`, the committed environment lock
+schema is `0.6.0`, and the internal OCI image-label schema is `0.5.0`. These are
 separate from the current signal-artifact schema `0.4.0` (schema v4); consumers
 must not infer one version from another.
+
+Plan `0.4.0` and lock `0.6.0` require `version_authority` on every signal tool.
+It records whether the adapter baseline, native project declarations and locks,
+explicit lock-time resolution, or the toolchain selects the version. Resolution
+preserves this authority even when the evidence source changes from a manifest
+to a native lock. Authority participates in lock fingerprints and staleness
+checks. Older plan and lock schemas are rejected; regenerate `.ayni.lock` with
+`env lock` and rebuild the environment after upgrading. The image-label and
+signal-artifact schemas are unchanged.
 
 By default, locking asks Docker Buildx for the immutable digest of Ayni's
 published environment base. An exact alternative can be supplied explicitly:

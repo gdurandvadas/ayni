@@ -241,3 +241,32 @@ fn kotlin_environment_adapter_plans_jdk_wrapper_and_locked_gradle_inputs() {
     assert_eq!(plan["targets"][0]["runtimes"][0]["runtime"], "java");
     assert_eq!(plan["targets"][0]["package_manager"]["family"], "gradle");
 }
+
+#[test]
+fn ayni_ownership_is_reserved_until_reconciliation_is_available() {
+    let root = TempDir::new().unwrap();
+    let config = "[environment.signal_tools]\nownership = 'ayni'\n";
+    fs::write(root.path().join(".ayni.toml"), config).unwrap();
+    fs::write(root.path().join(".ayni.lock"), "existing lock").unwrap();
+    for command in ["show", "lock"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_ayni"))
+            .args(["env", command, "--repo-root"])
+            .arg(root.path())
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("Ayni-owned signal tooling is not available yet")
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join(".ayni.lock")).unwrap(),
+            "existing lock"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join(".ayni.toml")).unwrap(),
+            config
+        );
+        assert!(!root.path().join(".ayni").exists());
+    }
+}

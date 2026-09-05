@@ -216,6 +216,19 @@ an isolated staged workspace. Repositories with unsupported or ambiguous native
 metadata must produce explicit conflicts instead of silently falling back to a
 different setup.
 
+### Tooling reconciliation contracts
+
+`tooling_reconciliation_capability()` optionally exposes a read-only
+`ToolingReconciliationCapability`. Call it through `LanguageAdapter::plan_tooling`
+so capability language, target identity, mutation ownership, preimages, and
+allowlisted outputs are validated. Planning must not run package managers or
+mutate files. Custom-command signals are excluded through the request's
+`default_tool_signals`; tools cannot claim those signals for reconciliation.
+
+This is currently a core foundation only. Do not advertise reconciliation
+support until adapter planning and the staged apply executor are implemented.
+See the [milestone contract](tooling-reconciliation.md).
+
 ### Signal collectors
 
 `collector() -> &dyn SignalCollector` provides the adapter's typed collectors.

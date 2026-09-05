@@ -134,6 +134,7 @@ pub fn plan_matches_lock(plan: &EnvironmentPlan, lock: &EnvironmentLock) -> bool
                         left.tool == right.tool
                             && left.provider == right.provider
                             && left.scope == right.scope
+                            && left.version_authority == right.version_authority
                             && left.signals == right.signals
                     })
                 && plan.dependency_locks.len() == locked.dependency_locks.len()

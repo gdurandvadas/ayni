@@ -740,6 +740,7 @@ fn gradle_plugin_tool(
         )));
     }
     Ok(SignalToolRequirement {
+        version_authority: ayni_core::ToolVersionAuthority::ProjectLocked,
         tool: tool.into(),
         version: VersionRequirement::exact(version).map_err(error)?,
         provider: "gradle-plugin".into(),

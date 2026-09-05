@@ -329,6 +329,35 @@ pub trait LanguageAdapter: Send + Sync {
         Ok(contribution)
     }
 
+    /// Optional read-only native signal-tool reconciliation capability.
+    fn tooling_reconciliation_capability(
+        &self,
+    ) -> Option<&dyn crate::ToolingReconciliationCapability> {
+        None
+    }
+
+    fn plan_tooling(
+        &self,
+        request: &crate::ToolingRequest,
+    ) -> Result<crate::ToolingPlan, AdapterError> {
+        let capability = self.tooling_reconciliation_capability().ok_or_else(|| {
+            AdapterError::new(
+                self.language(),
+                "tooling reconciliation capability is unsupported",
+            )
+        })?;
+        if request.target().language != self.language() || capability.language() != self.language()
+        {
+            return Err(AdapterError::new(
+                self.language(),
+                "tooling request language does not match adapter capability",
+            ));
+        }
+        let mut plan = capability.plan(request)?;
+        plan.normalize_and_validate(request)?;
+        Ok(plan)
+    }
+
     /// Optional environment-planning capability. Existing quality adapters
     /// remain valid while environment discovery is implemented incrementally.
     fn environment_capability(&self) -> Option<&dyn crate::EnvironmentCapability> {

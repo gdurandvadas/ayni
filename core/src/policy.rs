@@ -85,9 +85,17 @@ pub struct DockerEnvironmentPolicy {
     pub network: NetworkAccess,
 }
 
+/// Opt-in ownership contract. Project remains the compatibility default.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct SignalToolsEnvironmentPolicy {
+    pub ownership: crate::SignalToolOwnership,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct EnvironmentPolicy {
+    pub signal_tools: SignalToolsEnvironmentPolicy,
     /// Exact repository-wide tools installed by Mise in addition to
     /// adapter-inferred language and quality tooling.
     pub tools: BTreeMap<String, String>,

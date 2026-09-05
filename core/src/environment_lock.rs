@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 /// Version of the committed, deterministic environment lock document.
-pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.5.0";
+pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.6.0";
 
 /// Immutable OCI base selected by the environment backend. The reference is
 /// human-readable while the digest is the authoritative image identity.
@@ -86,6 +86,7 @@ pub struct LockedPackageManager {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LockedSignalTool {
+    pub version_authority: crate::ToolVersionAuthority,
     pub tool: String,
     pub version: String,
     pub provider: String,
@@ -267,6 +268,7 @@ impl EnvironmentLock {
                     .signal_tools
                     .iter()
                     .map(|tool| LockedSignalTool {
+                        version_authority: tool.version_authority,
                         tool: tool.tool.clone(),
                         version: exact_version(&tool.version)
                             .expect("resolved plans have exact versions"),
@@ -642,6 +644,9 @@ fn normalize_locked_manager(
 
 fn normalize_locked_tools(tools: &mut Vec<LockedSignalTool>) -> Result<(), EnvironmentPlanError> {
     for tool in tools.iter_mut() {
+        tool.version_authority
+            .validate(tool.scope, true)
+            .map_err(EnvironmentPlanError::InvalidToolVersionAuthority)?;
         tool.tool = lock_required_label("signal tool", tool.tool.clone())?;
         tool.version = normalize_exact_lock_version("signal-tool version", tool.version.clone())?;
         tool.provider = lock_required_label("signal-tool provider", tool.provider.clone())?;
@@ -816,6 +821,30 @@ mod tests {
             schema_version: None,
         })
         .expect("valid lock")
+    }
+
+    #[test]
+    fn authority_is_fingerprinted_and_old_schema_requires_refresh() {
+        let mut target = target(Language::Rust, ".");
+        target.signal_tools.push(LockedSignalTool {
+            tool: "test-tool".into(),
+            version: "1.2.3".into(),
+            version_authority: crate::ToolVersionAuthority::AdapterPinned,
+            provider: "cargo-install".into(),
+            scope: ToolInstallationScope::Isolated,
+            signals: vec![SignalKind::Test],
+            source: target.runtimes[0].source.clone(),
+        });
+        let first = lock(vec![target.clone()]);
+        target.signal_tools[0].version_authority = crate::ToolVersionAuthority::LockResolved;
+        let second = lock(vec![target]);
+        assert_ne!(first.fingerprint(), second.fingerprint());
+        let mut wire: serde_json::Value =
+            serde_json::from_str(&first.canonical_json().unwrap()).unwrap();
+        wire["targets"][0]["signal_tools"][0]["version_authority"] = "lock_resolved".into();
+        assert!(serde_json::from_value::<EnvironmentLock>(wire.clone()).is_err());
+        wire["schema_version"] = "0.5.0".into();
+        assert!(serde_json::from_value::<EnvironmentLock>(wire).is_err());
     }
 
     #[test]
