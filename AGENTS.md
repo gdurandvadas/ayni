@@ -37,6 +37,9 @@ Ayni is an open-source code-quality signal tool for AI agents.
   publication jobs are skipped. Keep an unconditional final completion job that
   independently detects a release for the triggering commit, requires every
   binary/image/validation job to succeed, and verifies the public asset count.
+- Keep Release Please lightweight on ordinary `main` pushes. Repository quality
+  belongs in the required PR/status workflow; run binary, image, and released-
+  evidence matrices only when a release is created or explicitly recovered.
 - Preserve the established `ayni-<release-tag>-<target>.tar.gz` archive contract
   across the workflow, installer, checksums, documentation, and tests. Remember
   that the release tag already starts with `ayni-v`.

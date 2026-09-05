@@ -43,6 +43,19 @@ def main() -> int:
         print(error, file=sys.stderr)
         return 1
 
+    for removed_job in ("validate-release-dispatch", "quality", "managed-quality"):
+        require(
+            errors,
+            f"  {removed_job}:\n" not in source,
+            f"release workflow must not rerun the {removed_job} job on every main push",
+        )
+    require(
+        errors,
+        'WORKFLOW_REF: ${{ github.ref }}' in release
+        and 'test "$WORKFLOW_REF" = "refs/heads/main"' in release,
+        "manual recovery must validate the main workflow revision inside release metadata resolution",
+    )
+
     outputs = release.split("\n    steps:\n", 1)[0]
     expected_outputs = (
         "release_created: ${{ steps.release-metadata.outputs.release_created }}",
@@ -134,8 +147,8 @@ def main() -> int:
         and "id: publication-token" in publish
         and "permission-contents: write" in publish
         and "GH_TOKEN: ${{ steps.publication-token.outputs.token }}" in publish
-        and "token: ${{ steps.publication-token.outputs.token }}" in publish
-        and "overwrite_files: true" in publish,
+        and 'gh release upload "$TAG"' in publish
+        and "--clobber --repo \"$GITHUB_REPOSITORY\"" in publish,
         "publish must use a contents-write app token, preserve expected names, delete "
         "obsolete assets before upload, and overwrite expected assets",
     )
@@ -145,6 +158,7 @@ def main() -> int:
         errors,
         "Install the latest public release without a version override" in release_assets
         and 'releases/latest" --jq' in release_assets
+        and '--repo "$GITHUB_REPOSITORY"' in release_assets
         and "./install.sh" in release_assets,
         "release-assets must exercise default latest-release installer resolution",
     )
