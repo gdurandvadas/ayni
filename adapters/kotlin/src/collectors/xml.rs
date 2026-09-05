@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+use ayni_adapters_common::xml::{Attributes, is_name};
 
 pub(super) struct XmlElement {
     pub(super) name: String,
-    pub(super) attrs: String,
+    pub(super) attrs: Attributes,
     pub(super) content_start: usize,
     pub(super) content_end: usize,
     pub(super) parent: Option<usize>,
@@ -110,11 +110,11 @@ fn open_element(
     let self_closing = tag.trim_end().ends_with('/');
     let tag = tag.trim_end().strip_suffix('/').unwrap_or(tag.trim_end());
     let (name, attrs) = split_name_and_attrs(tag)?;
-    validate_attributes(attrs)?;
+    let attrs = Attributes::parse(attrs)?;
     let index = elements.len();
     elements.push(XmlElement {
         name: name.to_string(),
-        attrs: attrs.to_string(),
+        attrs,
         content_start: end + 1,
         content_end: end + 1,
         parent: open.last().copied(),
@@ -172,44 +172,6 @@ fn split_name_and_attrs(tag: &str) -> Result<(&str, &str), String> {
         return Err(String::from("invalid XML element name"));
     }
     Ok((name, attrs))
-}
-
-fn validate_attributes(attrs: &str) -> Result<(), String> {
-    let mut remaining = attrs.trim();
-    let mut names = HashSet::new();
-    while !remaining.is_empty() {
-        let name_end = remaining
-            .find(|character: char| character.is_whitespace() || character == '=')
-            .unwrap_or(remaining.len());
-        let name = &remaining[..name_end];
-        if !is_name(name) || !names.insert(name) {
-            return Err(String::from("invalid or duplicate XML attribute"));
-        }
-        remaining = remaining[name_end..].trim_start();
-        remaining = remaining
-            .strip_prefix('=')
-            .ok_or_else(|| String::from("XML attribute is missing '='"))?
-            .trim_start();
-        let quote = remaining
-            .chars()
-            .next()
-            .filter(|character| matches!(character, '"' | '\''))
-            .ok_or_else(|| String::from("XML attribute value must be quoted"))?;
-        remaining = &remaining[quote.len_utf8()..];
-        let value_end = remaining
-            .find(quote)
-            .ok_or_else(|| String::from("unterminated XML attribute value"))?;
-        remaining = remaining[value_end + quote.len_utf8()..].trim_start();
-    }
-    Ok(())
-}
-
-fn is_name(value: &str) -> bool {
-    let mut characters = value.chars();
-    matches!(characters.next(), Some(character) if character.is_ascii_alphabetic() || matches!(character, '_' | ':'))
-        && characters.all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '_' | ':' | '-' | '.')
-        })
 }
 
 fn is_misc(mut content: &str) -> bool {

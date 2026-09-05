@@ -104,7 +104,6 @@ dependencies = [
  "ayni-core",
  "glob",
  "libc",
- "regex",
  "serde_json",
  "tempfile",
  "walkdir",
@@ -116,7 +115,6 @@ version = "0.11.6"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
- "glob",
  "regex",
  "serde",
  "serde_json",
@@ -131,7 +129,6 @@ version = "0.11.6"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
- "glob",
  "regex",
  "serde_json",
  "tempfile",

@@ -558,7 +558,7 @@ mod tests {
             repo_root: root.to_path_buf(),
             target_root: root.to_path_buf(),
             workdir: root.to_path_buf(),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope,
             execution: ExecutionResolution::direct("cargo", root.to_path_buf(), "test", 100),
             cancellation: Default::default(),

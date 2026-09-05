@@ -299,7 +299,7 @@ mod managed_tests {
             repo_root: root.clone(),
             target_root: root.clone(),
             workdir: root,
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope::default(),
             execution,
             cancellation: Default::default(),

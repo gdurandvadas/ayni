@@ -467,3 +467,50 @@ fn configured_root_escape_is_rejected_by_analyze_before_artifact_writes() {
     assert!(stderr.contains("repository containment"), "{stderr}");
     assert!(!fixture.root.join(".ayni/last/signals.json").exists());
 }
+
+#[test]
+fn invalid_utf8_size_input_produces_incomplete_evidence() {
+    let fixture = Fixture::new(&["."], true);
+    fixture.add_rust_root(".");
+    fs::write(fixture.root.join("invalid.rs"), b"valid line\n\xff").unwrap();
+    fs::write(
+        &fixture.config,
+        r#"
+[checks]
+test = false
+coverage = false
+size = true
+complexity = false
+deps = false
+mutation = false
+[languages]
+enabled = ["rust"]
+[rust.size]
+"*.rs" = { warn = 100, fail = 200 }
+"#,
+    )
+    .unwrap();
+    for (args, artifact_path) in [
+        (
+            vec!["check", "--host", "--output", "json"],
+            ".ayni/last/signals.json",
+        ),
+        (
+            vec!["verify", "size", "--host", "--output", "json"],
+            ".ayni/verify/last/signals.json",
+        ),
+    ] {
+        let output = fixture.run(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let artifact = fixture.artifact(artifact_path);
+        assert_eq!(artifact["completion"]["state"], "incomplete");
+        assert_eq!(artifact["completion"]["issues"][0]["stage"], "collection");
+        assert!(artifact["rows"].as_array().unwrap().is_empty());
+        assert_eq!(artifact["aggregate"]["status"], "fail");
+    }
+}

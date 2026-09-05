@@ -11,6 +11,7 @@ use ayni_core::{
 use regex::Regex;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
     if !context.policy.checks.mutation {
@@ -154,64 +155,44 @@ fn parse_junit_report(path: &Path) -> Result<JunitReport, String> {
 }
 
 fn parse_junit_xml(content: &str) -> Result<JunitReport, String> {
-    let testsuite_re = Regex::new(r#"<testsuite\b([^>]*)>"#)
-        .map_err(|error| format!("failed to compile testsuite regex: {error}"))?;
-    let testcase_re = Regex::new(r#"(?s)<testcase\b([^>]*)>(.*?)</testcase>"#)
-        .map_err(|error| format!("failed to compile testcase regex: {error}"))?;
-    let failure_re = Regex::new(r#"(?s)<(failure|error)\b([^>]*)>(.*?)</(failure|error)>"#)
-        .map_err(|error| format!("failed to compile failure regex: {error}"))?;
-    let skipped_re = Regex::new(r#"<skipped\b"#)
-        .map_err(|error| format!("failed to compile skipped regex: {error}"))?;
+    static TESTSUITE_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"<testsuite\b([^>]*?)/?>"#).expect("valid testsuite regex"));
+    static TESTCASE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?s)<testcase\b([^>]*)>(.*?)</testcase>"#).expect("valid testcase regex")
+    });
+    static FAILURE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?s)<(failure|error)\b([^>]*)>(.*?)</(failure|error)>"#)
+            .expect("valid failure regex")
+    });
+    static SKIPPED_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"<skipped\b"#).expect("valid skipped regex"));
 
     let mut report = JunitReport::default();
     let mut saw_testsuite = false;
-    for caps in testsuite_re.captures_iter(content) {
+    for caps in TESTSUITE_RE.captures_iter(content) {
         saw_testsuite = true;
         if let Some(attrs) = caps.get(1).map(|value| value.as_str()) {
-            report.tests += xml::attr_u64(attrs, "tests").unwrap_or(0);
-            report.failures += xml::attr_u64(attrs, "failures").unwrap_or(0);
-            report.errors += xml::attr_u64(attrs, "errors").unwrap_or(0);
-            report.skipped += xml::attr_u64(attrs, "skipped").unwrap_or(0);
+            let attrs = xml::Attributes::parse(attrs)?;
+            report.tests += attrs.u64("tests").unwrap_or(0);
+            report.failures += attrs.u64("failures").unwrap_or(0);
+            report.errors += attrs.u64("errors").unwrap_or(0);
+            report.skipped += attrs.u64("skipped").unwrap_or(0);
         }
     }
 
-    for caps in testcase_re.captures_iter(content) {
-        let attrs = caps.get(1).map(|value| value.as_str()).unwrap_or("");
+    for caps in TESTCASE_RE.captures_iter(content) {
+        let attrs = xml::Attributes::parse(caps.get(1).map(|value| value.as_str()).unwrap_or(""))?;
         let body = caps.get(2).map(|value| value.as_str()).unwrap_or("");
-        let name = xml::attr_string(attrs, "name").unwrap_or_else(|| String::from("mutant"));
-        for failure in failure_re.captures_iter(body) {
-            let kind = failure
-                .get(1)
-                .map(|value| value.as_str())
-                .unwrap_or("failure");
-            let message = failure
-                .get(3)
-                .map(|value| xml::decode_xml(value.as_str().trim()))
-                .filter(|value| !value.is_empty())
-                .or_else(|| {
-                    xml::attr_string(
-                        failure.get(2).map(|value| value.as_str()).unwrap_or(""),
-                        "message",
-                    )
-                })
-                .unwrap_or_else(|| format!("mutmut {kind}: {name}"));
-            report.offenders.push(MutationOffender {
-                file: xml::attr_string(attrs, "file")
-                    .or_else(|| xml::attr_string(attrs, "classname"))
-                    .filter(|value| value.ends_with(".py")),
-                line: xml::attr_u64(attrs, "line"),
-                mutation_kind: kind.to_string(),
-                message,
-                level: Level::Fail,
-            });
-        }
-        if !saw_testsuite && skipped_re.is_match(body) {
+        report
+            .offenders
+            .extend(testcase_offenders(&attrs, body, &FAILURE_RE));
+        if !saw_testsuite && SKIPPED_RE.is_match(body) {
             report.skipped += 1;
         }
     }
 
     if report.tests == 0 {
-        report.tests = testcase_re.captures_iter(content).count() as u64;
+        report.tests = TESTCASE_RE.captures_iter(content).count() as u64;
     }
     if report.failures + report.errors == 0 && !report.offenders.is_empty() {
         report.failures = report.offenders.len() as u64;
@@ -219,9 +200,78 @@ fn parse_junit_xml(content: &str) -> Result<JunitReport, String> {
     Ok(report)
 }
 
+fn testcase_offenders(
+    attrs: &xml::Attributes,
+    body: &str,
+    failure_re: &Regex,
+) -> Vec<MutationOffender> {
+    let mut offenders = Vec::new();
+    let name = attrs
+        .string("name")
+        .unwrap_or_else(|| String::from("mutant"));
+    for failure in failure_re.captures_iter(body) {
+        let kind = failure
+            .get(1)
+            .map(|value| value.as_str())
+            .unwrap_or("failure");
+        let message = failure
+            .get(3)
+            .map(|value| xml::decode_xml(value.as_str().trim()))
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                xml::attr_string(
+                    failure.get(2).map(|value| value.as_str()).unwrap_or(""),
+                    "message",
+                )
+            })
+            .unwrap_or_else(|| format!("mutmut {kind}: {name}"));
+        offenders.push(MutationOffender {
+            file: attrs
+                .string("file")
+                .or_else(|| attrs.string("classname"))
+                .filter(|value| value.ends_with(".py")),
+            line: attrs.u64("line"),
+            mutation_kind: kind.to_string(),
+            message,
+            level: Level::Fail,
+        });
+    }
+    offenders
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_junit_xml;
+
+    #[test]
+    fn accepts_self_closing_suite_summary() {
+        let report =
+            parse_junit_xml("<testsuite tests='1' failures='0' errors='0' skipped='1'/>").unwrap();
+        assert_eq!(report.tests, 1);
+        assert_eq!(report.skipped, 1);
+        assert!(report.offenders.is_empty());
+    }
+
+    #[test]
+    fn rejects_duplicate_and_unquoted_report_attributes() {
+        for content in [
+            r#"<testsuite tests="1" tests="2"></testsuite>"#,
+            r#"<testcase name=mutant><failure>diff</failure></testcase>"#,
+        ] {
+            assert!(parse_junit_xml(content).is_err());
+        }
+    }
+
+    #[test]
+    fn parses_single_quoted_testcase_failure_attributes() {
+        let report = parse_junit_xml(
+            "<testcase name='mutant' file='src/app.py' line='7'><failure message='survived'></failure></testcase>"
+        ).unwrap();
+        let offender = &report.offenders[0];
+        assert_eq!(offender.file.as_deref(), Some("src/app.py"));
+        assert_eq!(offender.line, Some(7));
+        assert_eq!(offender.message, "survived");
+    }
 
     #[test]
     fn parses_mutmut_junit_failures() {

@@ -458,6 +458,7 @@ mod tests {
     #[test]
     fn isolated_mise_provider_coordinates_are_preserved_without_language_tool_logic() {
         let tools = vec![LockedSignalTool {
+            version_authority: ayni_core::ToolVersionAuthority::AdapterPinned,
             tool: "gocyclo".into(),
             version: "0.6.0".into(),
             provider: "go:github.com/fzipp/gocyclo/cmd/gocyclo".into(),
@@ -661,6 +662,7 @@ mod tests {
     #[test]
     fn unknown_isolated_provider_fails_closed() {
         let tools = vec![LockedSignalTool {
+            version_authority: ayni_core::ToolVersionAuthority::AdapterPinned,
             tool: "unknown".into(),
             version: "1.0.0".into(),
             provider: "unknown-provider".into(),

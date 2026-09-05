@@ -216,7 +216,7 @@ mod tests {
             repo_root: PathBuf::from("/repo"),
             target_root: PathBuf::from("/repo"),
             workdir: PathBuf::from("/repo"),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope {
                 file: Some(String::from("src/handler.ts")),
                 ..Scope::default()

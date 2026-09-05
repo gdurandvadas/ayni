@@ -5,7 +5,7 @@ use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
 use ayni_adapters_common::paths::{
     canonicalize_relative_posix, resolve_repo_path, to_repo_relative_path,
 };
-use ayni_adapters_common::xml::{attr_string, attr_u64};
+use ayni_adapters_common::xml::{Attributes, attr_string};
 use ayni_core::{
     Budget, ComplexityBudget, ComplexityOffender, ComplexityResult, FloatThresholdBudget, Language,
     Level, Offenders, RunContext, SignalKind, SignalResult, SignalRow, classify_maximum,
@@ -186,9 +186,15 @@ fn parse_checkstyle_content(
         }
         let body = file_caps.get(2).map(|value| value.as_str()).unwrap_or("");
         for error_caps in error_re.captures_iter(body) {
-            let attrs = error_caps.get(1).map(|value| value.as_str()).unwrap_or("");
-            let source = attr_string(attrs, "source").unwrap_or_default();
-            let message = attr_string(attrs, "message").unwrap_or_default();
+            // The capture includes the slash of a self-closing Checkstyle tag.
+            let raw_attrs = error_caps
+                .get(1)
+                .map(|value| value.as_str())
+                .unwrap_or("")
+                .trim_end();
+            let attrs = Attributes::parse(raw_attrs.strip_suffix('/').unwrap_or(raw_attrs))?;
+            let source = attrs.string("source").unwrap_or_default();
+            let message = attrs.string("message").unwrap_or_default();
             if !source.to_ascii_lowercase().contains("complex")
                 && !message.to_ascii_lowercase().contains("complex")
             {
@@ -202,8 +208,10 @@ fn parse_checkstyle_content(
                 .unwrap_or(fallback_complexity);
             offenders.push(ComplexityOffender {
                 file: normalized_file.clone(),
-                line: attr_u64(attrs, "line").unwrap_or(1),
-                function: attr_string(attrs, "source").unwrap_or_else(|| String::from("detekt")),
+                line: attrs.u64("line").unwrap_or(1),
+                function: attrs
+                    .string("source")
+                    .unwrap_or_else(|| String::from("detekt")),
                 cyclomatic,
                 cognitive: None,
                 level: Level::Fail,
@@ -232,7 +240,7 @@ mod tests {
             repo_root: PathBuf::from("/repo"),
             target_root: PathBuf::from("/repo"),
             workdir: PathBuf::from("/repo"),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("gradle", PathBuf::from("/repo"), "test", 100),
             cancellation: Default::default(),
@@ -256,7 +264,7 @@ mod tests {
             repo_root: PathBuf::from("/repo"),
             target_root: PathBuf::from("/repo"),
             workdir: PathBuf::from("/repo"),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope {
                 file: Some(String::from("src/Selected.kt")),
                 ..Scope::default()

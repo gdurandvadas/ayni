@@ -7,6 +7,7 @@
 //! run, how to parse their reports) stays in the per-language adapter crates.
 
 pub mod collector;
+pub mod deps;
 pub mod discovery;
 pub mod environment;
 pub mod exec;

@@ -41,6 +41,7 @@ fn target(root: &str, runtime_version: VersionRequirement) -> TargetEnvironment 
             source: source(&format!("{root}/package.json")),
         }),
         signal_tools: vec![SignalToolRequirement {
+            version_authority: crate::ToolVersionAuthority::ProjectLocked,
             tool: String::from("vitest"),
             version: VersionRequirement::exact("3.2.4").expect("version"),
             provider: String::from("project_dependency"),
@@ -562,4 +563,114 @@ fn serialized_contract_contains_no_provider_commands_or_host_paths() {
     assert!(!json.contains("Dockerfile"));
     assert!(!json.contains("/Users/"));
     assert!(!json.contains("command"));
+}
+
+#[test]
+fn tool_version_authority_survives_plan_resolution_and_lock_round_trip() {
+    use crate::{EnvironmentLock, ProvisioningBase, ToolVersionAuthority};
+    use std::collections::BTreeMap;
+    for (authority, scope) in [
+        (
+            ToolVersionAuthority::AdapterPinned,
+            ToolInstallationScope::Isolated,
+        ),
+        (
+            ToolVersionAuthority::ProjectLocked,
+            ToolInstallationScope::Project,
+        ),
+        (
+            ToolVersionAuthority::LockResolved,
+            ToolInstallationScope::Isolated,
+        ),
+        (
+            ToolVersionAuthority::Toolchain,
+            ToolInstallationScope::Runtime,
+        ),
+    ] {
+        let mut target = target("apps/web", VersionRequirement::exact("22.1.0").unwrap());
+        target.system_requirements.clear();
+        target.signal_tools[0].version_authority = authority;
+        target.signal_tools[0].scope = scope;
+        let plan = plan(vec![target]);
+        let encoded = serde_json::to_string(&plan).unwrap();
+        let restored: EnvironmentPlan = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            restored.targets()[0].signal_tools[0].version_authority,
+            authority
+        );
+        let lock = EnvironmentLock::from_resolved_plan(
+            &restored.resolve().unwrap(),
+            "0.11.6",
+            "2026.8.7",
+            ProvisioningBase {
+                reference: "example.invalid/base".into(),
+                digest: digest('c'),
+                variant: "debian".into(),
+                mise_version: "2026.8.7".into(),
+            },
+            ".ayni.toml",
+            &BTreeMap::from([
+                (String::from("apps/web/package.json"), digest('a')),
+                (String::from("apps/web/pnpm-lock.yaml"), digest('a')),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            lock.targets()[0].signal_tools[0].version_authority,
+            authority
+        );
+        let encoded = lock.canonical_json().unwrap();
+        let decoded: EnvironmentLock = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.fingerprint(), lock.fingerprint());
+        assert_eq!(
+            decoded.targets()[0].signal_tools[0].version_authority,
+            authority
+        );
+        let mut missing: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        missing["targets"][0]["signal_tools"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("version_authority");
+        assert!(serde_json::from_value::<EnvironmentLock>(missing).is_err());
+    }
+}
+
+#[test]
+fn invalid_authority_scope_and_unpinned_adapter_versions_are_rejected() {
+    use crate::ToolVersionAuthority;
+    for (authority, scope, version) in [
+        (
+            ToolVersionAuthority::AdapterPinned,
+            ToolInstallationScope::Isolated,
+            VersionRequirement::selector("stable").unwrap(),
+        ),
+        (
+            ToolVersionAuthority::ProjectLocked,
+            ToolInstallationScope::Isolated,
+            VersionRequirement::exact("1.2.3").unwrap(),
+        ),
+        (
+            ToolVersionAuthority::Toolchain,
+            ToolInstallationScope::Project,
+            VersionRequirement::exact("1.2.3").unwrap(),
+        ),
+    ] {
+        let mut target = target("apps/web", VersionRequirement::exact("22.1.0").unwrap());
+        target.signal_tools[0].version_authority = authority;
+        target.signal_tools[0].scope = scope;
+        target.signal_tools[0].version = version;
+        assert!(
+            EnvironmentPlan::new(
+                RepositoryIdentity {
+                    name: "test".into(),
+                    contract_digest: digest('a')
+                },
+                vec![platform()],
+                vec![target],
+                vec![],
+                vec![]
+            )
+            .is_err()
+        );
+    }
 }

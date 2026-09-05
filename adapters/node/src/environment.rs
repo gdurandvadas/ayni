@@ -608,6 +608,7 @@ fn signal_tools(
                     )
                 };
             Ok(SignalToolRequirement {
+                version_authority: ayni_core::ToolVersionAuthority::ProjectLocked,
                 tool: (*tool).to_string(),
                 version,
                 provider: String::from("node_project_dependency"),

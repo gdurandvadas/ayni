@@ -4,26 +4,93 @@
 //! report formats (JUnit, JaCoCo, PIT, Checkstyle). They are not a general
 //! XML parser and do not handle namespaces or CDATA.
 
-use regex::Regex;
+use std::collections::BTreeMap;
 
-/// Extracts a quoted attribute value (`name="value"`) from an attribute string,
-/// decoding XML entities.
+/// Validated, decoded attributes for one XML element. Parse once and reuse for
+/// all field lookups; attribute values are never searched as markup.
+#[derive(Debug)]
+pub struct Attributes {
+    values: BTreeMap<String, String>,
+}
+
+impl Attributes {
+    pub fn parse(mut remaining: &str) -> Result<Self, String> {
+        let mut values = BTreeMap::new();
+        remaining = remaining.trim();
+        while !remaining.is_empty() {
+            let (name, value, rest) = next_attribute(remaining)?;
+            if values.insert(name.to_string(), decode_xml(value)).is_some() {
+                return Err(String::from("invalid or duplicate XML attribute"));
+            }
+            remaining = rest.trim_start();
+        }
+        Ok(Self { values })
+    }
+
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.values.get(name).map(String::as_str)
+    }
+
+    pub fn string(&self, name: &str) -> Option<String> {
+        self.values.get(name).cloned()
+    }
+
+    pub fn u64(&self, name: &str) -> Option<u64> {
+        self.get(name)?.parse().ok()
+    }
+}
+
+fn next_attribute(input: &str) -> Result<(&str, &str, &str), String> {
+    let name_end = input
+        .find(|character: char| character.is_whitespace() || character == '=')
+        .unwrap_or(input.len());
+    let name = &input[..name_end];
+    if !is_name(name) {
+        return Err(String::from("invalid or duplicate XML attribute"));
+    }
+    let rest = input[name_end..]
+        .trim_start()
+        .strip_prefix('=')
+        .ok_or_else(|| String::from("XML attribute is missing '='"))?
+        .trim_start();
+    let quote = rest
+        .chars()
+        .next()
+        .filter(|character| matches!(character, '"' | '\''))
+        .ok_or_else(|| String::from("XML attribute value must be quoted"))?;
+    let rest = &rest[1..];
+    let end = rest
+        .find(quote)
+        .ok_or_else(|| String::from("unterminated XML attribute value"))?;
+    let trailing = &rest[end + 1..];
+    if !trailing.is_empty() && !trailing.starts_with(char::is_whitespace) {
+        return Err(String::from(
+            "XML attributes must be separated by whitespace",
+        ));
+    }
+    Ok((name, &rest[..end], trailing))
+}
+
+/// Checks the ASCII XML name subset used by supported tool reports.
+pub fn is_name(value: &str) -> bool {
+    let mut characters = value.chars();
+    matches!(characters.next(), Some(character) if character.is_ascii_alphabetic() || matches!(character, '_' | ':'))
+        && characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | ':' | '-' | '.')
+        })
+}
+
+/// Extracts one attribute. Reuse [`Attributes`] for multiple fields of an element.
 pub fn attr_string(attrs: &str, name: &str) -> Option<String> {
-    let pattern = format!(r#"(?:^|\s){name}\s*=\s*"([^"]*)""#);
-    let re = Regex::new(&pattern).ok()?;
-    re.captures(attrs)
-        .and_then(|caps| caps.get(1))
-        .map(|value| decode_xml(value.as_str()))
+    Attributes::parse(attrs).ok()?.string(name)
 }
 
-/// [`attr_string`] parsed as `u64`.
 pub fn attr_u64(attrs: &str, name: &str) -> Option<u64> {
-    attr_string(attrs, name).and_then(|value| value.parse::<u64>().ok())
+    Attributes::parse(attrs).ok()?.u64(name)
 }
 
-/// [`attr_string`] parsed as `f64`.
 pub fn attr_f64(attrs: &str, name: &str) -> Option<f64> {
-    attr_string(attrs, name).and_then(|value| value.parse::<f64>().ok())
+    Attributes::parse(attrs).ok()?.get(name)?.parse().ok()
 }
 
 /// Decodes the five predefined XML entities plus numeric character references
@@ -76,6 +143,35 @@ fn decode_entity(entity: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{attr_f64, attr_string, attr_u64, decode_xml};
+
+    #[test]
+    fn parses_quoted_attributes_once_without_matching_inside_values() {
+        let attrs =
+            super::Attributes::parse(r#"message='name="fake" &amp;lt;' name = "real" count='12'"#)
+                .unwrap();
+        assert_eq!(attrs.get("name"), Some("real"));
+        assert_eq!(attrs.get("message"), Some("name=\"fake\" &lt;"));
+        assert_eq!(attrs.u64("count"), Some(12));
+        assert_eq!(attrs.get("missing"), None);
+        assert_eq!(
+            attr_string("name='single quoted'", "name").as_deref(),
+            Some("single quoted")
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_and_duplicate_attributes() {
+        for attrs in [
+            "name",
+            "name=value",
+            "name='unfinished",
+            "name='a' name='b'",
+            "name='a'other='b'",
+            "1name='a'",
+        ] {
+            assert!(super::Attributes::parse(attrs).is_err(), "{attrs}");
+        }
+    }
 
     #[test]
     fn extracts_attributes() {

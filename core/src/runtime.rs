@@ -44,7 +44,8 @@ pub struct RunContext {
     pub repo_root: PathBuf,
     pub target_root: PathBuf,
     pub workdir: PathBuf,
-    pub policy: AyniPolicy,
+    /// Immutable policy shared across target and verification contexts.
+    pub policy: Arc<AyniPolicy>,
     pub scope: Scope,
     pub execution: ExecutionResolution,
     pub cancellation: CancellationToken,

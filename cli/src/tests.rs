@@ -293,6 +293,44 @@ roots = ["."]
     );
 }
 
+#[test]
+fn target_contexts_share_policy_but_keep_independent_scopes() {
+    let dir = TempDir::new().expect("tempdir");
+    for root in ["one", "two"] {
+        fs::create_dir(dir.path().join(root)).unwrap();
+        fs::write(dir.path().join(root).join("pyproject.toml"), "").unwrap();
+    }
+    let policy: AyniPolicy = toml::from_str(
+        r#"
+[languages]
+enabled = ["python"]
+[python]
+roots = ["one", "two"]
+"#,
+    )
+    .unwrap();
+    let planning = build_analyze_targets(
+        dir.path(),
+        &policy,
+        None,
+        None,
+        None,
+        false,
+        &crate::build_registry(),
+    )
+    .unwrap();
+    assert_eq!(planning.targets.len(), 2);
+    let first = &planning.targets[0].run_context;
+    let second = &planning.targets[1].run_context;
+    assert!(std::sync::Arc::ptr_eq(&first.policy, &second.policy));
+    let mut selected = first.clone();
+    selected.scope.file = Some(String::from("one/api.py"));
+    assert!(std::sync::Arc::ptr_eq(&first.policy, &selected.policy));
+    assert!(first.scope.file.is_none());
+    assert!(second.scope.file.is_none());
+    assert_ne!(first.scope.path, second.scope.path);
+}
+
 fn test_row(pass: bool, passed: u64, failed: u64) -> ayni_core::SignalRow {
     ayni_core::SignalRow {
         kind: SignalKind::Test,

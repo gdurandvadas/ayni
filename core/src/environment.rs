@@ -15,7 +15,7 @@ use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
 /// Version of the clean-slate, explainable environment-plan document.
-pub const ENVIRONMENT_PLAN_SCHEMA_VERSION: &str = "0.3.0";
+pub const ENVIRONMENT_PLAN_SCHEMA_VERSION: &str = "0.4.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RepositoryIdentity {
@@ -158,6 +158,7 @@ pub enum ProvisioningSupport {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SignalToolRequirement {
+    pub version_authority: crate::ToolVersionAuthority,
     pub tool: String,
     pub version: VersionRequirement,
     pub provider: String,
@@ -633,6 +634,7 @@ pub enum EnvironmentPlanError {
     FingerprintMismatch,
     MissingSourceDigest(String),
     InvalidResourceLimits(String),
+    InvalidToolVersionAuthority(String),
     Serialization(String),
 }
 
@@ -754,6 +756,12 @@ fn normalize_signal_tools(
     for tool in signal_tools.iter_mut() {
         tool.tool = required_label("signal tool", tool.tool.clone())?;
         normalize_version_requirement(&mut tool.version)?;
+        tool.version_authority
+            .validate(
+                tool.scope,
+                matches!(tool.version, VersionRequirement::Exact { .. }),
+            )
+            .map_err(EnvironmentPlanError::InvalidToolVersionAuthority)?;
         tool.provider = required_label("signal-tool provider", tool.provider.clone())?;
         tool.signals.sort();
         tool.signals.dedup();

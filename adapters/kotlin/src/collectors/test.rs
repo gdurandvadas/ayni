@@ -3,7 +3,7 @@ use super::xml::XmlDocument;
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{command_failure_from_output, test_execution_incomplete};
-use ayni_adapters_common::xml::attr_string;
+use ayni_adapters_common::xml::Attributes;
 use ayni_core::{
     Budget, Language, Offenders, RunContext, SignalKind, SignalResult, SignalRow, TestBudget,
     TestFailure, TestResult, VerificationSelection,
@@ -227,8 +227,8 @@ fn elements_named(document: &XmlDocument, name: &str) -> Vec<usize> {
         .collect()
 }
 
-fn junit_count_attr(attrs: &str, name: &str) -> Result<u64, String> {
-    let Some(value) = attr_string(attrs, name) else {
+fn junit_count_attr(attrs: &Attributes, name: &str) -> Result<u64, String> {
+    let Some(value) = attrs.get(name) else {
         return Ok(0);
     };
     value
@@ -236,8 +236,8 @@ fn junit_count_attr(attrs: &str, name: &str) -> Result<u64, String> {
         .map_err(|_| format!("JUnit {name} attribute was not a valid non-negative integer"))
 }
 
-fn junit_duration_attr(attrs: &str) -> Result<Option<f64>, String> {
-    let Some(value) = attr_string(attrs, "time") else {
+fn junit_duration_attr(attrs: &Attributes) -> Result<Option<f64>, String> {
+    let Some(value) = attrs.get("time") else {
         return Ok(None);
     };
     let seconds = value
@@ -313,7 +313,7 @@ fn append_testcase_evidence(
             {
                 continue;
             }
-            let message = attr_string(&element.attrs, "message").unwrap_or_else(|| {
+            let message = element.attrs.string("message").unwrap_or_else(|| {
                 let text = document.text(content, element);
                 if text.is_empty() {
                     String::from("JUnit test failed")
@@ -322,10 +322,10 @@ fn append_testcase_evidence(
                 }
             });
             summary.offenders.push(TestFailure {
-                file: attr_string(attrs, "classname"),
+                file: attrs.string("classname"),
                 line: None,
                 message,
-                test_name: attr_string(attrs, "name"),
+                test_name: attrs.string("name"),
             });
         }
     }

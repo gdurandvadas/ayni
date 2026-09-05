@@ -16,7 +16,6 @@ path = "src/lib.rs"
 ayni-core = { path = "../../core" }
 glob = "0.3"
 libc = "0.2"
-regex = "1"
 serde_json = "1"
 walkdir = "2"
 

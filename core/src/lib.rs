@@ -21,6 +21,8 @@ pub mod runtime;
 pub mod signal;
 mod signal_validation;
 pub mod threshold;
+pub mod tooling;
+mod tooling_validation;
 
 pub use adapter::{
     ComplexityThresholdKind, DetectResult, DiscoveredRoot, LanguageAdapter, LanguageProfile,
@@ -90,4 +92,10 @@ pub use signal::{
 };
 pub use threshold::{
     ConfiguredMetricEvaluation, classify_maximum, classify_minimum, evaluate_configured_metric,
+};
+
+pub use tooling::{
+    SignalToolOwnership, ToolVersionAuthority, ToolingCommand, ToolingConflict, ToolingDiagnostic,
+    ToolingFileEdit, ToolingInput, ToolingOutput, ToolingPlan, ToolingPreimage,
+    ToolingReconciliationCapability, ToolingRequest, ToolingRequirement, ToolingWarning,
 };

@@ -717,6 +717,7 @@ fn signal_tools(
         return Ok(Vec::new());
     }
     Ok(vec![SignalToolRequirement {
+        version_authority: ayni_core::ToolVersionAuthority::AdapterPinned,
         tool: String::from("gocyclo"),
         version: VersionRequirement::exact(GOCYCLO_VERSION).map_err(plan_error)?,
         provider: format!("go:{GOCYCLO_MODULE}"),

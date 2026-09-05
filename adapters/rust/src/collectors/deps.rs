@@ -1,10 +1,10 @@
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::deps::{compile_rules, matching_offenders};
 use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_core::{
-    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope,
+    Budget, DepsBudget, DepsOffender, DepsResult, Language, Offenders, RunContext, Scope,
     SignalKind, SignalResult, SignalRow,
 };
-use glob::Pattern;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -224,34 +224,6 @@ fn workspace_member_edges(
     edges
 }
 
-fn matching_offenders(
-    edges: &BTreeSet<(String, String)>,
-    compiled_rules: &[CompiledRule],
-) -> Vec<DepsOffender> {
-    let mut offenders = Vec::new();
-    for (from, to) in edges {
-        for rule in compiled_rules {
-            if rule.from.matches(from) && rule.to.matches(to) {
-                offenders.push(DepsOffender {
-                    from: from.clone(),
-                    to: to.clone(),
-                    rule: format!("{} -> {}", rule.from_raw, rule.to_raw),
-                    level: Level::Fail,
-                });
-            }
-        }
-    }
-
-    offenders.sort_by(|left, right| {
-        left.from
-            .cmp(&right.from)
-            .then_with(|| left.to.cmp(&right.to))
-            .then_with(|| left.rule.cmp(&right.rule))
-    });
-
-    offenders
-}
-
 fn workspace_members(
     metadata: &CargoMetadata,
     repo_root: &Path,
@@ -346,31 +318,6 @@ fn scoped_path(scope: &Scope, repo_root: &Path) -> Result<Option<PathBuf>, Strin
             path.display()
         )
     })
-}
-
-struct CompiledRule {
-    from_raw: String,
-    to_raw: String,
-    from: Pattern,
-    to: Pattern,
-}
-
-fn compile_rules(forbidden: &BTreeMap<String, Vec<String>>) -> Result<Vec<CompiledRule>, String> {
-    let mut compiled = Vec::new();
-    for (from, tos) in forbidden {
-        let from_pattern = Pattern::new(from)
-            .map_err(|error| format!("invalid forbidden deps pattern '{from}': {error}"))?;
-        for to in tos {
-            compiled.push(CompiledRule {
-                from_raw: from.clone(),
-                to_raw: to.clone(),
-                from: from_pattern.clone(),
-                to: Pattern::new(to)
-                    .map_err(|error| format!("invalid forbidden deps pattern '{to}': {error}"))?,
-            });
-        }
-    }
-    Ok(compiled)
 }
 
 #[cfg(test)]

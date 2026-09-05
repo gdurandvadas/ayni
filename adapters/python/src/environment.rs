@@ -639,6 +639,7 @@ fn tools(
             let ver = locked(&v, n)?
                 .ok_or_else(|| error(format!("{n} is not an exact dependency in uv.lock")))?;
             Ok(SignalToolRequirement {
+                version_authority: ayni_core::ToolVersionAuthority::ProjectLocked,
                 tool: n.into(),
                 version: VersionRequirement::exact(ver).map_err(error)?,
                 provider: "uv_locked_project_dependency".into(),

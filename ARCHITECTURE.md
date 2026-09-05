@@ -20,7 +20,7 @@ locks for OCI execution, and the CLI orchestrates user intent and output.
 | Layer | Owns | Does not own |
 | --- | --- | --- |
 | `core/` | Signal schema, policy model, adapter traits, runtime context, catalog contract types | Tool invocation, CLI ergonomics, persistence |
-| `adapters/common/` | Command execution with timeouts, catalog status/install execution, shared path/XML/failure/discovery helpers | Language-specific tool selection or parsing |
+| `adapters/common/` | Command execution with timeouts, shared dependency-rule evaluation and path/XML/failure/discovery helpers | Language-specific tool selection or parsing |
 | `adapters/<lang>/` | Local tool execution, output parsing, environment discovery/resolution, normalization to core types | New signal kinds, untyped payloads, CLI coupling |
 | `environment/` | Validated lock loading, OCI image planning, Docker/Podman execution, workspace launching | Language-specific manifests, package-manager precedence, quality semantics |
 | `cli/` | User interface, orchestration, argument parsing, local output, forge-neutral local Git worktree snapshots for impact | Product semantics, adapter internals, hosted Git-provider APIs |
@@ -74,6 +74,17 @@ Before proposing edits:
 - [ ] Exercised changed behavior through `cargo run -p ayni-cli -- ...` from the repository root
 - [ ] Ran `cargo check --workspace --all-features`
 - [ ] Ran `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+
+## Tooling reconciliation foundation
+
+Core defines read-only tooling requests and validated proposals through
+`ToolingReconciliationCapability`. Adapters will own native metadata discovery
+and edits; a later CLI executor will stage and publish only approved outputs.
+Core does not read files or execute the proposed commands. No adapter provides
+this capability yet, and Ayni-owned environment planning remains disabled.
+
+See [the milestone contract](docs/contributing/tooling-reconciliation.md) for
+preimages, output allowlists, version authority, and remaining execution work.
 
 ## See Also
 
