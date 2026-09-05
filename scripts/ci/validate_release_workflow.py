@@ -115,12 +115,25 @@ def main() -> int:
         )
 
     publish = job_block(source, "publish")
+    delete_position = publish.find("Remove obsolete release assets before recovery upload")
+    upload_position = publish.find("Upload release artifacts")
+    expected_asset_patterns = (
+        "SHA256SUMS|",
+        '"ayni-${TAG}-aarch64-apple-darwin.tar.gz"',
+        '"ayni-${TAG}-x86_64-apple-darwin.tar.gz"',
+        '"ayni-${TAG}-x86_64-unknown-linux-gnu.tar.gz"',
+        '"ayni-${TAG}-aarch64-unknown-linux-gnu.tar.gz"',
+    )
     require(
         errors,
-        "Remove obsolete release assets before recovery upload" in publish
+        delete_position >= 0
+        and upload_position > delete_position
         and "releases/assets/${asset_id}" in publish
-        and "--method DELETE" in publish,
-        "publish must remove obsolete assets so recovery converges to exact inventory",
+        and "--method DELETE" in publish
+        and all(pattern in publish for pattern in expected_asset_patterns)
+        and "overwrite_files: true" in publish,
+        "publish must preserve expected names, delete obsolete assets before upload, "
+        "and overwrite expected assets",
     )
 
     release_assets = job_block(source, "release-assets")
