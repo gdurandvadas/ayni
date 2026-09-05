@@ -105,11 +105,14 @@ jobs:
     permissions:
       contents: read
     outputs:
-      release_created: ${{ steps.manual-release.outputs.release_created || steps.release.outputs.release_created }}
-      release_tag: ${{ steps.manual-release.outputs.tag || steps.release.outputs.tag_name }}
-      release_version: ${{ steps.manual-release.outputs.version || steps.release.outputs.version }}
+      # Publish only explicit shell-normalized values. Do not compose action
+      # outputs in job outputs: a falsey skipped-step operand can collapse the
+      # value while later steps in this job still observe the action output.
+      release_created: ${{ steps.release-metadata.outputs.release_created }}
+      release_tag: ${{ steps.release-metadata.outputs.tag }}
+      release_version: ${{ steps.release-metadata.outputs.version }}
       release_commit: ${{ steps.release-source.outputs.commit }}
-      release_pr_created: ${{ steps.release.outputs.prs_created }}
+      release_pr_created: ${{ steps.release-pr.outputs.created }}
       release_pr_branch: ${{ steps.release-pr.outputs.branch }}
 
     steps:
@@ -155,12 +158,29 @@ jobs:
             echo "version=${RELEASE_TAG#ayni-v}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Resolve immutable release source commit
-        id: release-source
+      - name: Normalize release metadata for downstream jobs
+        id: release-metadata
         if: ${{ steps.manual-release.outputs.release_created == 'true' || steps.release.outputs.release_created == 'true' }}
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.manual-release.outputs.tag || steps.release.outputs.tag_name }}
+          VERSION: ${{ steps.manual-release.outputs.version || steps.release.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VERSION"
+          test "$TAG" = "ayni-v${VERSION}"
+          {
+            echo "release_created=true"
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve immutable release source commit
+        id: release-source
+        if: ${{ steps.release-metadata.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release-metadata.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -177,17 +197,6 @@ jobs:
           test "$sha" != ""
           echo "commit=$sha" >> "$GITHUB_OUTPUT"
 
-      - name: Verify release tag and version identity
-        if: ${{ steps.manual-release.outputs.release_created == 'true' || steps.release.outputs.release_created == 'true' }}
-        env:
-          TAG: ${{ steps.manual-release.outputs.tag || steps.release.outputs.tag_name }}
-          VERSION: ${{ steps.manual-release.outputs.version || steps.release.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$VERSION"
-          test "$TAG" = "ayni-v${VERSION}"
-
       - name: Resolve release pull request branch
         id: release-pr
         if: ${{ steps.release.outputs.prs_created == 'true' }}
@@ -198,7 +207,10 @@ jobs:
           set -euo pipefail
           branch="$(jq --raw-output '.[0].headBranchName // empty' <<<"$RELEASE_PRS")"
           test -n "$branch"
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          {
+            echo "created=true"
+            echo "branch=$branch"
+          } >> "$GITHUB_OUTPUT"
 
   sync-release-lock:
     name: synchronize release managed lock
@@ -721,6 +733,23 @@ jobs:
           done
           (cd release-assets && sha256sum --check SHA256SUMS)
 
+      - name: Checkout installer from the workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the latest public release without a version override
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSTALL_DIR: ${{ runner.temp }}/latest-bin
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          expected_version="${latest_tag#ayni-v}"
+          ./install.sh
+          test "$("$INSTALL_DIR/ayni" --version)" = "ayni ${expected_version}"
+
   release-smoke:
     name: smoke public release binary (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -899,3 +928,119 @@ jobs:
         env:
           FIXTURE: examples/${{ matrix.language }}/mono
         run: rm -rf "$FIXTURE/.ayni" "$FIXTURE/.ayni.lock"
+
+  release-completion:
+    name: require complete public release
+    runs-on: ubuntu-latest
+    needs:
+      - release
+      - build
+      - publish
+      - environment-image
+      - environment-manifest
+      - release-assets
+      - release-smoke
+      - environment-image-smoke
+      - release-validation
+    if: ${{ always() }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Fail closed when publication is incomplete
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          RELEASE_CREATED: ${{ needs.release.outputs.release_created }}
+          RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.release.outputs.release_version }}
+          RELEASE_COMMIT: ${{ needs.release.outputs.release_commit }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          ENVIRONMENT_IMAGE_RESULT: ${{ needs.environment-image.result }}
+          ENVIRONMENT_MANIFEST_RESULT: ${{ needs.environment-manifest.result }}
+          RELEASE_ASSETS_RESULT: ${{ needs.release-assets.result }}
+          RELEASE_SMOKE_RESULT: ${{ needs.release-smoke.result }}
+          ENVIRONMENT_IMAGE_SMOKE_RESULT: ${{ needs.environment-image-smoke.result }}
+          RELEASE_VALIDATION_RESULT: ${{ needs.release-validation.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RELEASE_RESULT" = "success"
+
+          resolve_tag_commit() {
+            local tag="$1"
+            local object type sha depth
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" \
+              --jq '.object.type + " " + .object.sha')"
+            read -r type sha <<< "$object"
+            depth=0
+            while [[ "$type" == "tag" ]]; do
+              object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" \
+                --jq '.object.type + " " + .object.sha')"
+              read -r type sha <<< "$object"
+              depth=$((depth + 1))
+              test "$depth" -le 5
+            done
+            test "$type" = "commit"
+            printf '%s\n' "$sha"
+          }
+
+          publication_required=false
+          detected_tag=""
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$RELEASE_CREATED" == "true" ]]; then
+            publication_required=true
+          fi
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            encoded_version="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/contents/version.txt?ref=${GITHUB_SHA}" \
+              --jq '.content')"
+            source_version="$(printf '%s' "$encoded_version" | base64 --decode | tr -d '\r\n')"
+            [[ "$source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
+            candidate_tag="ayni-v${source_version}"
+            if gh api --silent "repos/${GITHUB_REPOSITORY}/releases/tags/${candidate_tag}"; then
+              candidate_commit="$(resolve_tag_commit "$candidate_tag")"
+              if [[ "$candidate_commit" == "$GITHUB_SHA" ]]; then
+                detected_tag="$candidate_tag"
+                publication_required=true
+              fi
+            fi
+          fi
+
+          if [[ "$publication_required" != "true" ]]; then
+            echo "No release was created; publication jobs are not required."
+            exit 0
+          fi
+
+          if [[ -n "$detected_tag" && "$RELEASE_CREATED" != "true" ]]; then
+            echo "Public release $detected_tag exists for $GITHUB_SHA, but release metadata did not propagate." >&2
+          fi
+          test "$RELEASE_CREATED" = "true"
+          test -n "$RELEASE_TAG"
+          test "$RELEASE_TAG" = "ayni-v${RELEASE_VERSION}"
+          if [[ -n "$detected_tag" ]]; then
+            test "$RELEASE_TAG" = "$detected_tag"
+          fi
+          test -n "$RELEASE_COMMIT"
+          while read -r job result; do
+            if [[ "$result" != "success" ]]; then
+              echo "Required release job '$job' concluded '$result'." >&2
+              exit 1
+            fi
+          done <<EOF
+          build $BUILD_RESULT
+          publish $PUBLISH_RESULT
+          environment-image $ENVIRONMENT_IMAGE_RESULT
+          environment-manifest $ENVIRONMENT_MANIFEST_RESULT
+          release-assets $RELEASE_ASSETS_RESULT
+          release-smoke $RELEASE_SMOKE_RESULT
+          environment-image-smoke $ENVIRONMENT_IMAGE_SMOKE_RESULT
+          release-validation $RELEASE_VALIDATION_RESULT
+          EOF
+
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          test "$(jq --raw-output '.draft' <<< "$release")" = "false"
+          test "$(jq --raw-output '.tag_name' <<< "$release")" = "$RELEASE_TAG"
+          test "$(resolve_tag_commit "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          test "$(jq '.assets | length' <<< "$release")" -eq 5

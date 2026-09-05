@@ -61,7 +61,7 @@ Windows and Linux distributions without glibc do not currently have prebuilt rel
 
 ## Download a release manually
 
-Release archives and checksums are published on the [GitHub Releases page](https://github.com/gdurandvadas/ayni/releases). Archive names include the complete release tag and follow this pattern:
+Release archives and checksums are published on the [GitHub Releases page](https://github.com/gdurandvadas/ayni/releases). A complete release contains one archive for each of the four supported targets plus `SHA256SUMS`; release automation fails if that public inventory or any installer smoke test is incomplete. Archive names include the complete release tag and follow this pattern:
 
 ```text
 ayni-<release-tag>-<target>.tar.gz

@@ -29,6 +29,20 @@ Ayni is an open-source code-quality signal tool for AI agents.
 - When changing release orchestration or upgrading a release action, validate
   both initial publication and existing-tag recovery, including every supported
   architecture.
+- Normalize third-party release-action outputs in an explicit shell step before
+  exporting job outputs. Never combine skipped-step and action outputs with
+  `||` in job outputs: downstream `if` conditions can see an empty value and
+  silently skip every publication job.
+- A workflow run that creates or recovers a public release must not succeed when
+  publication jobs are skipped. Keep an unconditional final completion job that
+  independently detects a release for the triggering commit, requires every
+  binary/image/validation job to succeed, and verifies the public asset count.
+- Preserve the established `ayni-<release-tag>-<target>.tar.gz` archive contract
+  across the workflow, installer, checksums, documentation, and tests. Remember
+  that the release tag already starts with `ayni-v`.
+- After publication or recovery, inspect the actual GitHub release assets and run
+  the checkout installer against the public release; green build artifacts alone
+  are not release evidence.
 
 ## Documentation
 
