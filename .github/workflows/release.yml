@@ -415,9 +415,17 @@ jobs:
           test "$type" = "commit"
           test "$sha" = "$EXPECTED_COMMIT"
 
+      - name: Create publication app token
+        id: publication-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
       - name: Remove obsolete release assets before recovery upload
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.publication-token.outputs.token }}
           TAG: ${{ needs.release.outputs.release_tag }}
         shell: bash
         run: |
@@ -442,6 +450,7 @@ jobs:
       - name: Upload release artifacts
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          token: ${{ steps.publication-token.outputs.token }}
           tag_name: ${{ needs.release.outputs.release_tag }}
           overwrite_files: true
           files: |

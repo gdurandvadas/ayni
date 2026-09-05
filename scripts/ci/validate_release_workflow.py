@@ -131,9 +131,13 @@ def main() -> int:
         and "releases/assets/${asset_id}" in publish
         and "--method DELETE" in publish
         and all(pattern in publish for pattern in expected_asset_patterns)
+        and "id: publication-token" in publish
+        and "permission-contents: write" in publish
+        and "GH_TOKEN: ${{ steps.publication-token.outputs.token }}" in publish
+        and "token: ${{ steps.publication-token.outputs.token }}" in publish
         and "overwrite_files: true" in publish,
-        "publish must preserve expected names, delete obsolete assets before upload, "
-        "and overwrite expected assets",
+        "publish must use a contents-write app token, preserve expected names, delete "
+        "obsolete assets before upload, and overwrite expected assets",
     )
 
     release_assets = job_block(source, "release-assets")

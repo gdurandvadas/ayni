@@ -40,6 +40,9 @@ Ayni is an open-source code-quality signal tool for AI agents.
 - Preserve the established `ayni-<release-tag>-<target>.tar.gz` archive contract
   across the workflow, installer, checksums, documentation, and tests. Remember
   that the release tag already starts with `ayni-v`.
+- If a GitHub App creates the release, mint a fresh contents-write app token in
+  the publication job for release updates, obsolete-asset deletion, and uploads;
+  do not assume `GITHUB_TOKEN` can mutate a release owned by that integration.
 - After publication or recovery, inspect the actual GitHub release assets and run
   the checkout installer against the public release; green build artifacts alone
   are not release evidence.
