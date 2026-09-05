@@ -393,7 +393,7 @@ mod tests {
             repo_root: PathBuf::from("."),
             target_root: PathBuf::from("."),
             workdir: PathBuf::from("."),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("pytest", PathBuf::from("."), "test", 100),
             cancellation: Default::default(),
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn empty_coverage_override_adds_both_combined_reporters() {
         let mut context = context();
-        context.policy = toml::from_str(
+        context.policy = toml::from_str::<AyniPolicy>(
             r#"
 [checks]
 test = true
@@ -435,7 +435,8 @@ coverage_satisfies_test = true
 command = "pytest"
 "#,
         )
-        .expect("policy");
+        .expect("policy")
+        .into();
         let test_path = PathBuf::from("pytest-report.json");
         let coverage_path = PathBuf::from("coverage.json");
         let (program, args) = coverage_command(&context, Some(&test_path), &coverage_path);
@@ -454,7 +455,7 @@ command = "pytest"
     #[test]
     fn explicit_coverage_override_args_are_preserved_as_attestation() {
         let mut context = context();
-        context.policy = toml::from_str(
+        context.policy = toml::from_str::<AyniPolicy>(
             r#"
 [checks]
 test = true
@@ -468,7 +469,8 @@ command = "custom-pytest"
 args = ["--reports-are-configured-elsewhere"]
 "#,
         )
-        .expect("policy");
+        .expect("policy")
+        .into();
         let (program, args) = coverage_command(
             &context,
             Some(&PathBuf::from("pytest-report.json")),

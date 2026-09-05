@@ -168,6 +168,7 @@ pub(crate) fn build_analyze_targets(
         .iter()
         .filter_map(|target| target.issue.clone())
         .collect();
+    let shared_policy = Arc::new(policy.clone());
     let mut targets = Vec::new();
     for configured_target in configured {
         let language = configured_target.language;
@@ -194,7 +195,7 @@ pub(crate) fn build_analyze_targets(
                 repo_root: repo_root.to_path_buf(),
                 target_root: workdir.clone(),
                 workdir: workdir.clone(),
-                policy: policy.clone(),
+                policy: Arc::clone(&shared_policy),
                 scope,
                 execution,
                 cancellation: Default::default(),

@@ -9,7 +9,7 @@ use ayni_adapters_common::failure::{
     command_failure_from_output, coverage_metric_failure, setup_failure,
 };
 use ayni_adapters_common::paths::to_repo_relative_path;
-use ayni_adapters_common::xml::attr_string;
+use ayni_adapters_common::xml::Attributes;
 use ayni_core::{
     Budget, ConfiguredMetricEvaluation, CoverageBudget, CoverageOffender, CoveragePolicy,
     CoverageResult, Language, Level, Offenders, RunContext, SignalKind, SignalResult, SignalRow,
@@ -362,7 +362,7 @@ fn parse_jacoco_content(content: &str) -> Result<CoverageReport, String> {
         if element.name != "counter" || element.parent != Some(root_index) {
             continue;
         }
-        let (metric, counter) = match attr_string(&element.attrs, "type").as_deref() {
+        let (metric, counter) = match element.attrs.get("type") {
             Some("LINE") => ("LINE", &mut line),
             Some("BRANCH") => ("BRANCH", &mut branch),
             _ => continue,
@@ -377,12 +377,14 @@ fn parse_jacoco_content(content: &str) -> Result<CoverageReport, String> {
     Ok(CoverageReport { line, branch })
 }
 
-fn parse_metric_counter(attrs: &str, metric: &str) -> Result<MetricCounter, String> {
-    let covered = attr_string(attrs, "covered")
+fn parse_metric_counter(attrs: &Attributes, metric: &str) -> Result<MetricCounter, String> {
+    let covered = attrs
+        .get("covered")
         .ok_or_else(|| format!("coverage {metric} counter was missing covered"))?
         .parse::<u64>()
         .map_err(|_| format!("coverage {metric} covered count was invalid"))?;
-    let missed = attr_string(attrs, "missed")
+    let missed = attrs
+        .get("missed")
         .ok_or_else(|| format!("coverage {metric} counter was missing missed"))?
         .parse::<u64>()
         .map_err(|_| format!("coverage {metric} missed count was invalid"))?;
@@ -460,7 +462,7 @@ mod tests {
             repo_root: PathBuf::from("."),
             target_root: PathBuf::from("."),
             workdir: PathBuf::from("."),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("gradle", PathBuf::from("."), "test", 100),
             cancellation: Default::default(),
@@ -502,11 +504,12 @@ mod tests {
         context.target_root = root.path().to_path_buf();
         context.workdir = root.path().to_path_buf();
         context.execution.exec_cwd = root.path().to_path_buf();
-        context.policy = toml::from_str(&format!(
+        context.policy = toml::from_str::<AyniPolicy>(&format!(
             "[languages]\nenabled=[\"kotlin\"]\n[kotlin.tooling.coverage]\ncommand={:?}\n",
             command.display().to_string()
         ))
-        .expect("policy");
+        .expect("policy")
+        .into();
 
         assert_eq!(
             resolve_coverage_task(&context).expect("coverage task"),

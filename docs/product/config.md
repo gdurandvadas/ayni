@@ -180,6 +180,11 @@ Common patterns:
 
 Omit `exclude` when you want every path that matches the key glob to be considered (defaults to no exclusions).
 
+Size collection fails as incomplete if traversal or reading an included file
+fails; it does not report a passing partial scan. Files must contain valid UTF-8.
+Line counting reuses a buffer sized to the longest line rather than retaining
+the entire file, and offenders are ordered by repository-relative file path.
+
 ---
 
 ## Size: multiple globs per language

@@ -302,7 +302,7 @@ mod tests {
             repo_root: PathBuf::from("/repo"),
             target_root: PathBuf::from("/repo"),
             workdir: PathBuf::from("/repo"),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope {
                 file: Some(String::from("src/handler.py")),
                 ..Scope::default()
@@ -321,7 +321,7 @@ mod tests {
             repo_root: PathBuf::from("/repo"),
             target_root: PathBuf::from("/repo"),
             workdir: PathBuf::from("/repo"),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("poetry", PathBuf::from("/repo"), "lock", 100),
             cancellation: Default::default(),
@@ -338,7 +338,7 @@ mod tests {
             repo_root: PathBuf::from("/repo"),
             target_root: PathBuf::from("/repo"),
             workdir: PathBuf::from("/repo"),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct(
                 "python",

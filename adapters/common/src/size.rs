@@ -7,6 +7,7 @@ use ayni_core::{
 use glob::Pattern;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -140,10 +141,7 @@ fn collect_size_inner(
         .into_iter()
         .filter_entry(|entry| !is_excluded_path(workdir, entry.path(), excluded_dir_names))
     {
-        let entry = match entry {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
+        let entry = entry.map_err(|error| format!("failed to traverse size input: {error}"))?;
         if !entry.file_type().is_file() {
             continue;
         }
@@ -156,9 +154,8 @@ fn collect_size_inner(
         let rel = to_repo_relative_path(repo_root, entry.path());
         total_files += 1;
 
-        let content = fs::read_to_string(entry.path())
+        let line_count = count_file_lines(entry.path())
             .map_err(|error| format!("failed to read {}: {error}", entry.path().display()))?;
-        let line_count = content.lines().count() as u64;
         max_lines = max_lines.max(line_count);
 
         if let Some(level) = classify_maximum(line_count, threshold.warn, threshold.fail) {
@@ -175,6 +172,8 @@ fn collect_size_inner(
             });
         }
     }
+
+    offenders.sort_by(|left, right| left.file.cmp(&right.file));
 
     let budget_rules = size_map
         .iter()
@@ -199,6 +198,24 @@ fn collect_size_inner(
             ..SizeBudget::default()
         },
     })
+}
+
+// Reuse one UTF-8 line buffer instead of retaining the complete source file.
+// read_line preserves str::lines counting, including an unterminated last line.
+fn count_file_lines(path: &Path) -> io::Result<u64> {
+    count_lines(BufReader::new(fs::File::open(path)?))
+}
+
+fn count_lines(mut reader: impl BufRead) -> io::Result<u64> {
+    let mut line = String::new();
+    let mut count = 0;
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            return Ok(count);
+        }
+        count += 1;
+    }
 }
 
 fn compile_rules(map: &BTreeMap<String, SizeThreshold>) -> Result<Vec<CompiledRule<'_>>, String> {
@@ -269,6 +286,67 @@ mod tests {
                 exclude,
             },
         )])
+    }
+
+    #[test]
+    fn buffered_line_count_preserves_text_semantics_and_errors() {
+        for text in [
+            "",
+            "\n",
+            "a",
+            "a\n",
+            "a\r\nb\r\n",
+            "a\rb",
+            "café\n🦀",
+            "a\n\n",
+        ] {
+            for capacity in [1, 2, 8] {
+                let reader = std::io::BufReader::with_capacity(capacity, text.as_bytes());
+                assert_eq!(
+                    super::count_lines(reader).unwrap(),
+                    text.lines().count() as u64
+                );
+            }
+        }
+        assert!(super::count_lines(&b"valid\n\xff"[..]).is_err());
+        let long_line = "é".repeat(100_000);
+        assert_eq!(super::count_lines(long_line.as_bytes()).unwrap(), 1);
+    }
+
+    #[test]
+    fn missing_walk_root_is_an_error() {
+        let dir = TempDir::new().expect("tempdir");
+        let error = collect_size(
+            dir.path(),
+            &dir.path().join("missing"),
+            &size_map("*.rs", 1, 2, Vec::new()),
+            &[],
+        )
+        .expect_err("incomplete scan");
+        assert!(error.contains("failed to traverse size input"));
+    }
+
+    #[test]
+    fn offenders_are_sorted_by_repository_path() {
+        let dir = TempDir::new().expect("tempdir");
+        for name in ["z.rs", "a.rs", "m.rs"] {
+            fs::write(dir.path().join(name), lines(3)).unwrap();
+        }
+        let result = collect_size(
+            dir.path(),
+            dir.path(),
+            &size_map("*.rs", 1, 2, Vec::new()),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .offenders
+                .iter()
+                .map(|offender| offender.file.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a.rs", "m.rs", "z.rs"]
+        );
     }
 
     #[test]

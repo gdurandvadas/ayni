@@ -2,7 +2,7 @@ use super::util::{find_reports, gradle_command, prepare_gradle_execution, report
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
 use ayni_adapters_common::exec::{format_command, run_command_for_context_structured};
 use ayni_adapters_common::failure::{command_failure_from_output, setup_failure};
-use ayni_adapters_common::xml::{attr_string, decode_xml};
+use ayni_adapters_common::xml::{Attributes, decode_xml};
 use ayni_core::{
     Budget, Language, Level, MutationBudget, MutationOffender, MutationResult, Offenders,
     RunContext, SignalKind, SignalResult, SignalRow,
@@ -151,10 +151,10 @@ fn parse_pitest_content(content: &str) -> Result<PitestReport, String> {
         .map_err(|error| format!("failed to compile mutation tag regex: {error}"))?;
     let mut report = PitestReport::default();
     for caps in mutation_re.captures_iter(content) {
-        let attrs = caps.get(1).map(|value| value.as_str()).unwrap_or("");
+        let attrs = Attributes::parse(caps.get(1).map(|value| value.as_str()).unwrap_or(""))?;
         let body = caps.get(2).map(|value| value.as_str()).unwrap_or("");
-        let status = attr_string(attrs, "status").unwrap_or_default();
-        let detected = attr_string(attrs, "detected").unwrap_or_default();
+        let status = attrs.string("status").unwrap_or_default();
+        let detected = attrs.string("detected").unwrap_or_default();
         let fields = tag_re
             .captures_iter(body)
             .filter_map(|tag| {

@@ -1,13 +1,14 @@
 use super::util::to_repo_relative_path;
+use ayni_adapters_common::deps::{compile_rules, matching_offenders};
 use ayni_core::{
-    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext,
-    SignalKind, SignalResult, SignalRow,
+    Budget, DepsBudget, DepsResult, Language, Offenders, RunContext, SignalKind, SignalResult,
+    SignalRow,
 };
-use glob::Pattern;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use walkdir::WalkDir;
 
 pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
@@ -34,24 +35,7 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
 
     let compiled_rules = compile_rules(&rules)?;
-    let mut offenders = Vec::new();
-    for (from, to) in &edges {
-        for rule in &compiled_rules {
-            if rule.from.matches(from) && rule.to.matches(to) {
-                offenders.push(DepsOffender {
-                    from: from.clone(),
-                    to: to.clone(),
-                    rule: format!("{} -> {}", rule.from_raw, rule.to_raw),
-                    level: Level::Fail,
-                });
-            }
-        }
-    }
-    offenders.sort_by(|left, right| {
-        left.from
-            .cmp(&right.from)
-            .then_with(|| left.to.cmp(&right.to))
-    });
+    let offenders = matching_offenders(&edges, &compiled_rules);
 
     Ok(SignalRow {
         kind: SignalKind::Deps,
@@ -118,18 +102,19 @@ fn module_name_from_rel(rel: &str) -> Option<String> {
 fn imports_in_file(path: &Path) -> Result<Vec<String>, String> {
     let content = fs::read_to_string(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    extract_imports(&content)
+    Ok(extract_imports(&content))
 }
 
-fn extract_imports(content: &str) -> Result<Vec<String>, String> {
-    let import_re = Regex::new(r"^\s*import\s+(.+)$")
-        .map_err(|error| format!("failed to compile import regex: {error}"))?;
-    let from_re = Regex::new(r"^\s*from\s+([A-Za-z_][\w\.]*)\s+import\s+")
-        .map_err(|error| format!("failed to compile from-import regex: {error}"))?;
+fn extract_imports(content: &str) -> Vec<String> {
+    static IMPORT_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*import\s+(.+)$").expect("valid import regex"));
+    static FROM_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^\s*from\s+([A-Za-z_][\w\.]*)\s+import\s+").expect("valid from-import regex")
+    });
     let mut imports = Vec::new();
     for line in content.lines() {
         let line = line.split('#').next().unwrap_or("").trim_end();
-        if let Some(caps) = import_re.captures(line) {
+        if let Some(caps) = IMPORT_RE.captures(line) {
             let raw = caps.get(1).map(|value| value.as_str()).unwrap_or("");
             for item in raw.split(',') {
                 let name = item
@@ -142,13 +127,13 @@ fn extract_imports(content: &str) -> Result<Vec<String>, String> {
                     imports.push(name);
                 }
             }
-        } else if let Some(caps) = from_re.captures(line)
+        } else if let Some(caps) = FROM_RE.captures(line)
             && let Some(name) = caps.get(1)
         {
             imports.push(name.as_str().to_string());
         }
     }
-    Ok(imports)
+    imports
 }
 
 fn resolve_import(modules: &BTreeMap<String, String>, import: &str) -> Option<String> {
@@ -160,33 +145,6 @@ fn resolve_import(modules: &BTreeMap<String, String>, import: &str) -> Option<St
         let (prefix, _) = candidate.rsplit_once('.')?;
         candidate = prefix;
     }
-}
-
-struct CompiledRule {
-    from_raw: String,
-    to_raw: String,
-    from: Pattern,
-    to: Pattern,
-}
-
-fn compile_rules(map: &BTreeMap<String, Vec<String>>) -> Result<Vec<CompiledRule>, String> {
-    let mut out = Vec::new();
-    for (from, targets) in map {
-        let from_pattern = Pattern::new(from)
-            .map_err(|error| format!("invalid deps forbidden source glob '{from}': {error}"))?;
-        for target in targets {
-            let to_pattern = Pattern::new(target).map_err(|error| {
-                format!("invalid deps forbidden target glob '{target}': {error}")
-            })?;
-            out.push(CompiledRule {
-                from_raw: from.clone(),
-                to_raw: target.clone(),
-                from: from_pattern.clone(),
-                to: to_pattern,
-            });
-        }
-    }
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -201,8 +159,7 @@ mod tests {
 import os, src.presentation.api as api
 from src.domain import model
 "#,
-        )
-        .expect("imports");
+        );
         assert_eq!(
             imports,
             vec![

@@ -365,7 +365,7 @@ mod tests {
             repo_root: PathBuf::from("."),
             target_root: PathBuf::from("."),
             workdir: PathBuf::from("."),
-            policy,
+            policy: policy.into(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("go", PathBuf::from("."), "test", 100),
             cancellation: Default::default(),

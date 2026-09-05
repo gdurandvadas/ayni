@@ -1,14 +1,14 @@
 use super::util::{gradle_command, prepare_gradle_execution};
 use ayni_adapters_common::collector::{CollectorError, CollectorResult};
+use ayni_adapters_common::deps::{compile_rules, matching_offenders};
 use ayni_adapters_common::exec::run_command_for_context_structured;
 use ayni_adapters_common::failure::command_failure_from_output;
 use ayni_core::{
-    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext,
-    SignalKind, SignalResult, SignalRow,
+    Budget, DepsBudget, DepsResult, Language, Offenders, RunContext, SignalKind, SignalResult,
+    SignalRow,
 };
-use glob::Pattern;
 use regex::Regex;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 pub fn collect(context: &RunContext) -> CollectorResult {
     prepare_gradle_execution(context, SignalKind::Deps).map_err(CollectorError::Adapter)?;
@@ -35,24 +35,7 @@ pub fn collect(context: &RunContext) -> CollectorResult {
         .unwrap_or_else(|| String::from("."));
     let edges = parse_project_edges(&stdout, &from).map_err(CollectorError::Adapter)?;
     let compiled_rules = compile_rules(&rules).map_err(CollectorError::Adapter)?;
-    let mut offenders = Vec::new();
-    for (source, target) in &edges {
-        for rule in &compiled_rules {
-            if rule.from.matches(source) && rule.to.matches(target) {
-                offenders.push(DepsOffender {
-                    from: source.clone(),
-                    to: target.clone(),
-                    rule: format!("{} -> {}", rule.from_raw, rule.to_raw),
-                    level: Level::Fail,
-                });
-            }
-        }
-    }
-    offenders.sort_by(|left, right| {
-        left.from
-            .cmp(&right.from)
-            .then_with(|| left.to.cmp(&right.to))
-    });
+    let offenders = matching_offenders(&edges, &compiled_rules);
 
     Ok(SignalRow {
         kind: SignalKind::Deps,
@@ -118,32 +101,6 @@ fn gradle_path_to_rule_path(path: &str) -> String {
     } else {
         trimmed
     }
-}
-
-struct CompiledRule {
-    from_raw: String,
-    to_raw: String,
-    from: Pattern,
-    to: Pattern,
-}
-
-fn compile_rules(map: &BTreeMap<String, Vec<String>>) -> Result<Vec<CompiledRule>, String> {
-    let mut out = Vec::new();
-    for (from, targets) in map {
-        let from_pattern = Pattern::new(from)
-            .map_err(|error| format!("invalid deps forbidden source glob '{from}': {error}"))?;
-        for target in targets {
-            out.push(CompiledRule {
-                from_raw: from.clone(),
-                to_raw: target.clone(),
-                from: from_pattern.clone(),
-                to: Pattern::new(target).map_err(|error| {
-                    format!("invalid deps forbidden target glob '{target}': {error}")
-                })?,
-            });
-        }
-    }
-    Ok(out)
 }
 
 #[cfg(test)]

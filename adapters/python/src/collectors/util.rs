@@ -145,7 +145,7 @@ mod tests {
             repo_root: repo_root.clone(),
             target_root: repo_root.join("packages/config"),
             workdir: repo_root.join("packages/config"),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope {
                 workspace_root: repo_root.to_string_lossy().into_owned(),
                 path: Some(String::from("packages/config")),

@@ -229,6 +229,15 @@ Normally each collector module owns one canonical `SignalKind` and returns one
 - deterministic pass/warn/fail calculation; and
 - repository-relative offenders.
 
+`RunContext.policy` is an `Arc<AyniPolicy>` shared by target and verification
+contexts. Finish policy selection before constructing a context; wrap an owned
+policy with `.into()` and borrow through the shared reference when collecting.
+Keep per-target scope and execution state separate from the immutable policy.
+
+Use `adapters/common::deps` to compile forbidden rules and match scoped edges,
+and `adapters/common::xml::Attributes` to parse and reuse report attributes.
+Adapters still own graph discovery, scope selection, and report semantics.
+
 Adapters translate tool-specific output at this boundary. Do not expose raw
 language-specific payloads as top-level artifact fields. Follow the [signal
 contract](/product/signals) for all shared types.

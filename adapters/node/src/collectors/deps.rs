@@ -1,12 +1,12 @@
 use crate::workspace::WorkspacePatterns;
+use ayni_adapters_common::deps::{compile_rules, matching_offenders};
 use ayni_adapters_common::paths::{
     canonicalize_relative_posix, resolve_repo_path, to_repo_relative_path,
 };
 use ayni_core::{
-    Budget, DepsBudget, DepsOffender, DepsResult, Language, Level, Offenders, RunContext, Scope,
-    SignalKind, SignalResult, SignalRow,
+    Budget, DepsBudget, DepsResult, Language, Offenders, RunContext, Scope, SignalKind,
+    SignalResult, SignalRow,
 };
-use glob::Pattern;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -39,25 +39,8 @@ pub fn collect(context: &RunContext) -> Result<SignalRow, String> {
     }
 
     let compiled_rules = compile_rules(&rules)?;
-    let mut offenders = Vec::new();
-    for (from, to) in &edges {
-        for rule in &compiled_rules {
-            if rule.from.matches(from) && rule.to.matches(to) {
-                offenders.push(DepsOffender {
-                    from: from.clone(),
-                    to: to.clone(),
-                    rule: format!("{} -> {}", rule.from_raw, rule.to_raw),
-                    level: Level::Fail,
-                });
-            }
-        }
-    }
+    let offenders = matching_offenders(&edges, &compiled_rules);
 
-    offenders.sort_by(|left, right| {
-        left.from
-            .cmp(&right.from)
-            .then_with(|| left.to.cmp(&right.to))
-    });
     Ok(SignalRow {
         kind: SignalKind::Deps,
         language: Language::Node,
@@ -480,31 +463,6 @@ fn parse_manifest_value(
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))
 }
 
-struct CompiledRule {
-    from_raw: String,
-    to_raw: String,
-    from: Pattern,
-    to: Pattern,
-}
-
-fn compile_rules(forbidden: &BTreeMap<String, Vec<String>>) -> Result<Vec<CompiledRule>, String> {
-    let mut compiled = Vec::new();
-    for (from, tos) in forbidden {
-        let from_pattern = Pattern::new(from)
-            .map_err(|error| format!("invalid forbidden deps pattern '{from}': {error}"))?;
-        for to in tos {
-            compiled.push(CompiledRule {
-                from_raw: from.clone(),
-                to_raw: to.clone(),
-                from: from_pattern.clone(),
-                to: Pattern::new(to)
-                    .map_err(|error| format!("invalid forbidden deps pattern '{to}': {error}"))?,
-            });
-        }
-    }
-    Ok(compiled)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{NodeWorkspace, collect};
@@ -540,7 +498,7 @@ mod tests {
             repo_root: canonical.clone(),
             target_root: canonical.clone(),
             workdir: canonical.clone(),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope::default(),
             execution: ExecutionResolution::direct("npm", canonical, "test", 100),
             cancellation: Default::default(),
@@ -579,7 +537,7 @@ mod tests {
             repo_root: canonical.clone(),
             target_root: target.clone(),
             workdir: target.clone(),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope {
                 workspace_root: canonical.to_string_lossy().into_owned(),
                 path: Some(String::from("packages/base")),
@@ -643,7 +601,7 @@ mod tests {
             repo_root: repo_root.clone(),
             target_root: target.clone(),
             workdir: target.clone(),
-            policy,
+            policy: policy.into(),
             scope: Scope {
                 workspace_root: repo_root.to_string_lossy().into_owned(),
                 path: Some(String::from("frontend")),
@@ -713,7 +671,7 @@ mod tests {
             repo_root: repo_root.clone(),
             target_root: target.clone(),
             workdir: target.clone(),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope {
                 workspace_root: repo_root.to_string_lossy().into_owned(),
                 path: Some(String::from("frontend")),
@@ -755,7 +713,7 @@ mod tests {
             repo_root: canonical_repo.clone(),
             target_root: canonical_target.clone(),
             workdir: canonical_target.clone(),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope {
                 workspace_root: canonical_repo.to_string_lossy().into_owned(),
                 path: Some(String::from("frontend")),
@@ -791,7 +749,7 @@ mod tests {
             repo_root: canonical_repo.clone(),
             target_root: canonical_target.clone(),
             workdir: canonical_target.clone(),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope {
                 workspace_root: canonical_repo.to_string_lossy().into_owned(),
                 path: Some(String::from("frontend")),
@@ -827,7 +785,7 @@ mod tests {
             repo_root: repo_root.clone(),
             target_root: target.clone(),
             workdir: target.clone(),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope {
                 workspace_root: repo_root.to_string_lossy().into_owned(),
                 path: Some(String::from("frontend")),
@@ -874,7 +832,7 @@ mod tests {
             repo_root: repo_root.clone(),
             target_root: target.clone(),
             workdir: target.clone(),
-            policy: AyniPolicy::default(),
+            policy: AyniPolicy::default().into(),
             scope: Scope {
                 workspace_root: repo_root.to_string_lossy().into_owned(),
                 path: Some(String::from("frontend")),
