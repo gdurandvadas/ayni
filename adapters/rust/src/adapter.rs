@@ -85,6 +85,10 @@ impl LanguageAdapter for RustAdapter {
         }
     }
 
+    fn managed_tool_specs(&self) -> &'static [ayni_core::ManagedToolSpec] {
+        crate::tooling::RUST_TOOLS
+    }
+
     fn catalog(&self) -> &'static [CatalogEntry] {
         RUST_CATALOG
     }

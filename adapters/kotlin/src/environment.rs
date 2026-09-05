@@ -594,14 +594,8 @@ fn coverage_signal_tool(
     if !request.requires_any(&[SignalKind::Coverage]) {
         return Ok(None);
     }
-    let kover = find_plugin(
-        scripts,
-        &[
-            "org.jetbrains.kotlinx.kover",
-            "org.jetbrains.kotlinx.kover.gradle.plugin",
-        ],
-    )?
-    .map(|(path, version)| ("kover", path, version));
+    let kover = find_plugin(scripts, crate::tooling::KOVER.plugin_ids())?
+        .map(|(path, version)| ("kover", path, version));
     let jacoco = find_jacoco(scripts)?.map(|(path, version)| ("jacoco", path, version));
     let found = kover.or(jacoco).ok_or_else(|| {
         error("Kotlin coverage requires an exact Kover plugin or JaCoCo toolVersion declaration")
@@ -628,7 +622,7 @@ fn mutation_signal_tool(
     if !request.requires_any(&[SignalKind::Mutation]) {
         return Ok(None);
     }
-    let (path, version) = find_plugin(scripts, &["info.solidsoft.pitest"])?
+    let (path, version) = find_plugin(scripts, crate::tooling::PITEST.plugin_ids())?
         .ok_or_else(|| error("Kotlin mutation requires an exact PIT plugin declaration"))?;
     gradle_plugin_tool(request, "pitest", &path, &version, SignalKind::Mutation).map(Some)
 }

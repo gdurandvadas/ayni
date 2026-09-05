@@ -11,3 +11,5 @@ mod package_manager;
 mod preparation;
 
 pub use adapter::PythonAdapter;
+
+pub mod tooling;

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mutations partial="true">
+<mutation detected='true' status='KILLED' numberOfTestsRun='1'><sourceFile>Counter.kt</sourceFile><mutatedClass>CounterKt</mutatedClass><mutatedMethod>increment</mutatedMethod><methodDescription>(I)I</methodDescription><lineNumber>1</lineNumber><mutator>org.pitest.mutationtest.engine.gregor.mutators.MathMutator</mutator><indexes><index>5</index></indexes><blocks><block>0</block></blocks><killingTest>CounterTest.increments(CounterTest)</killingTest><description>Replaced integer addition with subtraction</description></mutation>
+<mutation detected='true' status='KILLED' numberOfTestsRun='1'><sourceFile>Counter.kt</sourceFile><mutatedClass>CounterKt</mutatedClass><mutatedMethod>increment</mutatedMethod><methodDescription>(I)I</methodDescription><lineNumber>1</lineNumber><mutator>org.pitest.mutationtest.engine.gregor.mutators.returns.PrimitiveReturnsMutator</mutator><indexes><index>6</index></indexes><blocks><block>0</block></blocks><killingTest>CounterTest.increments(CounterTest)</killingTest><description>replaced int return with 0 for CounterKt::increment</description></mutation>
+</mutations>

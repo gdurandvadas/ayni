@@ -1,7 +1,7 @@
 use ayni_core::{CatalogEntry, SignalKind};
 
-/// Exact managed-environment version for the coverage tool.
-pub const CARGO_LLVM_COV_VERSION: &str = "0.8.5";
+/// Kept as a re-export for existing catalog consumers.
+pub use crate::tooling::CARGO_LLVM_COV_VERSION;
 
 /// Tool catalog for the Rust adapter.
 ///

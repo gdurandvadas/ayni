@@ -1,6 +1,6 @@
 //! Read-only Rust environment discovery.
 
-use crate::catalog::CARGO_LLVM_COV_VERSION;
+use crate::tooling::RUST_TOOLS;
 
 use ayni_adapters_common::repository::{
     read_contained_string, read_optional_contained_bytes, read_optional_contained_string,
@@ -9,7 +9,7 @@ use ayni_adapters_common::repository::{
 use ayni_core::{
     AdapterError, DependencyLockRequirement, EnvironmentCapability, EnvironmentConflict,
     EnvironmentContribution, EnvironmentDiscoveryRequest, EnvironmentWarning, Language,
-    ProvisioningSupport, RequirementConfidence, RequirementSource, RuntimeRequirement, SignalKind,
+    ProvisioningSupport, RequirementConfidence, RequirementSource, RuntimeRequirement,
     SignalToolRequirement, TargetEnvironment, ToolInstallationScope, VersionRequirement,
     sha256_fingerprint,
 };
@@ -44,14 +44,14 @@ fn discover(
     let conflicts = toolchain_conflicts(request, &toml_toolchain, &legacy_toolchain);
     let (mut runtime, warnings) =
         runtime_requirement(request, &ownership, toml_toolchain.or(legacy_toolchain))?;
-    add_coverage_component(request, &mut runtime);
+    add_coverage_component(request, &mut runtime)?;
 
     EnvironmentContribution::new(
         TargetEnvironment {
             target: request.target().clone(),
             workspace: ownership.workspace_path,
             package: ownership.package_name,
-            signal_tools: signal_tools(request, &ownership.manifest_path, &runtime)?,
+            signal_tools: signal_tools(request, &ownership.manifest_path)?,
             runtimes: vec![runtime],
             package_manager: None,
             system_requirements: Vec::new(),
@@ -141,15 +141,27 @@ fn runtime_requirement(
     ))
 }
 
-fn add_coverage_component(request: &EnvironmentDiscoveryRequest, runtime: &mut RuntimeRequirement) {
-    if request.requires_any(&[SignalKind::Coverage])
-        && !runtime
-            .components
-            .iter()
-            .any(|component| component == "llvm-tools-preview")
+fn add_coverage_component(
+    request: &EnvironmentDiscoveryRequest,
+    runtime: &mut RuntimeRequirement,
+) -> Result<(), AdapterError> {
+    for (spec, _) in ayni_core::select_managed_tools(
+        crate::catalog::RUST_CATALOG,
+        RUST_TOOLS,
+        request.enabled_signals(),
+    )
+    .map_err(adapter_error)?
     {
-        runtime.components.push(String::from("llvm-tools-preview"));
+        if spec.integration == ayni_core::ToolIntegration::ToolchainComponent
+            && !runtime
+                .components
+                .iter()
+                .any(|component| component == spec.catalog_name)
+        {
+            runtime.components.push(spec.catalog_name.into());
+        }
     }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -555,7 +567,6 @@ fn is_iso_date(value: &str) -> bool {
 fn signal_tools(
     request: &EnvironmentDiscoveryRequest,
     manifest_path: &str,
-    _runtime: &RuntimeRequirement,
 ) -> Result<Vec<SignalToolRequirement>, AdapterError> {
     let source = source(
         "rust_adapter_catalog",
@@ -563,55 +574,35 @@ fn signal_tools(
         None,
         RequirementConfidence::Declared,
     )?;
-    let platforms = request.requested_platforms().to_vec();
-    let mut tools = Vec::new();
-    if request.requires_any(&[SignalKind::Coverage]) {
-        tools.push(tool(
-            "cargo-llvm-cov",
-            VersionRequirement::exact(CARGO_LLVM_COV_VERSION).map_err(plan_error)?,
-            "cargo-install",
-            ayni_core::ToolVersionAuthority::AdapterPinned,
-            vec![SignalKind::Coverage],
-            platforms.clone(),
-            source.clone(),
-        ));
-    }
-    if request.requires_any(&[SignalKind::Complexity]) {
-        tools.push(tool(
-            "rust-code-analysis-cli",
-            VersionRequirement::unresolved("catalog does not pin rust-code-analysis-cli")
-                .map_err(plan_error)?,
-            "cargo-install",
-            ayni_core::ToolVersionAuthority::LockResolved,
-            vec![SignalKind::Complexity],
-            platforms.clone(),
-            source.clone(),
-        ));
-    }
-    Ok(tools)
-}
-
-fn tool(
-    tool: &str,
-    version: VersionRequirement,
-    provider: &str,
-    version_authority: ayni_core::ToolVersionAuthority,
-    signals: Vec<SignalKind>,
-    supported_platforms: Vec<ayni_core::TargetPlatform>,
-    source: RequirementSource,
-) -> SignalToolRequirement {
-    SignalToolRequirement {
-        tool: tool.into(),
-        version,
-        provider: provider.into(),
-        scope: ToolInstallationScope::Isolated,
-        version_authority,
-        signals,
-        supported_platforms,
-        provisioning: ProvisioningSupport::OnlineOnly,
-        modifies_checkout: false,
-        source,
-    }
+    ayni_core::select_managed_tools(
+        crate::catalog::RUST_CATALOG,
+        RUST_TOOLS,
+        request.enabled_signals(),
+    )
+    .map_err(adapter_error)?
+    .into_iter()
+    .filter_map(|(spec, signals)| match spec.integration {
+        ayni_core::ToolIntegration::Isolated { provider } => Some((spec, signals, provider)),
+        _ => None,
+    })
+    .map(|(spec, signals, provider)| {
+        Ok(SignalToolRequirement {
+            tool: spec.catalog_name.into(),
+            version: VersionRequirement::exact(
+                spec.exact_version().expect("validated isolated baseline"),
+            )
+            .map_err(plan_error)?,
+            provider: provider.into(),
+            scope: ToolInstallationScope::Isolated,
+            version_authority: ayni_core::ToolVersionAuthority::AdapterPinned,
+            signals,
+            supported_platforms: request.requested_platforms().to_vec(),
+            provisioning: ProvisioningSupport::OnlineOnly,
+            modifies_checkout: false,
+            source: source.clone(),
+        })
+    })
+    .collect()
 }
 
 fn cargo_manifest_inputs(
@@ -1280,7 +1271,9 @@ mod tests {
             tools
                 .iter()
                 .find(|tool| tool.tool == "rust-code-analysis-cli")
-                .is_some_and(|tool| matches!(tool.version, VersionRequirement::Unresolved { .. }))
+                .is_some_and(|tool| tool.version
+                    == VersionRequirement::exact(crate::tooling::RUST_CODE_ANALYSIS_VERSION)
+                        .unwrap())
         );
     }
 }

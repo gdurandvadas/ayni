@@ -210,6 +210,17 @@ mod tests {
     use super::parse_pitest_content;
 
     #[test]
+    fn parses_real_pitest_1_19_0_report() {
+        let report = parse_pitest_content(include_str!(
+            "../../tests/fixtures/tooling/gradle/mutations.xml"
+        ))
+        .unwrap();
+        assert_eq!(report.killed, 2);
+        assert_eq!(report.survived + report.timeout, 0);
+        assert!(report.offenders.is_empty());
+    }
+
+    #[test]
     fn parses_pitest_mutations() {
         let report = parse_pitest_content(
             r#"<mutations>

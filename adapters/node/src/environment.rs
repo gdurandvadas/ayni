@@ -573,60 +573,63 @@ fn signal_tools(
     // The runtime is modeled separately; all project-integrated collectors
     // are sourced directly from the catalog so their signal mappings cannot
     // drift from managed-environment discovery.
-    crate::catalog::NODE_CATALOG
-        .iter()
-        .filter(|entry| entry.name != "node" && request.requires_any(entry.for_signals))
-        .map(|entry| {
-            let tool = entry.name;
-            let signals = entry.for_signals;
-            let direct = dependency(target_manifest, tool)?.map(|value| (target_root, value));
-            let inherited = if owner_root == target_root {
-                None
+    ayni_core::select_managed_tools(
+        crate::catalog::NODE_CATALOG,
+        crate::tooling::NODE_TOOLS,
+        request.enabled_signals(),
+    )
+    .map_err(adapter_error)?
+    .into_iter()
+    .map(|(spec, signals)| {
+        let tool = spec.catalog_name;
+        let direct = dependency(target_manifest, tool)?.map(|value| (target_root, value));
+        let inherited = if owner_root == target_root {
+            None
+        } else {
+            dependency(owner_manifest, tool)?.map(|value| (owner_root, value))
+        };
+        let declaration = direct.or(inherited);
+        let (version, modifies_checkout, confidence, source_root, detail) =
+            if let Some((root, value)) = declaration {
+                (
+                    dependency_requirement(value)?,
+                    false,
+                    RequirementConfidence::Declared,
+                    root,
+                    Some(value),
+                )
             } else {
-                dependency(owner_manifest, tool)?.map(|value| (owner_root, value))
+                (
+                    VersionRequirement::unresolved(
+                        "project-integrated tool is not declared in package.json",
+                    )
+                    .map_err(adapter_error)?,
+                    true,
+                    RequirementConfidence::Assumed,
+                    owner_root,
+                    None,
+                )
             };
-            let declaration = direct.or(inherited);
-            let (version, modifies_checkout, confidence, source_root, detail) =
-                if let Some((root, value)) = declaration {
-                    (
-                        dependency_requirement(value)?,
-                        false,
-                        RequirementConfidence::Declared,
-                        root,
-                        Some(value),
-                    )
-                } else {
-                    (
-                        VersionRequirement::unresolved(
-                            "project-integrated tool is not declared in package.json",
-                        )
-                        .map_err(adapter_error)?,
-                        true,
-                        RequirementConfidence::Assumed,
-                        owner_root,
-                        None,
-                    )
-                };
-            Ok(SignalToolRequirement {
-                version_authority: ayni_core::ToolVersionAuthority::ProjectLocked,
-                tool: (*tool).to_string(),
-                version,
-                provider: String::from("node_project_dependency"),
-                scope: ToolInstallationScope::Project,
-                signals: signals.to_vec(),
-                supported_platforms: request.requested_platforms().to_vec(),
-                provisioning: ProvisioningSupport::OnlineOnly,
-                modifies_checkout,
-                source: source(
-                    request.repo_root(),
-                    &source_root.join("package.json"),
-                    "package_json_dependency",
-                    detail,
-                    confidence,
-                )?,
-            })
+        Ok(SignalToolRequirement {
+            version_authority: ayni_core::ToolVersionAuthority::ProjectLocked,
+            tool: tool.to_string(),
+            version,
+            provider: String::from("node_project_dependency"),
+            scope: ToolInstallationScope::Project,
+            signals: signals.to_vec(),
+            supported_platforms: request.requested_platforms().to_vec(),
+            provisioning: ProvisioningSupport::OnlineOnly,
+            modifies_checkout,
+            source: source(
+                request.repo_root(),
+                &source_root.join("package.json"),
+                "package_json_dependency",
+                detail,
+                confidence,
+            )?,
         })
-        .collect()
+    })
+    .collect()
 }
 
 fn workspace_owner(repo_root: &Path, target_root: &Path) -> Result<PathBuf, AdapterError> {

@@ -9,7 +9,8 @@ has `[package]`. Cargo commands for a member run from its workspace root.
 
 `cargo` and a Rust toolchain remain user-owned prerequisites for `--host`
 execution. `ayni env show` discovers Rust requirements and `ayni env lock`
-resolves exact runtime and Cargo catalog-tool versions through `mise`; locking
+resolves exact runtime versions through `mise` and records adapter-pinned
+Cargo signal-tool versions; locking
 does not install tools or modify the checkout. `env build` stages the locked
 Cargo manifests, requires `Cargo.lock`, and runs `cargo fetch --locked` inside
 the image build. `env doctor`, `env shell`, `env run`, managed `check`, and
@@ -26,9 +27,17 @@ ownership contract is ancestry-based.
 | `test` | `cargo test` | managed: Cargo from the exact locked Rust toolchain; host: no version enforced |
 | `coverage` | `llvm-tools-preview`; `cargo-llvm-cov` | managed: component from the exact Rust toolchain and `cargo-llvm-cov` pinned to `0.8.5`; host: no version enforced |
 | `size` | built-in Rust source scan | no external tool |
-| `complexity` | `rust-code-analysis-cli`; Cargo metadata | managed: an exact tool version selected during locking plus exact-toolchain Cargo; host: no version enforced |
+| `complexity` | `rust-code-analysis-cli`; Cargo metadata | managed: `rust-code-analysis-cli` pinned to `0.0.25` plus exact-toolchain Cargo; host: no version enforced |
 | `deps` | Cargo workspace/dependency graph scan | managed: Cargo from the exact locked Rust toolchain; host: no version enforced |
 | `mutation` | unsupported | Rust mutation measurement is not supported; enabling it fails explicitly before tool execution |
+
+## Reconciliation baselines
+
+The adapter owns a catalog-complete baseline inventory in `tooling.rs`.
+See [adapter-owned baselines](../contributing/tooling-reconciliation.md#adapter-owned-baselines-milestone-2)
+for exact versions and integration choices. This foundation does not enable
+Ayni ownership or edit project manifests. Custom commands remain project-owned,
+and optional mutation tooling is only selected for an enabled default signal.
 
 ## Focused verification
 

@@ -28,6 +28,14 @@ fail closed for managed execution. They remain available through the explicit
 | `deps` | built-in Python import scan | no external tool |
 | `mutation` | `mutmut` (opt-in) | managed: exact `uv.lock`; host: no version enforced |
 
+## Reconciliation baselines
+
+The adapter owns a catalog-complete baseline inventory in `tooling.rs`.
+See [adapter-owned baselines](../contributing/tooling-reconciliation.md#adapter-owned-baselines-milestone-2)
+for exact versions and integration choices. This foundation does not enable
+Ayni ownership or edit project manifests. Custom commands remain project-owned,
+and optional mutation tooling is only selected for an enabled default signal.
+
 ## Focused verification
 
 Shared artifact, completion, validation, and exact-command reuse semantics are

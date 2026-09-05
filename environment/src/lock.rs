@@ -125,18 +125,7 @@ pub fn plan_matches_lock(plan: &EnvironmentPlan, lock: &EnvironmentLock) -> bool
                     .signal_tools
                     .iter()
                     .zip(&locked.signal_tools)
-                    .all(|(left, right)| {
-                        // Resolution may replace a declaration source (for
-                        // example package.json) with exact lock evidence
-                        // (package-lock.json). Identity and signal ownership
-                        // must remain stable; dependency inputs account for
-                        // source-path and digest changes separately.
-                        left.tool == right.tool
-                            && left.provider == right.provider
-                            && left.scope == right.scope
-                            && left.version_authority == right.version_authority
-                            && left.signals == right.signals
-                    })
+                    .all(|(left, right)| signal_tool_matches_lock(left, right))
                 && plan.dependency_locks.len() == locked.dependency_locks.len()
                 && plan.dependency_locks.iter().all(|left| {
                     locked.dependency_locks.iter().any(|right| {
@@ -146,6 +135,23 @@ pub fn plan_matches_lock(plan: &EnvironmentPlan, lock: &EnvironmentLock) -> bool
                     })
                 })
         })
+}
+
+fn signal_tool_matches_lock(
+    planned: &ayni_core::SignalToolRequirement,
+    locked: &ayni_core::LockedSignalTool,
+) -> bool {
+    // Resolution may replace manifest evidence with native-lock evidence.
+    // Exact baselines must still invalidate locks after an adapter upgrade.
+    planned.tool == locked.tool
+        && planned.provider == locked.provider
+        && planned.scope == locked.scope
+        && planned.version_authority == locked.version_authority
+        && planned.signals == locked.signals
+        && match &planned.version {
+            ayni_core::VersionRequirement::Exact { version } => version == &locked.version,
+            _ => true,
+        }
 }
 
 pub fn read_lock(repo_root: &Path) -> Result<EnvironmentLock, BackendError> {
@@ -312,6 +318,52 @@ fn validate_digest(digest: &str) -> Result<(), BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_tool_baseline_changes_invalidate_locks_without_comparing_source_paths() {
+        use ayni_core::*;
+        let source = RequirementSource::new(
+            "adapter",
+            "Cargo.toml",
+            None::<String>,
+            RequirementConfidence::Declared,
+        )
+        .unwrap();
+        let mut planned = SignalToolRequirement {
+            tool: "analysis".into(),
+            version: VersionRequirement::exact("1.2.3").unwrap(),
+            version_authority: ToolVersionAuthority::AdapterPinned,
+            provider: "cargo-install".into(),
+            scope: ToolInstallationScope::Isolated,
+            signals: vec![SignalKind::Complexity],
+            supported_platforms: vec![],
+            provisioning: ProvisioningSupport::OnlineOnly,
+            modifies_checkout: false,
+            source,
+        };
+        let mut locked = LockedSignalTool {
+            tool: planned.tool.clone(),
+            version: "1.2.3".into(),
+            version_authority: planned.version_authority,
+            provider: planned.provider.clone(),
+            scope: planned.scope,
+            signals: planned.signals.clone(),
+            source: LockedRequirementSource {
+                kind: "native_lock".into(),
+                path: "Cargo.lock".into(),
+                digest: None,
+                confidence: RequirementConfidence::Exact,
+            },
+        };
+        assert!(signal_tool_matches_lock(&planned, &locked));
+        locked.version = "1.2.4".into();
+        assert!(!signal_tool_matches_lock(&planned, &locked));
+        planned.version = VersionRequirement::selector("1.2").unwrap();
+        planned.version_authority = ToolVersionAuthority::LockResolved;
+        assert!(!signal_tool_matches_lock(&planned, &locked));
+        locked.version_authority = ToolVersionAuthority::LockResolved;
+        assert!(signal_tool_matches_lock(&planned, &locked));
+    }
 
     #[test]
     fn host_architecture_mapping_rejects_unsupported_targets() {
