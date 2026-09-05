@@ -48,6 +48,7 @@ def main() -> int:
         "release_created: ${{ steps.release-metadata.outputs.release_created }}",
         "release_tag: ${{ steps.release-metadata.outputs.tag }}",
         "release_version: ${{ steps.release-metadata.outputs.version }}",
+        "release_commit: ${{ steps.release-source.outputs.commit }}",
         "release_pr_created: ${{ steps.release-pr.outputs.created }}",
         "release_pr_branch: ${{ steps.release-pr.outputs.branch }}",
     )
@@ -71,6 +72,12 @@ def main() -> int:
         "if: ${{ steps.release-metadata.outputs.release_created == 'true' }}"
         in release,
         "immutable source resolution must consume normalized release metadata",
+    )
+    require(
+        errors,
+        'if [[ "$EVENT_NAME" == "push" ]]' in release
+        and 'test "$sha" = "$TRIGGER_COMMIT"' in release,
+        "initial release source must equal the triggering commit",
     )
     require(
         errors,
@@ -107,6 +114,15 @@ def main() -> int:
             f"release-completion must depend on {name}",
         )
 
+    publish = job_block(source, "publish")
+    require(
+        errors,
+        "Remove obsolete release assets before recovery upload" in publish
+        and "releases/assets/${asset_id}" in publish
+        and "--method DELETE" in publish,
+        "publish must remove obsolete assets so recovery converges to exact inventory",
+    )
+
     release_assets = job_block(source, "release-assets")
     require(
         errors,
@@ -123,7 +139,11 @@ def main() -> int:
         "contents/version.txt?ref=${GITHUB_SHA}",
         'candidate_tag="ayni-v${source_version}"',
         '[[ "$candidate_commit" == "$GITHUB_SHA" ]]',
+        "lookup_code=$?",
+        "^HTTP/[^ ]+ 404 ",
+        'exit "$lookup_code"',
         'test "$RELEASE_CREATED" = "true"',
+        'test "$RELEASE_COMMIT" = "$GITHUB_SHA"',
         'test "$(resolve_tag_commit "$RELEASE_TAG")" = "$RELEASE_COMMIT"',
         "Required release job '$job' concluded '$result'.",
         "test \"$(jq '.assets | length' <<< \"$release\")\" -eq 5",

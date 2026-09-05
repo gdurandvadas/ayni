@@ -181,6 +181,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release-metadata.outputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          TRIGGER_COMMIT: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -195,6 +197,9 @@ jobs:
           done
           test "$type" = "commit"
           test "$sha" != ""
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            test "$sha" = "$TRIGGER_COMMIT"
+          fi
           echo "commit=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Resolve release pull request branch
@@ -409,6 +414,30 @@ jobs:
           done
           test "$type" = "commit"
           test "$sha" = "$EXPECTED_COMMIT"
+
+      - name: Remove obsolete release assets before recovery upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+            --jq '.assets[] | [.id, .name] | @tsv' |
+            while IFS=$'\t' read -r asset_id asset_name; do
+              case "$asset_name" in
+                SHA256SUMS|\
+                "ayni-${TAG}-aarch64-apple-darwin.tar.gz"|\
+                "ayni-${TAG}-x86_64-apple-darwin.tar.gz"|\
+                "ayni-${TAG}-x86_64-unknown-linux-gnu.tar.gz"|\
+                "ayni-${TAG}-aarch64-unknown-linux-gnu.tar.gz") ;;
+                *)
+                  echo "Deleting obsolete release asset: $asset_name"
+                  gh api --method DELETE \
+                    "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+                  ;;
+              esac
+            done
 
       - name: Upload release artifacts
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -999,12 +1028,22 @@ jobs:
             source_version="$(printf '%s' "$encoded_version" | base64 --decode | tr -d '\r\n')"
             [[ "$source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
             candidate_tag="ayni-v${source_version}"
-            if gh api --silent "repos/${GITHUB_REPOSITORY}/releases/tags/${candidate_tag}"; then
+            set +e
+            lookup="$(gh api --include \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${candidate_tag}" 2>&1)"
+            lookup_code=$?
+            set -e
+            if [[ "$lookup_code" -eq 0 ]]; then
               candidate_commit="$(resolve_tag_commit "$candidate_tag")"
               if [[ "$candidate_commit" == "$GITHUB_SHA" ]]; then
                 detected_tag="$candidate_tag"
                 publication_required=true
               fi
+            elif grep -Eq '^HTTP/[^ ]+ 404 ' <<< "$lookup"; then
+              : # An authoritative 404 means this ordinary push created no release.
+            else
+              printf '%s\n' "$lookup" >&2
+              exit "$lookup_code"
             fi
           fi
 
@@ -1023,6 +1062,9 @@ jobs:
             test "$RELEASE_TAG" = "$detected_tag"
           fi
           test -n "$RELEASE_COMMIT"
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            test "$RELEASE_COMMIT" = "$GITHUB_SHA"
+          fi
           while read -r job result; do
             if [[ "$result" != "success" ]]; then
               echo "Required release job '$job' concluded '$result'." >&2
