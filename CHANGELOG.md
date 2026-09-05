@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.6](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.5...ayni-v0.11.6) (2026-09-05)
+
+
+### Bug Fixes
+
+* **release:** streamline publication recovery ([0418291](https://github.com/gdurandvadas/ayni/commit/04182917f90c53f3a119fe1bf500c9d1e57099a9))
+
 ## [0.11.5](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.4...ayni-v0.11.5) (2026-09-05)
 
 
