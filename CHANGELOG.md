@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.5](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.4...ayni-v0.11.5) (2026-09-05)
+
+
+### Bug Fixes
+
+* **release:** authorize recovery uploads ([f914afc](https://github.com/gdurandvadas/ayni/commit/f914afc714fb37cfe50898b12955e0dfd210adc5))
+* **release:** close recovery safety gaps ([96d9930](https://github.com/gdurandvadas/ayni/commit/96d9930ada22e741c32ede728084e21d39e92cbd))
+* **release:** enforce recovery upload contract ([2fded87](https://github.com/gdurandvadas/ayni/commit/2fded8711c69770102c98185230da0a1d4529bf3))
+* **release:** require complete public assets ([c405041](https://github.com/gdurandvadas/ayni/commit/c4050416ab918dec3e34251319995dbf313a5a49))
+
 ## [0.11.4](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.3...ayni-v0.11.4) (2026-09-04)
 
 
