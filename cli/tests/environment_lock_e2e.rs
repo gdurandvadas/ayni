@@ -285,14 +285,14 @@ exit 1"#,
 
 #[cfg(unix)]
 #[test]
-fn unresolved_rust_catalog_tool_is_resolved_to_an_exact_version() {
+fn pinned_rust_catalog_tool_keeps_adapter_authority_without_latest_resolution() {
     let root = fixture();
     fs::write(root.path().join(".ayni.toml"), "[checks]\ntest = false\ncoverage = false\nsize = false\ncomplexity = true\ndeps = false\nmutation = false\n[languages]\nenabled = [\"rust\"]\n[rust.complexity]\nfn_cyclomatic = { warn = 10, fail = 15 }\n").unwrap();
     let bin = fake_mise(
         &root,
         r#"if [ "$1" = "version" ]; then echo "2026.8.7 linux-x64"; exit 0; fi
 if [ "$1" = "latest" ] && [ "$2" = "rust@1.93.0" ]; then echo "1.93.0"; exit 0; fi
-if [ "$1" = "latest" ] && [ "$2" = "cargo:rust-code-analysis-cli" ]; then echo "0.6.19"; exit 0; fi
+if [ "$1" = "latest" ] && [ "$2" = "cargo:rust-code-analysis-cli" ]; then echo "unexpected latest lookup" >&2; exit 91; fi
 exit 1"#,
     );
     let inherited = std::env::var_os("PATH").unwrap_or_default();
@@ -315,7 +315,11 @@ exit 1"#,
         lock["targets"][0]["signal_tools"][0]["tool"],
         "rust-code-analysis-cli"
     );
-    assert_eq!(lock["targets"][0]["signal_tools"][0]["version"], "0.6.19");
+    assert_eq!(lock["targets"][0]["signal_tools"][0]["version"], "0.0.25");
+    assert_eq!(
+        lock["targets"][0]["signal_tools"][0]["version_authority"],
+        "adapter_pinned"
+    );
 }
 
 #[test]

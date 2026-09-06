@@ -143,7 +143,7 @@ fn validate_outputs(
         }
     }
     let all = paths.keys().chain(inputs.keys()).collect::<BTreeSet<_>>();
-    reject_overlapping_files(all.into_iter())?;
+    reject_overlapping_files(all)?;
     Ok(paths)
 }
 

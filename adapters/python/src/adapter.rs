@@ -89,6 +89,10 @@ impl LanguageAdapter for PythonAdapter {
         }
     }
 
+    fn managed_tool_specs(&self) -> &'static [ayni_core::ManagedToolSpec] {
+        crate::tooling::PYTHON_TOOLS
+    }
+
     fn catalog(&self) -> &'static [CatalogEntry] {
         PYTHON_CATALOG
     }

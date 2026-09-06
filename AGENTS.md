@@ -8,6 +8,15 @@ Ayni is an open-source code-quality signal tool for AI agents.
   never rely on a globally installed Ayni.
 - Use focused `verify` during implementation.
 - Run the full repository contract only at the final milestone gate.
+- Run required PR checks locally with the workflow's pinned Rust toolchain;
+  passing checks with the ambient toolchain does not establish CI compatibility.
+- When environment schemas, tool baselines, Cargo manifests, or `Cargo.lock`
+  change, regenerate the committed `.ayni.lock` with the checkout CLI and its
+  existing immutable provisioning base. Regenerate it again and require
+  byte-for-byte equality, matching the managed lock consistency job.
+- Host checks do not validate managed execution. Exercise the checkout-built
+  environment and affected managed examples before declaring the PR validated;
+  report any local infrastructure blocker explicitly.
 
 ## Pull Requests
 

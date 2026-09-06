@@ -485,6 +485,17 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn parses_real_jacoco_0_8_12_report() {
+        let report = parse_jacoco_content(include_str!(
+            "../../tests/fixtures/tooling/gradle/jacoco.xml"
+        ))
+        .unwrap();
+        let mut totals = CoverageCounters::default();
+        totals.merge(report);
+        assert_eq!(totals.finish().line_percent, Some(100.0));
+    }
+
+    #[test]
     fn empty_coverage_override_detects_a_jacoco_only_project() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;

@@ -85,6 +85,10 @@ impl LanguageAdapter for GoAdapter {
         }
     }
 
+    fn managed_tool_specs(&self) -> &'static [ayni_core::ManagedToolSpec] {
+        crate::tooling::GO_TOOLS
+    }
+
     fn catalog(&self) -> &'static [CatalogEntry] {
         GO_CATALOG
     }

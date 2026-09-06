@@ -244,6 +244,17 @@ mod tests {
     use super::parse_junit_xml;
 
     #[test]
+    fn parses_real_mutmut_2_5_1_report() {
+        let report = parse_junit_xml(include_str!(
+            "../../tests/fixtures/tooling/mutmut/junit.xml"
+        ))
+        .unwrap();
+        assert_eq!(report.tests, 2);
+        assert_eq!(report.failures + report.errors + report.skipped, 0);
+        assert!(report.offenders.is_empty());
+    }
+
+    #[test]
     fn accepts_self_closing_suite_summary() {
         let report =
             parse_junit_xml("<testsuite tests='1' failures='0' errors='0' skipped='1'/>").unwrap();

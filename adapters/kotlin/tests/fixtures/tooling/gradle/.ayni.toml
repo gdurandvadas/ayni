@@ -1,0 +1,13 @@
+[checks]
+test=true
+coverage=true
+size=false
+complexity=false
+deps=false
+mutation=true
+[languages]
+enabled=["kotlin"]
+[kotlin]
+roots=["."]
+[kotlin.coverage]
+line_percent = { warn = 100, fail = 100 }

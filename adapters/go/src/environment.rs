@@ -1,6 +1,6 @@
 //! Read-only Go environment discovery.
 
-use crate::catalog::{GOCYCLO_MODULE, GOCYCLO_VERSION};
+use crate::tooling::GO_TOOLS;
 use ayni_adapters_common::repository::{
     read_contained_string, read_optional_contained_bytes, read_optional_contained_string,
     repository_relative,
@@ -8,7 +8,7 @@ use ayni_adapters_common::repository::{
 use ayni_core::{
     AdapterError, DependencyLockRequirement, EnvironmentCapability, EnvironmentConflict,
     EnvironmentContribution, EnvironmentDiscoveryRequest, EnvironmentWarning, Language,
-    ProvisioningSupport, RequirementConfidence, RequirementSource, RuntimeRequirement, SignalKind,
+    ProvisioningSupport, RequirementConfidence, RequirementSource, RuntimeRequirement,
     SignalToolRequirement, TargetEnvironment, ToolInstallationScope, VersionRequirement,
     sha256_fingerprint,
 };
@@ -713,27 +713,40 @@ fn signal_tools(
     request: &EnvironmentDiscoveryRequest,
     manifest: &Path,
 ) -> Result<Vec<SignalToolRequirement>, AdapterError> {
-    if !request.requires_any(&[SignalKind::Complexity]) {
-        return Ok(Vec::new());
-    }
-    Ok(vec![SignalToolRequirement {
-        version_authority: ayni_core::ToolVersionAuthority::AdapterPinned,
-        tool: String::from("gocyclo"),
-        version: VersionRequirement::exact(GOCYCLO_VERSION).map_err(plan_error)?,
-        provider: format!("go:{GOCYCLO_MODULE}"),
-        scope: ToolInstallationScope::Isolated,
-        signals: vec![SignalKind::Complexity],
-        supported_platforms: request.requested_platforms().to_vec(),
-        provisioning: ProvisioningSupport::OnlineOnly,
-        modifies_checkout: false,
-        source: source(
-            request.repo_root(),
-            "go_adapter_catalog",
-            manifest,
-            Some("gocyclo"),
-            RequirementConfidence::Declared,
-        )?,
-    }])
+    ayni_core::select_managed_tools(
+        crate::catalog::GO_CATALOG,
+        GO_TOOLS,
+        request.enabled_signals(),
+    )
+    .map_err(error)?
+    .into_iter()
+    .map(|(spec, signals)| {
+        let ayni_core::ToolIntegration::Isolated { provider } = spec.integration else {
+            return Err(error("Go signal tools must remain isolated"));
+        };
+        Ok(SignalToolRequirement {
+            version_authority: ayni_core::ToolVersionAuthority::AdapterPinned,
+            tool: spec.catalog_name.into(),
+            version: VersionRequirement::exact(
+                spec.exact_version().expect("validated isolated baseline"),
+            )
+            .map_err(plan_error)?,
+            provider: provider.into(),
+            scope: ToolInstallationScope::Isolated,
+            signals,
+            supported_platforms: request.requested_platforms().to_vec(),
+            provisioning: ProvisioningSupport::OnlineOnly,
+            modifies_checkout: false,
+            source: source(
+                request.repo_root(),
+                "go_adapter_catalog",
+                manifest,
+                Some(spec.catalog_name),
+                RequirementConfidence::Declared,
+            )?,
+        })
+    })
+    .collect()
 }
 
 fn dependency_locks(
@@ -817,6 +830,7 @@ fn plan_error(cause: ayni_core::EnvironmentPlanError) -> AdapterError {
 mod tests {
     use super::*;
     use ayni_adapters_common::environment::assert_environment_capability_conformance;
+    use ayni_core::SignalKind;
     use ayni_core::{
         Architecture, EnvironmentDiscoveryRequest, Libc, OperatingSystem, TargetIdentity,
         TargetPlatform,

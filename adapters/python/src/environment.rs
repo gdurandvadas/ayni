@@ -624,40 +624,42 @@ fn tools(
         .ok_or_else(|| error("uv.lock missing from dependency inputs"))?;
     // The Python runtime is modeled separately. Derive project tools from the
     // catalog so managed tool requirements cannot diverge from collectors.
-    let w = crate::catalog::PYTHON_CATALOG
-        .iter()
-        .filter(|entry| entry.name != "python" && r.requires_any(entry.for_signals))
-        .map(|entry| (entry.name, entry.for_signals))
-        .collect::<Vec<_>>();
-    w.into_iter()
-        .map(|(n, signals)| {
-            if !declared.contains(n) {
-                return Err(error(format!(
-                    "{n} is required by an enabled signal but is not declared by the uv project"
-                )));
-            }
-            let ver = locked(&v, n)?
-                .ok_or_else(|| error(format!("{n} is not an exact dependency in uv.lock")))?;
-            Ok(SignalToolRequirement {
-                version_authority: ayni_core::ToolVersionAuthority::ProjectLocked,
-                tool: n.into(),
-                version: VersionRequirement::exact(ver).map_err(error)?,
-                provider: "uv_locked_project_dependency".into(),
-                scope: ToolInstallationScope::Project,
-                signals: signals.to_vec(),
-                supported_platforms: r.requested_platforms().to_vec(),
-                provisioning: ProvisioningSupport::LockedOffline,
-                modifies_checkout: false,
-                source: RequirementSource::new(
-                    "uv_lock_tool",
-                    l.path.clone(),
-                    Some(n),
-                    RequirementConfidence::Exact,
-                )
-                .map_err(error)?,
-            })
+    ayni_core::select_managed_tools(
+        crate::catalog::PYTHON_CATALOG,
+        crate::tooling::PYTHON_TOOLS,
+        r.enabled_signals(),
+    )
+    .map_err(error)?
+    .into_iter()
+    .map(|(spec, signals)| {
+        let n = spec.catalog_name;
+        if !declared.contains(n) {
+            return Err(error(format!(
+                "{n} is required by an enabled signal but is not declared by the uv project"
+            )));
+        }
+        let ver = locked(&v, n)?
+            .ok_or_else(|| error(format!("{n} is not an exact dependency in uv.lock")))?;
+        Ok(SignalToolRequirement {
+            version_authority: ayni_core::ToolVersionAuthority::ProjectLocked,
+            tool: n.into(),
+            version: VersionRequirement::exact(ver).map_err(error)?,
+            provider: "uv_locked_project_dependency".into(),
+            scope: ToolInstallationScope::Project,
+            signals: signals.to_vec(),
+            supported_platforms: r.requested_platforms().to_vec(),
+            provisioning: ProvisioningSupport::LockedOffline,
+            modifies_checkout: false,
+            source: RequirementSource::new(
+                "uv_lock_tool",
+                l.path.clone(),
+                Some(n),
+                RequirementConfidence::Exact,
+            )
+            .map_err(error)?,
         })
-        .collect()
+    })
+    .collect()
 }
 fn declared_dependencies(value: &toml::Value) -> Result<BTreeSet<String>, AdapterError> {
     let mut requirements = Vec::new();

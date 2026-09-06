@@ -418,3 +418,14 @@ Before merging an adapter:
     cargo test --workspace --all-features
     cargo check --workspace --all-features
     ```
+
+### Baseline inventory
+
+Expose `managed_tool_specs()` with an adapter-local `tooling.rs` inventory.
+Reference existing catalog names instead of repeating their signal lists. Cover
+runtimes as toolchain-owned entries and every external tool exactly once; use
+`validate_managed_tools` in conformance tests. Select external requirements with
+`select_managed_tools` and pass only default-tool signals during reconciliation.
+Keep provider alternatives and native integration decisions in the adapter.
+See [baseline fixtures](tooling-baseline-fixtures.md) for executable compatibility
+evidence; a version declaration alone does not establish collector compatibility.

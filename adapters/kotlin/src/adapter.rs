@@ -78,6 +78,10 @@ impl LanguageAdapter for KotlinAdapter {
         }
     }
 
+    fn managed_tool_specs(&self) -> &'static [ayni_core::ManagedToolSpec] {
+        crate::tooling::KOTLIN_TOOLS
+    }
+
     fn catalog(&self) -> &'static [CatalogEntry] {
         KOTLIN_CATALOG
     }

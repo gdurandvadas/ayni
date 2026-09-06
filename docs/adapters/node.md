@@ -29,6 +29,14 @@ use `--host` for those package managers.
 | `deps` | built-in Node workspace package-manifest graph | no external tool |
 | `mutation` | unavailable | Ayni rejects Node mutation before invoking a tool; no override or managed tool is accepted |
 
+## Reconciliation baselines
+
+The adapter owns a catalog-complete baseline inventory in `tooling.rs`.
+See [adapter-owned baselines](../contributing/tooling-reconciliation.md#adapter-owned-baselines-milestone-2)
+for exact versions and integration choices. This foundation does not enable
+Ayni ownership or edit project manifests. Custom commands remain project-owned,
+and optional mutation tooling is only selected for an enabled default signal.
+
 ## Focused verification
 
 Shared artifact, completion, validation, and exact-command reuse semantics are

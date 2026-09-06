@@ -77,6 +77,10 @@ Before proposing edits:
 
 ## Tooling reconciliation foundation
 
+Adapters own catalog-linked baseline inventories exposed through
+`managed_tool_specs`; core provides language-neutral inventory validation and
+signal selection. Native metadata interpretation stays in each adapter.
+
 Core defines read-only tooling requests and validated proposals through
 `ToolingReconciliationCapability`. Adapters will own native metadata discovery
 and edits; a later CLI executor will stage and publish only approved outputs.

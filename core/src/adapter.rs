@@ -329,6 +329,11 @@ pub trait LanguageAdapter: Send + Sync {
         Ok(contribution)
     }
 
+    /// Canonical adapter-owned baselines; empty for adapters without an inventory.
+    fn managed_tool_specs(&self) -> &'static [crate::ManagedToolSpec] {
+        &[]
+    }
+
     /// Optional read-only native signal-tool reconciliation capability.
     fn tooling_reconciliation_capability(
         &self,

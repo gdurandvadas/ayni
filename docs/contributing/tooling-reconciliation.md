@@ -1,9 +1,9 @@
-# Tooling reconciliation — milestone 1
+# Tooling reconciliation — foundations and baselines
 
 The intended lifecycle is: reconciliation establishes native declarations and
 locks, `env lock` snapshots exact requirements, and `env build` installs them.
-This milestone implements the core boundary for that lifecycle. It does not
-implement `tools reconcile`, adapter baselines, manifest editing, package-manager
+Milestones 1 and 2 implement the core boundary and adapter-owned baseline inventories.
+They do not implement `tools reconcile`, manifest editing, package-manager
 execution, or changes to `init`.
 
 ## Ownership and version authority
@@ -19,9 +19,9 @@ their existing execution semantics and do not reconcile tooling.
 
 | Authority | Meaning | Current uses |
 | --- | --- | --- |
-| `adapter_pinned` | An exact adapter baseline selects the version. | cargo-llvm-cov and gocyclo. |
+| `adapter_pinned` | An exact adapter baseline selects the version. | cargo-llvm-cov, rust-code-analysis-cli, and gocyclo. |
 | `project_locked` | Native project declarations and locks select the version. | Node dependencies, uv dependencies, Gradle plugins. |
-| `lock_resolved` | Explicit locking resolves a provider requirement. | The currently unpinned rust-code-analysis-cli. |
+| `lock_resolved` | Explicit locking resolves a provider requirement. | Available for explicitly unpinned provider requirements; no current isolated signal-tool baseline uses it. |
 | `toolchain` | The runtime/toolchain chooses a component's version. | Reserved for signal tools represented with runtime scope; existing Rust components remain in runtime requirements. |
 
 Adapter-pinned requirements must be exact. Project-locked tools use project
@@ -76,6 +76,52 @@ The apply design still needs a recovery journal, rollback policy, and concurrent
 writer exclusion for publication failures or process crashes. Expected digests
 are necessary but do not close races between a final check and rename.
 
-The next milestone should establish tested adapter-owned baselines and complete
-catalog coverage. Keep new ownership out of generated init policies until the
-adapter planners and staged apply engine are available and verified.
+The next milestone adds read-only adapter reconciliation planning and CLI preview/check.
+Keep new ownership out of generated init policies until the adapter planners
+and staged apply engine are available and verified.
+
+## Adapter-owned baselines (milestone 2)
+
+Each adapter's `tooling.rs` owns a `ManagedToolSpec` inventory exposed by
+`LanguageAdapter::managed_tool_specs`. It references catalog names; the catalog
+remains the single source for signal mappings. `validate_managed_tools` requires
+exactly one inventory entry per catalog tool, including runtimes. External tools
+require exact baselines; runtimes and components follow the selected toolchain.
+
+`select_managed_tools` accepts only the caller's default-tool signals, excludes
+runtime entries, and returns only matching signal associations. A reconciliation
+caller must pass `ToolingRequest::default_tool_signals()`, never all enabled
+signals: custom commands suppress default-tool reconciliation. The Kotlin
+adapter must narrow the two coverage alternatives after inspecting native
+metadata. `coverage_baseline` preserves Kover or JaCoCo when explicitly selected
+and prefers Kover when no provider is declared; conflicting declarations must be
+reported before selection. Disabled tools are not removed.
+
+| Adapter | Exact external baselines | Integration |
+| --- | --- | --- |
+| Rust | cargo-llvm-cov 0.8.5; rust-code-analysis-cli 0.0.25 | Isolated Cargo tools; llvm-tools-preview follows Rust. |
+| Go | gocyclo 0.6.0 | Isolated Go module provider; never added to application go.mod. |
+| Node | vitest 3.2.7; @vitest/coverage-v8 3.2.7; eslint 9.39.5; @typescript-eslint/parser 8.67.0 | Governing project devDependencies in a future reconciliation planner. |
+| Python | pytest 9.0.3; pytest-json-report 1.5.0; pytest-cov 6.0.0; coverage 7.6.12; complexipy 7.0.1; mutmut 2.5.1 (opt-in) | Governing uv development group in a future reconciliation planner. |
+| Kotlin | Kover 0.9.8; JaCoCo 0.8.12; Detekt 1.23.8; PIT Gradle plugin 1.19.0 (opt-in) | Exact plugin declarations; JaCoCo uses the bundled plugin's `toolVersion`. |
+
+These are compatibility baselines, not a latest-version policy. Native Node,
+Python, and Kotlin versions remain project-authoritative today; inventories do
+not overwrite their declarations, change init, or enable Ayni ownership. Existing
+supported project plugin aliases remain accepted. The Detekt 1.23.8 baseline
+specifically uses `io.gitlab.arturbosch.detekt`, not the newer `dev.detekt` plugin.
+
+Rust environment planning now pins rust-code-analysis-cli to 0.0.25 with
+`adapter_pinned` authority. Existing environment locks using lock-resolved
+complexity tooling must be regenerated. Exact tool versions are also checked for
+lock staleness, so future baseline upgrades invalidate older locks even when
+authority and source files are unchanged. Schema versions remain plan 0.4.0 and
+lock 0.6.0 because no serialized shape changes in milestone 2.
+
+Baseline tests check catalog completeness, selection, opt-in mutation behavior,
+and native example declarations. Rust 0.0.25 is exercised by checkout complexity
+verification and the final repository contract. New native fixtures execute
+mutmut, JaCoCo, and PIT, with their actual XML outputs retained in adapter parser
+tests. See [baseline fixture validation](tooling-baseline-fixtures.md) for commands,
+versions, and the limits of this evidence. Full native managed-environment runs
+across all five adapters remain a later milestone.

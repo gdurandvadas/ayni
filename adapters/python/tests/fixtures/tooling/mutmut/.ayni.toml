@@ -1,0 +1,11 @@
+[checks]
+test=false
+coverage=false
+size=false
+complexity=false
+deps=false
+mutation=true
+[languages]
+enabled=["python"]
+[python]
+roots=["."]

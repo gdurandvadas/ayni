@@ -21,6 +21,7 @@ pub mod runtime;
 pub mod signal;
 mod signal_validation;
 pub mod threshold;
+pub mod tool_baseline;
 pub mod tooling;
 mod tooling_validation;
 
@@ -98,4 +99,8 @@ pub use tooling::{
     SignalToolOwnership, ToolVersionAuthority, ToolingCommand, ToolingConflict, ToolingDiagnostic,
     ToolingFileEdit, ToolingInput, ToolingOutput, ToolingPlan, ToolingPreimage,
     ToolingReconciliationCapability, ToolingRequest, ToolingRequirement, ToolingWarning,
+};
+
+pub use tool_baseline::{
+    ManagedToolSpec, ToolBaseline, ToolIntegration, select_managed_tools, validate_managed_tools,
 };
