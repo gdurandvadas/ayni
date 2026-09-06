@@ -29,15 +29,16 @@ runs:
       env:
         FIXTURE: ${{ inputs.fixture }}
         BASE: ${{ inputs.base || steps.base.outputs.reference }}
+        LANGUAGE: ${{ inputs.language }}
       run: |
         set -euo pipefail
         rm -rf "$FIXTURE/.ayni" "$FIXTURE/.ayni.lock"
-        ./target/debug/ayni env lock \
+        python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-example-$LANGUAGE/timings.jsonl" --stage lock -- ./target/debug/ayni env lock \
           --repo-root "$FIXTURE" \
           --config .ayni.toml \
           --base "$BASE"
-        ./target/debug/ayni env build --repo-root "$FIXTURE"
-        ./target/debug/ayni env doctor --repo-root "$FIXTURE"
+        python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-example-$LANGUAGE/timings.jsonl" --stage build-and-prepare -- ./target/debug/ayni env build --repo-root "$FIXTURE"
+        python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-example-$LANGUAGE/timings.jsonl" --stage doctor -- ./target/debug/ayni env doctor --repo-root "$FIXTURE"
 
     - name: Check fixture and validate typed artifact
       shell: bash
@@ -47,7 +48,7 @@ runs:
         EXPECTED_ROOTS: ${{ inputs.expected-roots }}
       run: |
         set +e
-        ./target/debug/ayni check --config "$FIXTURE/.ayni.toml"
+        python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-example-$LANGUAGE/timings.jsonl" --stage check -- ./target/debug/ayni check --config "$FIXTURE/.ayni.toml"
         check_code=$?
         set -e
         echo "Ayni managed check exit code: $check_code"
@@ -59,12 +60,25 @@ runs:
           fi
         done <<< "$EXPECTED_ROOTS"
 
-        python3 scripts/ci/validate_example_artifact.py \
+        python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-example-$LANGUAGE/timings.jsonl" --stage validate -- python3 scripts/ci/validate_example_artifact.py \
           --artifact "$FIXTURE/.ayni/last/signals.json" \
           --language "$LANGUAGE" \
           --repository-root /workspace \
           --check-exit-code "$check_code" \
           "${root_args[@]}"
+
+    - name: Retain fixture evidence before cleanup
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: managed-example-${{ inputs.language }}
+        path: |
+          ${{ inputs.fixture }}/.ayni.lock
+          ${{ inputs.fixture }}/.ayni/last/signals.json
+          ${{ runner.temp }}/ayni-example-${{ inputs.language }}/timings.jsonl
+        include-hidden-files: true
+        retention-days: 14
+        if-no-files-found: error
 
     - name: Remove ephemeral environment state
       if: always()

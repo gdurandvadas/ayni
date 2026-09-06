@@ -21,15 +21,6 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Audit locked Rust dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          audit_root="$RUNNER_TEMP/cargo-audit-0.22.2"
-          cargo install cargo-audit --version 0.22.2 --locked --root "$audit_root"
-          export PATH="$audit_root/bin:$PATH"
-          cargo audit
-
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -50,6 +41,9 @@ jobs:
       - name: Test example artifact validator
         run: python3 scripts/ci/test_validate_example_artifact.py
 
+      - name: Test provisioning and failure timing contracts
+        run: python3 scripts/ci/test_provisioning.py
+
       - name: Test release installer
         run: scripts/ci/test_install_sh.sh
 
@@ -58,6 +52,17 @@ jobs:
 
       - name: Verify immutable GitHub Action references
         run: python3 scripts/ci/validate_workflow_pins.py
+
+  audit:
+    name: locked Rust dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Audit locked Rust dependencies
+        uses: ./.github/actions/audit-rust
 
   documentation:
     name: documentation contract
