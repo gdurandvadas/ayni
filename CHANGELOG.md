@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.6...ayni-v0.12.0) (2026-09-06)
+
+
+### Features
+
+* **adapters:** define tested signal tool baselines ([#101](https://github.com/gdurandvadas/ayni/issues/101)) ([1ba15c1](https://github.com/gdurandvadas/ayni/commit/1ba15c19b9207edbf878fcc34253a57320d0d021))
+
 ## [0.11.6](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.5...ayni-v0.11.6) (2026-09-05)
 
 
