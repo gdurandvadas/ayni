@@ -111,6 +111,10 @@ pub fn git_workspace_entries(root: &Path, timeout: Duration) -> Result<Vec<PathB
 fn validate_git_workspace_entry(root: &Path, raw: &[u8]) -> Result<Option<PathBuf>, String> {
     let relative = std::str::from_utf8(raw)
         .map_err(|_| String::from("Git workspace requires UTF-8 repository paths"))?;
+    // Git reports untracked nested repositories with a trailing slash. Normalize
+    // that directory marker before excluding Ayni's generated provider caches;
+    // ordinary nested repositories still fail the directory check below.
+    let relative = relative.strip_suffix('/').unwrap_or(relative);
     let components = relative.split('/').collect::<Vec<_>>();
     let invalid = components.is_empty()
         || components
@@ -118,7 +122,9 @@ fn validate_git_workspace_entry(root: &Path, raw: &[u8]) -> Result<Option<PathBu
             .any(|component| component.is_empty() || matches!(*component, "." | ".."))
         || relative.starts_with('/');
     if invalid {
-        return Err(String::from("Git returned a non-normalized workspace path"));
+        return Err(format!(
+            "Git returned a non-normalized workspace path: {relative:?}"
+        ));
     }
     if components
         .iter()
@@ -141,10 +147,56 @@ fn validate_git_workspace_entry(root: &Path, raw: &[u8]) -> Result<Option<PathBu
 #[cfg(test)]
 mod tests {
     use super::{
-        UNIVERSAL_WORKSPACE_STATE_NAMES, filesystem_workspace_entries, has_git_ancestor,
-        is_universal_workspace_state,
+        UNIVERSAL_WORKSPACE_STATE_NAMES, filesystem_workspace_entries, git_workspace_entries,
+        has_git_ancestor, is_universal_workspace_state, validate_git_workspace_entry,
     };
     use std::fs;
+
+    #[test]
+    fn git_enumeration_excludes_nested_repositories_in_generated_state() {
+        let root = tempfile::TempDir::new().expect("workspace");
+        for relative in ["", ".ayni/cache/provider"] {
+            let directory = root.path().join(relative);
+            fs::create_dir_all(&directory).expect("directory");
+            assert!(
+                std::process::Command::new("git")
+                    .args(["init", "--quiet"])
+                    .arg(&directory)
+                    .status()
+                    .expect("git init")
+                    .success()
+            );
+        }
+        fs::write(root.path().join("source.txt"), "source").expect("source");
+        fs::write(root.path().join(".ayni/cache/provider/input"), "cache").expect("cache");
+        let entries = git_workspace_entries(root.path(), std::time::Duration::from_secs(10))
+            .expect("generated nested repository is excluded");
+        assert_eq!(entries, [std::path::PathBuf::from("source.txt")]);
+        fs::rename(
+            root.path().join(".ayni/cache/provider"),
+            root.path().join("nested"),
+        )
+        .expect("ordinary nested repository");
+        assert!(
+            git_workspace_entries(root.path(), std::time::Duration::from_secs(10))
+                .unwrap_err()
+                .contains("is a directory")
+        );
+    }
+
+    #[test]
+    fn git_directory_markers_do_not_allow_non_normalized_paths() {
+        let root = tempfile::TempDir::new().expect("workspace");
+        for path in [
+            "/",
+            "../outside/",
+            "./source/",
+            ".ayni//cache/",
+            ".ayni/../source/",
+        ] {
+            assert!(validate_git_workspace_entry(root.path(), path.as_bytes()).is_err());
+        }
+    }
 
     #[test]
     fn filesystem_enumeration_is_bounded_and_skips_universal_state() {
