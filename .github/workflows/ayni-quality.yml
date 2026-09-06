@@ -44,11 +44,17 @@ jobs:
       - name: Test provisioning and failure timing contracts
         run: python3 scripts/ci/test_provisioning.py
 
+      - name: Test candidate handoff and completion contracts
+        run: python3 scripts/ci/test_candidates.py
+
       - name: Test release installer
         run: scripts/ci/test_install_sh.sh
 
       - name: Validate fail-closed release publication
         run: python3 scripts/ci/validate_release_workflow.py
+
+      - name: Validate workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck=''
 
       - name: Verify immutable GitHub Action references
         run: python3 scripts/ci/validate_workflow_pins.py

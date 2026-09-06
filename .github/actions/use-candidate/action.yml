@@ -1,0 +1,42 @@
+name: Verify and import same-run candidate
+description: Verify the host binary and executor archive, then import into a credential-free job-local registry.
+inputs:
+  arch:
+    required: true
+    description: Native Linux architecture.
+outputs:
+  cli:
+    description: Verified host CLI path.
+    value: ${{ steps.import.outputs.cli }}
+  executor:
+    description: Immutable job-local executor reference.
+    value: ${{ steps.import.outputs.executor }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: candidate-${{ inputs.arch }}
+        path: ${{ runner.temp }}/candidate
+    - name: Verify candidate before image import
+      shell: bash
+      env:
+        PLATFORM: linux/${{ inputs.arch }}
+      run: python3 scripts/ci/candidate.py verify --directory "$RUNNER_TEMP/candidate" --source "$GITHUB_SHA" --platform "$PLATFORM" --run-id "$GITHUB_RUN_ID"
+    - name: Start job-local registry
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker run --detach --rm --name ayni-local-registry --publish 127.0.0.1:5000:5000 registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+        for attempt in {1..30}; do
+          if curl --fail --silent http://127.0.0.1:5000/v2/ >/dev/null; then exit 0; fi
+          sleep 1
+        done
+        echo "local registry did not become ready" >&2
+        exit 1
+    - name: Import and verify executor
+      id: import
+      shell: bash
+      env:
+        PLATFORM: linux/${{ inputs.arch }}
+      run: python3 scripts/ci/candidate.py import --directory "$RUNNER_TEMP/candidate" --source "$GITHUB_SHA" --platform "$PLATFORM" --run-id "$GITHUB_RUN_ID"

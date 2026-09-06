@@ -1,0 +1,66 @@
+name: ayni-fixtures
+
+on:
+  workflow_call:
+    inputs:
+      fixtures:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: fixture ${{ matrix.id }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.fixtures) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Import verified candidate
+        id: candidate
+        uses: ./.github/actions/use-candidate
+        with:
+          arch: ${{ matrix.arch }}
+      - name: Install pinned Mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.6.14
+          install: false
+          cache: false
+      - name: Run managed contract
+        env:
+          AYNI: ${{ steps.candidate.outputs.cli }}
+          EXECUTOR: ${{ steps.candidate.outputs.executor }}
+          PLATFORM: linux/${{ matrix.arch }}
+          FIXTURE: ${{ matrix.root }}
+          LANGUAGE: ${{ matrix.language }}
+          FIXTURE_ID: ${{ matrix.id }}
+          EXPECTED_ROOTS: ${{ toJSON(matrix.expected_roots) }}
+          EXPECTED_EXIT: ${{ matrix.expected_exit_code }}
+        run: |
+          set -euo pipefail
+          mapfile -t roots < <(jq -r '.[]' <<< "$EXPECTED_ROOTS")
+          args=()
+          for root in "${roots[@]}"; do args+=(--expected-root "$root"); done
+          python3 scripts/ci/run_fixture.py --cli "$AYNI" --executor-image "$EXECUTOR" \
+            --fixture-root "$FIXTURE" --language "$LANGUAGE" --id "$FIXTURE_ID" \
+            --expected-exit-code "$EXPECTED_EXIT" "${args[@]}" \
+            --source "$GITHUB_SHA" --platform "$PLATFORM" \
+            --artifact-directory "$RUNNER_TEMP/managed-$FIXTURE_ID"
+      - name: Retain evidence before cleanup
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: managed-${{ matrix.id }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/managed-${{ matrix.id }}/
+          retention-days: 14
+          if-no-files-found: error
+      - name: Clean job-local registry
+        if: always()
+        run: docker rm --force ayni-local-registry || true
