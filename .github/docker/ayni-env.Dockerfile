@@ -15,6 +15,8 @@ LABEL org.opencontainers.image.title="Ayni code environment" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
       org.opencontainers.image.version="${AYNI_VERSION}" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
+      dev.ayni.executor.lock-schema="0.7.0" \
+      dev.ayni.executor.recipe="1" \
       dev.ayni.environment.variant="debian" \
       dev.ayni.environment.mise-version="${MISE_VERSION}"
 

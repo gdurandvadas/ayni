@@ -35,9 +35,8 @@ runs:
         rm -rf "$FIXTURE/.ayni" "$FIXTURE/.ayni.lock"
         python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-example-$LANGUAGE/timings.jsonl" --stage lock -- ./target/debug/ayni env lock \
           --repo-root "$FIXTURE" \
-          --config .ayni.toml \
-          --base "$BASE"
-        python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-example-$LANGUAGE/timings.jsonl" --stage build-and-prepare -- ./target/debug/ayni env build --repo-root "$FIXTURE"
+          --config .ayni.toml
+        python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-example-$LANGUAGE/timings.jsonl" --stage build-and-prepare -- ./target/debug/ayni env build --repo-root "$FIXTURE" --executor-image "$BASE"
         python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-example-$LANGUAGE/timings.jsonl" --stage doctor -- ./target/debug/ayni env doctor --repo-root "$FIXTURE"
 
     - name: Check fixture and validate typed artifact
@@ -75,6 +74,8 @@ runs:
         path: |
           ${{ inputs.fixture }}/.ayni.lock
           ${{ inputs.fixture }}/.ayni/last/signals.json
+          ${{ inputs.fixture }}/.ayni/last/execution.json
+          ${{ inputs.fixture }}/.ayni/environment/build.json
           ${{ runner.temp }}/ayni-example-${{ inputs.language }}/timings.jsonl
         include-hidden-files: true
         retention-days: 14

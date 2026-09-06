@@ -28,7 +28,7 @@ Adapter-pinned requirements must be exact. Project-locked tools use project
 scope, toolchain tools use runtime scope, and project tools cannot claim
 lock-resolved authority. Resolution retains the authority; it does not infer it
 from a changed source-kind string. Every serialized signal tool now requires
-`version_authority`. Environment plan schema is `0.4.0`; lock schema is `0.6.0`.
+`version_authority`. Environment plan schema is `0.4.0`; lock schema is `0.7.0` after the environment/executor migration.
 Older documents require regeneration. Signal artifacts and OCI image labels
 retain their existing versions.
 

@@ -169,17 +169,17 @@ jobs:
           install: false
           cache: false
 
-      # Follow-up: checkout-local bases remain isolated per checkout. Reusing a
-      # base artifact across release branches needs provenance and compatibility
-      # validation, so this workflow intentionally does not share one yet.
-      - name: Build pullable checkout-local managed environment base
-        id: base
-        uses: ./.github/actions/build-local-environment-base
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
 
-      - name: Regenerate managed lock
-        env:
-          BASE: ${{ steps.base.outputs.reference }}
-        run: ./target/release/ayni env lock --config ./.ayni.toml --base "$BASE"
+      - name: Regenerate managed lock with the durable base
+        run: |
+          set -euo pipefail
+          base="$(jq -r '.provisioning_base.reference + "@" + .provisioning_base.digest' .ayni.lock)"
+          cargo run --locked -p ayni-cli -- env lock --config ./.ayni.toml --base "$base"
+          cp .ayni.lock "$RUNNER_TEMP/release-lock.first"
+          cargo run --locked -p ayni-cli -- env lock --config ./.ayni.toml --base "$base"
+          cmp "$RUNNER_TEMP/release-lock.first" .ayni.lock
 
       - name: Commit managed lock
         env:
@@ -857,11 +857,15 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf "$FIXTURE/.ayni" "$FIXTURE/.ayni.lock"
-          "$AYNI" env lock \
-            --repo-root "$FIXTURE" \
-            --config .ayni.toml \
-            --base "$BASE"
-          "$AYNI" env build --repo-root "$FIXTURE"
+          # Recovery checks out tagged source. Old public binaries retain their
+          # original publication protocol; the current CLI rejects old locks.
+          if [[ -f environment/provisioning.json ]]; then
+            "$AYNI" env lock --repo-root "$FIXTURE" --config .ayni.toml
+            "$AYNI" env build --repo-root "$FIXTURE" --executor-image "$BASE"
+          else
+            "$AYNI" env lock --repo-root "$FIXTURE" --config .ayni.toml --base "$BASE"
+            "$AYNI" env build --repo-root "$FIXTURE"
+          fi
           "$AYNI" env doctor --repo-root "$FIXTURE"
 
       - name: Validate released managed evidence
@@ -881,6 +885,20 @@ jobs:
             --repository-root /workspace \
             --check-exit-code "$check_code" \
             --expected-root .
+
+      - name: Retain released managed execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: released-managed-${{ matrix.language }}
+          path: |
+            examples/${{ matrix.language }}/mono/.ayni.lock
+            examples/${{ matrix.language }}/mono/.ayni/last/signals.json
+            examples/${{ matrix.language }}/mono/.ayni/last/execution.json
+            examples/${{ matrix.language }}/mono/.ayni/environment/build.json
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error
 
       - name: Remove ephemeral environment state
         if: always()

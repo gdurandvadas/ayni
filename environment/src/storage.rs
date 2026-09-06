@@ -214,6 +214,10 @@ fn storage_context(
     }
     let lock = read_lock(&root)?;
     let plan = image_plan_with_preparation(&lock, preparations)?;
+    let plan = match crate::executor::recorded_plan(&root, &lock, plan.clone()) {
+        Ok((plan, _)) => plan,
+        Err(_) => plan,
+    };
     let engine = crate::detect_engine()?;
     Ok((root, engine, lock, plan))
 }
@@ -224,7 +228,16 @@ fn report_for_context(
     lock: &EnvironmentLock,
     plan: &ImagePlan,
 ) -> Result<StorageReport, BackendError> {
-    let images = inspect_ayni_images(root, engine, lock, plan)?;
+    let mut images = inspect_ayni_images(root, engine, lock, plan)?;
+    let record = crate::executor::read_record(root)?;
+    for image in &mut images {
+        image.current &= record.as_ref().is_some_and(|record| {
+            image.id == record.image_id
+                && image.tags.contains(&record.image_tag)
+                && record.image_tag == plan.tag
+        });
+        image.prune_candidate = !image.current && image.ownership == StorageImageOwnership::Managed;
+    }
     let image_cumulative_size_bytes = images.iter().fold(0_u64, |total, image| {
         total.saturating_add(image.cumulative_size_bytes)
     });
@@ -388,7 +401,7 @@ fn image_labels_are_current(
             .is_some_and(|value| value == &lock.provisioning_base().digest)
         && labels
             .get(IMAGE_AYNI_LABEL)
-            .is_some_and(|value| value == lock.ayni_version())
+            .is_some_and(|value| value == env!("CARGO_PKG_VERSION"))
         && labels
             .get(IMAGE_MISE_LABEL)
             .is_some_and(|value| value == &lock.provisioning_base().mise_version)

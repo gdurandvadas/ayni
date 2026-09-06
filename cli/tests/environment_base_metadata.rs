@@ -12,6 +12,14 @@ fn published_base_metadata_matches_the_backend_contract() {
     )));
     let dockerfile =
         fs::read_to_string(repository.join(".github/docker/ayni-env.Dockerfile")).unwrap();
+    assert!(dockerfile.contains(&format!(
+        "dev.ayni.executor.lock-schema=\"{}\"",
+        ayni_core::ENVIRONMENT_LOCK_SCHEMA_VERSION
+    )));
+    assert!(dockerfile.contains(&format!(
+        "dev.ayni.executor.recipe=\"{}\"",
+        ayni_core::ENVIRONMENT_LOCK_RECIPE_VERSION
+    )));
     assert!(dockerfile.contains("USER 10001:10001"));
     assert!(dockerfile.contains("ENTRYPOINT [\"ayni\"]"));
     assert!(dockerfile.contains("sha256sum --check --strict"));

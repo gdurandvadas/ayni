@@ -48,9 +48,10 @@ pub use environment::{
 };
 pub use environment_adapter::{EnvironmentCapability, EnvironmentDiscoveryRequest};
 pub use environment_lock::{
-    ENVIRONMENT_LOCK_SCHEMA_VERSION, EnvironmentLock, LockedDebianPackage, LockedDependencyLock,
-    LockedMiseTool, LockedPackageManager, LockedRepositoryIdentity, LockedRequirementSource,
-    LockedRuntime, LockedSignalTool, LockedTargetEnvironment, ProvisioningBase,
+    ENVIRONMENT_LOCK_RECIPE_VERSION, ENVIRONMENT_LOCK_SCHEMA_VERSION, EnvironmentLock,
+    LockedDebianPackage, LockedDependencyLock, LockedMiseTool, LockedPackageManager,
+    LockedRepositoryIdentity, LockedRequirementSource, LockedRuntime, LockedSignalTool,
+    LockedTargetEnvironment, ProvisioningBase,
 };
 pub use environment_preparation::{
     DependencyPreparationCapability, DependencyPreparationPlan, DependencyPreparationRequest,

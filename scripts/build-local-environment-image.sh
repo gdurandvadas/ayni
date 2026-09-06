@@ -16,6 +16,9 @@ case "$docker_arch" in
     ;;
 esac
 
+source_revision="$(git -C "$repo_root" rev-parse HEAD)"
+ayni_version="$(cargo metadata --manifest-path "$repo_root/Cargo.toml" --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ayni-cli") | .version')"
+
 # Compile inside Linux so the binary copied into the Debian image is ELF,
 # rather than the host's macOS Mach-O executable.
 docker run --rm \
@@ -37,8 +40,8 @@ docker build \
   --provenance=false \
   --platform "linux/$platform_arch" \
   --build-arg "DEBIAN_IMAGE=$DEBIAN_IMAGE" \
-  --build-arg "AYNI_VERSION=local" \
-  --build-arg "SOURCE_REVISION=local" \
+  --build-arg "AYNI_VERSION=$ayni_version" \
+  --build-arg "SOURCE_REVISION=$source_revision" \
   --build-arg "MISE_VERSION=$MISE_VERSION" \
   --build-arg "MISE_SHA256_AMD64=$MISE_SHA256_AMD64" \
   --build-arg "MISE_SHA256_ARM64=$MISE_SHA256_ARM64" \
@@ -48,11 +51,15 @@ docker build \
 
 base_id="$(docker image inspect ayni-env:local --format '{{.Id}}')"
 base_reference="$(docker image inspect ayni-env:local --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}')"
+case "$base_reference" in
+  */*@sha256:*) ;;
+  *) base_reference='' ;;
+esac
 printf '\nBuilt ayni-env:local (%s)\n' "$base_id"
 if [[ -n "$base_reference" ]]; then
-  printf 'Next: cargo run -p ayni-cli -- env lock --base "%s"\n' "$base_reference"
+  printf 'Next: cargo run -p ayni-cli -- env build --executor-image "%s"\n' "$base_reference"
 else
   printf '%s\n' \
     'This engine did not expose a repository manifest digest for the local tag.' \
-    'Push the image to a local registry, then pass its exact RepoDigest to env lock.'
+    'Push the image to a local registry, then pass its exact RepoDigest to env build --executor-image.'
 fi

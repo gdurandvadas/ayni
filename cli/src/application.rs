@@ -26,7 +26,7 @@ pub(crate) enum Operation {
     EnvShow(EnvShowOperation),
     EnvDoctor(RepositoryOperation),
     EnvLock(EnvLockOperation),
-    EnvBuild(RepositoryOperation),
+    EnvBuild(EnvBuildOperation),
     EnvStorage(EnvStorageOperation),
     EnvPrune(EnvPruneOperation),
     EnvShell(EnvShellOperation),
@@ -161,4 +161,10 @@ pub(crate) struct ToolsReconcileOperation {
     pub repo_root: PathBuf,
     pub output: OutputFormat,
     pub check: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct EnvBuildOperation {
+    pub repo_root: PathBuf,
+    pub executor_image: Option<String>,
 }

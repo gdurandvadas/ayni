@@ -5,6 +5,8 @@
 
 use ayni_core::{DockerAccess, EnvironmentCapabilities};
 
+mod executor;
+pub use executor::execution_build_record;
 mod image;
 mod lock;
 mod preparation;
@@ -18,9 +20,9 @@ pub use lock::{
 };
 pub use runtime::{
     CapturedLaunch, Engine, LaunchAuthorization, ReadOnlyInput, TargetSelection, build,
-    build_prepared, detect_engine, doctor, doctor_prepared, launch, launch_prepared,
-    launch_repository, launch_repository_prepared, launch_repository_prepared_with_inputs,
-    launch_repository_prepared_with_inputs_captured,
+    build_prepared, build_prepared_with_executor, detect_engine, doctor, doctor_prepared, launch,
+    launch_prepared, launch_repository, launch_repository_prepared,
+    launch_repository_prepared_with_inputs, launch_repository_prepared_with_inputs_captured,
 };
 pub use storage::{
     StorageImage, StorageImageOwnership, StorageImagePruneScope, StoragePruneFailure,

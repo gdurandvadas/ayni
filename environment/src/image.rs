@@ -16,7 +16,7 @@ pub(crate) const IMAGE_PLATFORM_LABEL: &str = "dev.ayni.environment.platform";
 pub(crate) const IMAGE_PREPARATION_LABEL: &str = "dev.ayni.environment.preparation-digest";
 pub(crate) const IMAGE_OWNER_LABEL: &str = "dev.ayni.environment.owner";
 pub(crate) const IMAGE_OWNER_VALUE: &str = "ayni";
-pub(crate) const IMAGE_SCHEMA_VERSION: &str = "0.5.0";
+pub(crate) const IMAGE_SCHEMA_VERSION: &str = "0.6.0";
 pub(crate) const MISE_GITHUB_TOKEN_SECRET: &str = "MISE_GITHUB_TOKEN";
 
 const MISE_GITHUB_TOKEN_SECRET_MOUNT: &str =
@@ -291,7 +291,7 @@ fn dockerfile(
         base.digest,
         lock.fingerprint(),
         base.digest,
-        lock.ayni_version(),
+        env!("CARGO_PKG_VERSION"),
         base.mise_version,
         platform,
         preparation_digest,

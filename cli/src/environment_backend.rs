@@ -30,11 +30,18 @@ pub(crate) fn doctor(operation: RepositoryOperation, registry: &AdapterRegistry)
     })())
 }
 
-pub(crate) fn build(operation: RepositoryOperation, registry: &AdapterRegistry) -> ExitCode {
+pub(crate) fn build(
+    operation: crate::application::EnvBuildOperation,
+    registry: &AdapterRegistry,
+) -> ExitCode {
     result((|| {
         let (root, plan) = current_plan(&operation.repo_root, None, registry)?;
         let preparations = dependency_preparations(&root, registry, &plan)?;
-        ayni_environment::build_prepared(&root, &preparations)
+        ayni_environment::build_prepared_with_executor(
+            &root,
+            &preparations,
+            operation.executor_image.as_deref(),
+        )
     })())
 }
 
@@ -308,12 +315,15 @@ pub(crate) fn check(operation: CheckOperation, registry: &AdapterRegistry) -> Ex
             if operation.debug {
                 command.push(String::from("--debug"));
             }
-            ayni_environment::launch_repository_prepared(
+            let record = ayni_environment::execution_build_record(&root)?;
+            let code = ayni_environment::launch_repository_prepared(
                 &root,
                 &preparations,
                 &command,
                 launch_authorization(operation.authorization),
-            )
+            )?;
+            persist_execution_evidence(&root, crate::analysis::SIGNALS_ARTIFACT, record, code)?;
+            Ok(code)
         })(),
     )
 }
@@ -329,12 +339,20 @@ pub(crate) fn verify(operation: VerifyOperation, registry: &AdapterRegistry) -> 
             let (root, preparations, container_config) =
                 prepared_quality_environment(&operation.config, registry, operation.authorization)?;
             let command = managed_verify_command(&operation, container_config);
-            ayni_environment::launch_repository_prepared(
+            let record = ayni_environment::execution_build_record(&root)?;
+            let code = ayni_environment::launch_repository_prepared(
                 &root,
                 &preparations,
                 &command,
                 launch_authorization(operation.authorization),
-            )
+            )?;
+            persist_execution_evidence(
+                &root,
+                crate::analysis::VERIFY_SIGNALS_ARTIFACT,
+                record,
+                code,
+            )?;
+            Ok(code)
         })(),
     )
 }
@@ -363,6 +381,7 @@ pub(crate) fn impact_run(operation: ImpactOperation, registry: &AdapterRegistry)
             .map_err(ayni_environment::BackendError::input)?;
             let command =
                 managed_impact_command(&operation, container_config, session.result_relative());
+            let record = ayni_environment::execution_build_record(&root)?;
             let captured = ayni_environment::launch_repository_prepared_with_inputs_captured(
                 &root,
                 &preparations,
@@ -402,6 +421,12 @@ pub(crate) fn impact_run(operation: ImpactOperation, registry: &AdapterRegistry)
                         "failed to emit managed impact output: {error}"
                     ))
                 },
+            )?;
+            persist_execution_evidence(
+                &root,
+                ".ayni/impact/last/impact.json",
+                record,
+                captured.code,
             )?;
             Ok(captured.code)
         })(),
@@ -732,6 +757,40 @@ const fn launch_authorization(
 
 fn render_error(error: ayni_environment::BackendError) -> ExitCode {
     crate::application_error::render_error(error.into())
+}
+
+fn persist_execution_evidence(
+    root: &Path,
+    artifact: &str,
+    record: serde_json::Value,
+    code: i32,
+) -> Result<(), ayni_environment::BackendError> {
+    let path = root.join(artifact);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && code != 0 => return Ok(()),
+        Err(error) => {
+            return Err(ayni_environment::BackendError::execution(format!(
+                "missing managed quality evidence: {error}"
+            )));
+        }
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(ayni_environment::BackendError::execution(
+            "managed quality artifact is not a regular file",
+        ));
+    }
+    let bytes = std::fs::read(&path)
+        .map_err(|error| ayni_environment::BackendError::execution(error.to_string()))?;
+    let evidence = serde_json::json!({
+        "schema_version": "1",
+        "artifact": path.file_name().expect("artifact filename").to_string_lossy(),
+        "artifact_digest": ayni_core::sha256_fingerprint(&bytes),
+        "build": record,
+    });
+    let relative = Path::new(artifact).with_file_name("execution.json");
+    crate::analysis::persist_artifact_at(root, &relative.to_string_lossy(), &evidence.to_string())
+        .map_err(ayni_environment::BackendError::execution)
 }
 
 #[cfg(test)]

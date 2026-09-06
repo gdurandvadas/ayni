@@ -342,6 +342,21 @@ pub(crate) fn serialize_artifact(artifact: &RunArtifact) -> Result<String, Strin
 /// prior successful artifact whose contract digest no longer matches.
 pub(crate) fn invalidate_artifact_at(repo_root: &Path, relative_path: &str) -> Result<(), String> {
     let destination = repo_root.join(relative_path);
+    if matches!(
+        destination.file_name().and_then(|name| name.to_str()),
+        Some("signals.json" | "impact.json")
+    ) {
+        let sidecar = destination.with_file_name("execution.json");
+        match fs::remove_file(sidecar) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to invalidate execution provenance: {error}"
+                ));
+            }
+        }
+    }
     match fs::remove_file(&destination) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

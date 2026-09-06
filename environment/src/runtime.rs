@@ -1,4 +1,3 @@
-use crate::image::image_plan_with_preparation;
 use crate::{BackendError, read_lock};
 use ayni_adapters_common::workspace::UNIVERSAL_WORKSPACE_STATE_NAMES;
 use ayni_core::{
@@ -76,9 +75,10 @@ fn managed_workspace_init() -> String {
 
 mod engine;
 pub use engine::{
-    Engine, TargetSelection, build, build_prepared, detect_engine, doctor, doctor_prepared,
+    Engine, TargetSelection, build, build_prepared, build_prepared_with_executor, detect_engine,
+    doctor, doctor_prepared,
 };
-use engine::{engine_name, validate_image};
+use engine::{current_image_plan, engine_name};
 
 pub fn select_target<'a>(
     lock: &'a EnvironmentLock,
@@ -224,9 +224,8 @@ fn prepared_repository_launch(
     let root = canonical_root(repo_root)?;
     let lock = read_lock(&root)?;
     validate_launch_authorization(lock.capabilities(), authorization)?;
-    let plan = image_plan_with_preparation(&lock, preparations)?;
     let engine = detect_engine()?;
-    validate_image(engine, &plan, &lock)?;
+    let plan = current_image_plan(&root, engine, &lock, preparations)?;
     let state_home = execution_state(&root, lock.fingerprint())?;
     let mounts = materialize_outputs(&root, engine, &lock, &plan, preparations)?;
     let managed_environments =
@@ -277,9 +276,8 @@ pub fn launch_prepared(
     let root = canonical_root(repo_root)?;
     let lock = read_lock(&root)?;
     validate_launch_authorization(lock.capabilities(), authorization)?;
-    let plan = image_plan_with_preparation(&lock, preparations)?;
     let engine = detect_engine()?;
-    validate_image(engine, &plan, &lock)?;
+    let plan = current_image_plan(&root, engine, &lock, preparations)?;
     let target = select_target(&lock, selection)?;
     let state_home = execution_state(&root, lock.fingerprint())?;
     let mounts = materialize_outputs(&root, engine, &lock, &plan, preparations)?;
@@ -970,7 +968,7 @@ fn create_contained_directory_tree(repo_root: &Path, relative: &Path) -> Result<
     }
 }
 
-fn ensure_managed_directory(path: &Path) -> Result<(), BackendError> {
+pub(crate) fn ensure_managed_directory(path: &Path) -> Result<(), BackendError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => validate_managed_directory(path, &metadata),
         Err(error) if error.kind() == ErrorKind::NotFound => {
