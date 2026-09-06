@@ -7,6 +7,10 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
+
+from composition import CASES, expected_targets
+from validate_example_artifact import EXPECTED_OUTCOMES
 
 from run_fixture import digest, validate_provenance
 
@@ -21,7 +25,28 @@ JOBS = [
 ]
 
 
-def plan(manifest: dict, source: str) -> dict:
+def selection(fixtures: list[dict], changes: list[str] | None) -> tuple[list[dict], str]:
+    if not changes:
+        return fixtures, "full coverage: absent or uncertain change inventory"
+    languages = set()
+    for path in changes:
+        parts = Path(path).parts
+        if len(parts) > 2 and parts[0] in ("adapters", "examples") and parts[1] in {"rust", "go", "node", "python", "kotlin"}:
+            languages.add(parts[1])
+        elif path.startswith("docs/") or path in {"README.md", "CHANGELOG.md", "package.json", "package-lock.json"}:
+            continue
+        else:
+            return fixtures, "full coverage: shared or uncertain impact"
+    # Keep a managed baseline even for documentation-only changes. Classic,
+    # repository, lock, audit and workflow gates are never classified away.
+    if not languages:
+        return [item for item in fixtures if item["id"] == "rust"], "documentation inputs: managed Rust baseline retained"
+    selected = [item for item in fixtures if item.get("language") in languages or
+                set(CASES.get(item.get("composition"), ())) & languages]
+    return selected, "adapter impact plus interacting compositions: " + ", ".join(sorted(languages))
+
+
+def plan(manifest: dict, source: str, changes: list[str] | None = None) -> dict:
     if manifest.get("schema_version") != 1:
         raise ValueError("unsupported fixture manifest")
     platforms = manifest["platforms"]
@@ -47,6 +72,14 @@ def plan(manifest: dict, source: str) -> dict:
             raise ValueError("invalid fixture identity/root")
         if not fixture["expected_roots"] or fixture["expected_exit_code"] not in (0, 1):
             raise ValueError("missing fixture expectations")
+        if fixture.get("composition"):
+            targets = expected_targets(fixture["composition"])
+            expected = [dict(root=root, language=language,
+                             expected_exit_code=EXPECTED_OUTCOMES[language].check_exit_code)
+                        for root, language in targets.items()]
+            if fixture.get("expected_targets") != expected or fixture["expected_roots"] != list(targets):
+                raise ValueError("composition manifest target expectations disagree with the real fixture")
+    fixtures, reason = selection(fixtures, changes)
     evidence = [
         {"id": "repository", "arch": platform["arch"]} for platform in platforms
     ]
@@ -62,6 +95,8 @@ def plan(manifest: dict, source: str) -> dict:
         "platforms": platforms,
         "fixtures": fixtures,
         "evidence": evidence,
+        "selection": {"reason": reason, "changes": changes,
+                      "omitted": [item["id"] for item in manifest["fixtures"] if item not in fixtures]},
     }
 
 
@@ -107,6 +142,15 @@ def complete(expected: dict, results: dict, directory: Path, source: str) -> Non
             if Path(name).name != name or digest(folder / name) != value:
                 raise ValueError(f"evidence digest mismatch: {entry} {name}")
         validate_provenance(folder, source, f'linux/{entry["arch"]}')
+        if entry["id"] in CASES:
+            from composition import expected_targets, validate
+            record = json.loads((folder / "composition.json").read_text())
+            if ("composition.json" not in receipt["files"] or record.get("quality_launches") != 1
+                    or record.get("targets") != expected_targets(entry["id"])):
+                raise ValueError("composition must run one quality workload container")
+            fixture = next(item for item in expected["fixtures"] if item["id"] == entry["id"])
+            validate(json.loads((folder / "signals.json").read_text()), record["targets"],
+                     fixture["expected_exit_code"])
         lock = json.loads((folder / "lock.json").read_text())
         build = json.loads((folder / "build.json").read_text())
         if lock.get("fingerprint") != build.get("environment_fingerprint"):
@@ -130,8 +174,14 @@ def main() -> None:
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--source", required=True)
     parser.add_argument("--evidence", type=Path)
+    parser.add_argument("--base")
     args = parser.parse_args()
-    expected = plan(json.loads(args.manifest.read_text()), args.source)
+    changes = None
+    if args.base:
+        changes = sorted(filter(None, subprocess.check_output(
+            ["git", "diff", "--name-only", "--no-renames", "-z", args.base, args.source, "--"]
+        ).decode().split("\0")))
+    expected = plan(json.loads(args.manifest.read_text()), args.source, changes)
     if args.operation == "plan":
         args.plan.parent.mkdir(parents=True, exist_ok=True)
         args.plan.write_text(json.dumps(expected, indent=2) + "\n")

@@ -5,13 +5,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import time
+import tempfile
 
 from validate_example_artifact import validate_artifact
+import composition
 
 
 def digest(path: Path) -> str:
@@ -47,6 +50,23 @@ def run(args: argparse.Namespace) -> None:
     artifacts = args.artifact_directory.resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
     cli = str(args.cli.resolve())
+    targets = None
+    if getattr(args, "composition", None):
+        targets = composition.expected_targets(args.composition)
+    environment = os.environ.copy()
+    wrapper = tempfile.TemporaryDirectory(prefix="ayni-engine-observer-")
+    launches = artifacts / "container-launches.jsonl"
+    docker = shutil.which("docker")
+    if targets:
+        observer = Path(wrapper.name) / "docker"
+        observer.write_text("#!/usr/bin/env python3\nimport json, os, sys\n"
+                            "args = sys.argv[1:]\n"
+                            "if args and args[0] == 'run':\n"
+                            "    kind = 'quality' if any('/opt/ayni/checkout' in arg for arg in args) else 'setup-or-access'\n"
+                            f"    with open({str(launches)!r}, 'a') as out: out.write(json.dumps({{'kind': kind}}) + '\\n')\n"
+                            f"os.execv({docker!r}, [{docker!r}] + args)\n")
+        observer.chmod(0o755)
+        environment["PATH"] = wrapper.name + os.pathsep + environment["PATH"]
     receipt = {
         "schema_version": 1,
         "id": args.id,
@@ -62,7 +82,8 @@ def run(args: argparse.Namespace) -> None:
         try:
             with (artifacts / f"{name}.log").open("w") as log:
                 with subprocess.Popen(
-                    command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+                    command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    env=environment,
                 ) as process:
                     assert process.stdout is not None
                     for line in process.stdout:
@@ -88,6 +109,11 @@ def run(args: argparse.Namespace) -> None:
         return code
 
     try:
+        if targets:
+            if not docker:
+                raise ValueError("composition validation requires Docker launch accounting")
+            if not args.committed_lock:
+                composition.materialize(Path.cwd(), fixture, args.composition)
         # Fixtures are disposable; the repository contract consumes its committed lock.
         if not args.committed_lock:
             shutil.rmtree(fixture / ".ayni", ignore_errors=True)
@@ -103,7 +129,7 @@ def run(args: argparse.Namespace) -> None:
                 ".ayni.toml",
             )
         stage(
-            "build-and-prepare",
+            "build",
             cli,
             "env",
             "build",
@@ -111,8 +137,22 @@ def run(args: argparse.Namespace) -> None:
             str(fixture),
             "--executor-image",
             args.executor_image,
+            *(value for option in ("cache_from", "cache_to")
+              for cache in getattr(args, option, [])
+              for value in ("--" + option.replace("_", "-"), cache)),
         )
+        stage("prepare", cli, "env", "run", "--repo-root", str(fixture), "--", "true")
         stage("doctor", cli, "env", "doctor", "--repo-root", str(fixture))
+        if targets:
+            commands = ['test "$PWD" = /workspace', 'test "$(jq --version)" = jq-1.7.1',
+                        'case "$PATH" in *node_modules/.bin*|*.venv/bin*) exit 1;; esac',
+                        'touch /workspace/development-write']
+            if "rust" in targets:
+                commands.append('rustc /workspace/interactions/rust-node.rs -o /tmp/rust-node && /tmp/rust-node')
+            stage("repository-access", cli, "env", "run", "--repo-root", str(fixture),
+                  "--", "sh", "-ec", "\n".join(commands))
+            if not (fixture / "development-write").exists():
+                raise ValueError("repository access did not preserve writable development source")
         code = stage(
             "check",
             cli,
@@ -123,6 +163,16 @@ def run(args: argparse.Namespace) -> None:
         )
         started = time.monotonic()
         signals = json.loads((fixture / ".ayni/last/signals.json").read_text())
+        if targets:
+            composition.validate(signals, targets, code)
+            observed = [json.loads(line) for line in launches.read_text().splitlines()]
+            quality = sum(item["kind"] == "quality" for item in observed)
+            if quality != 1:
+                raise ValueError(f"expected one quality workload container, observed {quality}")
+            (artifacts / "composition.json").write_text(json.dumps({
+                "targets": targets, "quality_launches": quality,
+                "setup_and_access_launches": len(observed) - quality,
+            }, indent=2) + "\n")
         if args.language:
             validate_artifact(
                 signals,
@@ -169,6 +219,7 @@ def run(args: argparse.Namespace) -> None:
             if path.is_file() and path.name != "receipt.json"
         }
         (artifacts / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        wrapper.cleanup()
 
 
 def main() -> int:
@@ -181,6 +232,9 @@ def main() -> int:
     parser.add_argument("--source", required=True)
     parser.add_argument("--platform", required=True)
     parser.add_argument("--language")
+    parser.add_argument("--composition", choices=composition.CASES)
+    parser.add_argument("--cache-from", action="append", default=[])
+    parser.add_argument("--cache-to", action="append", default=[])
     parser.add_argument("--expected-root", action="append", default=[])
     parser.add_argument("--expected-exit-code", type=int, required=True)
     parser.add_argument("--committed-lock", action="store_true")

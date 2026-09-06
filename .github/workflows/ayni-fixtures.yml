@@ -33,13 +33,21 @@ jobs:
           version: 2026.6.14
           install: false
           cache: false
+      - name: Configure PR environment cache
+        id: cache
+        uses: ./.github/actions/setup-environment-cache
+        with:
+          scope: pr-${{ matrix.id }}-${{ matrix.arch }}
       - name: Run managed contract
         env:
           AYNI: ${{ steps.candidate.outputs.cli }}
           EXECUTOR: ${{ steps.candidate.outputs.executor }}
           PLATFORM: linux/${{ matrix.arch }}
+          CACHE_FROM: ${{ steps.cache.outputs.from }}
+          CACHE_TO: ${{ steps.cache.outputs.to }}
           FIXTURE: ${{ matrix.root }}
           LANGUAGE: ${{ matrix.language }}
+          COMPOSITION: ${{ matrix.composition }}
           FIXTURE_ID: ${{ matrix.id }}
           EXPECTED_ROOTS: ${{ toJSON(matrix.expected_roots) }}
           EXPECTED_EXIT: ${{ matrix.expected_exit_code }}
@@ -47,11 +55,16 @@ jobs:
           set -euo pipefail
           mapfile -t roots < <(jq -r '.[]' <<< "$EXPECTED_ROOTS")
           args=()
+          if [[ -n "$COMPOSITION" ]]; then
+            FIXTURE="$RUNNER_TEMP/composition/$COMPOSITION"
+            args+=(--composition "$COMPOSITION")
+          fi
           for root in "${roots[@]}"; do args+=(--expected-root "$root"); done
           python3 scripts/ci/run_fixture.py --cli "$AYNI" --executor-image "$EXECUTOR" \
             --fixture-root "$FIXTURE" --language "$LANGUAGE" --id "$FIXTURE_ID" \
             --expected-exit-code "$EXPECTED_EXIT" "${args[@]}" \
             --source "$GITHUB_SHA" --platform "$PLATFORM" \
+            --cache-from "$CACHE_FROM" --cache-to "$CACHE_TO" \
             --artifact-directory "$RUNNER_TEMP/managed-$FIXTURE_ID"
       - name: Retain evidence before cleanup
         if: always()

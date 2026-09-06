@@ -1,11 +1,149 @@
 {
   "schema_version": 1,
-  "platforms": [{"arch": "amd64", "runner": "ubuntu-latest"}],
+  "platforms": [
+    {
+      "arch": "amd64",
+      "runner": "ubuntu-latest"
+    }
+  ],
   "fixtures": [
-    {"id": "rust", "root": "examples/rust/mono", "language": "rust", "expected_roots": ["."], "expected_exit_code": 1},
-    {"id": "go", "root": "examples/go/mono", "language": "go", "expected_roots": ["."], "expected_exit_code": 1},
-    {"id": "node", "root": "examples/node/mono", "language": "node", "expected_roots": ["."], "expected_exit_code": 1},
-    {"id": "python", "root": "examples/python/mono", "language": "python", "expected_roots": ["."], "expected_exit_code": 0},
-    {"id": "kotlin", "root": "examples/kotlin/mono", "language": "kotlin", "expected_roots": ["."], "expected_exit_code": 0}
+    {
+      "id": "rust",
+      "root": "examples/rust/mono",
+      "language": "rust",
+      "expected_roots": [
+        "."
+      ],
+      "expected_exit_code": 1
+    },
+    {
+      "id": "go",
+      "root": "examples/go/mono",
+      "language": "go",
+      "expected_roots": [
+        "."
+      ],
+      "expected_exit_code": 1
+    },
+    {
+      "id": "node",
+      "root": "examples/node/mono",
+      "language": "node",
+      "expected_roots": [
+        "."
+      ],
+      "expected_exit_code": 1
+    },
+    {
+      "id": "python",
+      "root": "examples/python/mono",
+      "language": "python",
+      "expected_roots": [
+        "."
+      ],
+      "expected_exit_code": 0
+    },
+    {
+      "id": "kotlin",
+      "root": "examples/kotlin/mono",
+      "language": "kotlin",
+      "expected_roots": [
+        "."
+      ],
+      "expected_exit_code": 0
+    },
+    {
+      "id": "all-five",
+      "root": "composition/all-five",
+      "composition": "all-five",
+      "language": "",
+      "expected_roots": [
+        "rust",
+        "node",
+        "go",
+        "python",
+        "kotlin"
+      ],
+      "expected_exit_code": 1,
+      "expected_targets": [
+        {
+          "root": "rust",
+          "language": "rust",
+          "expected_exit_code": 1
+        },
+        {
+          "root": "node",
+          "language": "node",
+          "expected_exit_code": 1
+        },
+        {
+          "root": "go",
+          "language": "go",
+          "expected_exit_code": 1
+        },
+        {
+          "root": "python",
+          "language": "python",
+          "expected_exit_code": 0
+        },
+        {
+          "root": "kotlin",
+          "language": "kotlin",
+          "expected_exit_code": 0
+        }
+      ]
+    },
+    {
+      "id": "rust-node",
+      "root": "composition/rust-node",
+      "composition": "rust-node",
+      "language": "",
+      "expected_roots": [
+        "rust",
+        "node",
+        "node-other"
+      ],
+      "expected_exit_code": 1,
+      "expected_targets": [
+        {
+          "root": "rust",
+          "language": "rust",
+          "expected_exit_code": 1
+        },
+        {
+          "root": "node",
+          "language": "node",
+          "expected_exit_code": 1
+        },
+        {
+          "root": "node-other",
+          "language": "node",
+          "expected_exit_code": 1
+        }
+      ]
+    },
+    {
+      "id": "kotlin-go",
+      "root": "composition/kotlin-go",
+      "composition": "kotlin-go",
+      "language": "",
+      "expected_roots": [
+        "kotlin",
+        "go"
+      ],
+      "expected_exit_code": 1,
+      "expected_targets": [
+        {
+          "root": "kotlin",
+          "language": "kotlin",
+          "expected_exit_code": 0
+        },
+        {
+          "root": "go",
+          "language": "go",
+          "expected_exit_code": 1
+        }
+      ]
+    }
   ]
 }

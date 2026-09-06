@@ -167,4 +167,6 @@ pub(crate) struct ToolsReconcileOperation {
 pub(crate) struct EnvBuildOperation {
     pub repo_root: PathBuf,
     pub executor_image: Option<String>,
+    pub cache_from: Vec<String>,
+    pub cache_to: Vec<String>,
 }

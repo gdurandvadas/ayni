@@ -33,15 +33,23 @@ jobs:
           version: 2026.6.14
           install: false
           cache: false
+      - name: Configure PR environment cache
+        id: cache
+        uses: ./.github/actions/setup-environment-cache
+        with:
+          scope: pr-repository-${{ matrix.arch }}
       - name: Run managed contract
         env:
           AYNI: ${{ steps.candidate.outputs.cli }}
           EXECUTOR: ${{ steps.candidate.outputs.executor }}
           PLATFORM: linux/${{ matrix.arch }}
+          CACHE_FROM: ${{ steps.cache.outputs.from }}
+          CACHE_TO: ${{ steps.cache.outputs.to }}
         run: |
           python3 scripts/ci/run_fixture.py --cli "$AYNI" --executor-image "$EXECUTOR" \
             --fixture-root . --id repository --committed-lock --expected-exit-code 0 \
             --source "$GITHUB_SHA" --platform "$PLATFORM" \
+            --cache-from "$CACHE_FROM" --cache-to "$CACHE_TO" \
             --artifact-directory "$RUNNER_TEMP/managed-repository"
       - name: Retain evidence before cleanup
         if: always()

@@ -1,0 +1,45 @@
+name: Managed environment cache
+description: Use an explicitly scoped BuildKit cache with a job-local executor registry
+inputs:
+  scope:
+    description: Trust domain, fixture and architecture cache scope
+    required: true
+outputs:
+  from:
+    value: ${{ steps.scope.outputs.from }}
+    description: BuildKit import specification
+  to:
+    value: ${{ steps.scope.outputs.to }}
+    description: BuildKit export specification
+runs:
+  using: composite
+  steps:
+    - id: scope
+      shell: bash
+      env:
+        SCOPE: ${{ inputs.scope }}
+      run: |
+        set -euo pipefail
+        [[ "$SCOPE" =~ ^(pr|release)-[a-z0-9-]+$ ]]
+        echo "from=type=gha,version=2,scope=$SCOPE" >> "$GITHUB_OUTPUT"
+        echo "to=type=gha,version=2,scope=$SCOPE,mode=max" >> "$GITHUB_OUTPUT"
+    - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      with:
+        driver-opts: network=host
+        buildkitd-config-inline: |
+          [registry."localhost:5000"]
+            http = true
+            insecure = true
+          [registry."127.0.0.1:5000"]
+            http = true
+            insecure = true
+    - name: Expose job-scoped cache transport
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      with:
+        script: |
+          for (const name of ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL']) {
+            const value = process.env[name];
+            if (!value) continue;
+            if (name === 'ACTIONS_RUNTIME_TOKEN') core.setSecret(value);
+            core.exportVariable(name, value);
+          }

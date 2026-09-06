@@ -45,10 +45,7 @@ pub(super) fn materialize_outputs(
     image_plan: &ImagePlan,
     preparations: &[DependencyPreparationPlan],
 ) -> Result<Vec<(PathBuf, String)>, BackendError> {
-    let fingerprint = lock
-        .fingerprint()
-        .strip_prefix("sha256:")
-        .unwrap_or(lock.fingerprint());
+    let fingerprint = image_plan.installation_digest.trim_start_matches("sha256:");
     let preparation = image_plan
         .preparation_digest
         .strip_prefix("sha256:")
@@ -56,7 +53,7 @@ pub(super) fn materialize_outputs(
     let state_root = PathBuf::from(".ayni/environment")
         .join(&fingerprint[..16.min(fingerprint.len())])
         .join(&preparation[..16.min(preparation.len())]);
-    validate_output_ownership(preparations)?;
+    validate_output_ownership(lock, preparations)?;
     let cache_destination = materialize_cache(
         root,
         engine,
@@ -68,7 +65,8 @@ pub(super) fn materialize_outputs(
     let mut destinations = BTreeMap::new();
     let mut handled = std::collections::BTreeSet::new();
 
-    for plan in preparations {
+    for group in crate::preparation_groups::groups(preparations)? {
+        let plan = combined_materialization_plan(lock, &group.plans)?;
         let mut plan_outputs = outputs
             .iter()
             .filter(|output| {
@@ -77,14 +75,24 @@ pub(super) fn materialize_outputs(
             })
             .collect::<Vec<_>>();
         plan_outputs.sort_by(|left, right| left.path.cmp(&right.path));
+        let mut group_plan = image_plan.clone();
+        group_plan.preparation_digest = image_plan
+            .preparation_groups
+            .get(&plan.target)
+            .ok_or_else(|| BackendError::environment("preparation group identity is missing"))?
+            .clone();
+        let group_digest = group_plan.preparation_digest.trim_start_matches("sha256:");
+        let group_root = PathBuf::from(".ayni/environment")
+            .join(&fingerprint[..16])
+            .join(&group_digest[..16]);
         for (key, destination) in materialize_preparation_outputs(
             root,
             engine,
             lock,
-            image_plan,
-            plan,
+            &group_plan,
+            &plan,
             &plan_outputs,
-            &state_root,
+            &group_root,
             &cache_destination,
         )? {
             destinations.insert(key, destination);
@@ -108,24 +116,71 @@ pub(super) fn materialize_outputs(
 }
 
 fn validate_output_ownership(
+    lock: &EnvironmentLock,
     preparations: &[DependencyPreparationPlan],
 ) -> Result<(), BackendError> {
     let mut owners = BTreeMap::new();
     for plan in preparations {
+        let target = lock
+            .targets()
+            .iter()
+            .find(|target| target.target == plan.target)
+            .ok_or_else(|| BackendError::environment("preparation target is absent from lock"))?;
+        let activation = target_environment(target)?;
         for output in &plan.outputs {
-            if let Some(previous) = owners.insert(output.mount_path.clone(), &plan.target) {
+            if let Some((previous, previous_activation)) =
+                owners.insert(output.mount_path.clone(), (output, activation.clone()))
+                && (previous != output || previous_activation != activation)
+            {
                 return Err(BackendError::environment(format!(
-                    "dependency output {} is claimed by both {}:{} and {}:{}",
-                    output.mount_path,
-                    previous.language,
-                    previous.root,
-                    plan.target.language,
-                    plan.target.root
+                    "dependency output {} has incompatible ownership or activation requirements",
+                    output.mount_path
                 )));
             }
         }
     }
     Ok(())
+}
+
+fn combined_materialization_plan(
+    lock: &EnvironmentLock,
+    plans: &[ayni_core::DependencyPreparationPlan],
+) -> Result<ayni_core::DependencyPreparationPlan, BackendError> {
+    let mut combined = plans
+        .first()
+        .ok_or_else(|| BackendError::environment("empty preparation group"))?
+        .clone();
+    combined.materialization_commands.clear();
+    for plan in plans {
+        for input in &plan.inputs {
+            if !combined.inputs.contains(input) {
+                combined.inputs.push(input.clone());
+            }
+        }
+        for scaffold in &plan.scaffolds {
+            if !combined.scaffolds.contains(scaffold) {
+                combined.scaffolds.push(scaffold.clone());
+            }
+        }
+        let target = lock
+            .targets()
+            .iter()
+            .find(|target| target.target == plan.target)
+            .ok_or_else(|| BackendError::environment("preparation target is absent from lock"))?;
+        for command in &plan.materialization_commands {
+            let mut command = command.clone();
+            let mut environment = target_environment(target)?
+                .into_iter()
+                .collect::<BTreeMap<_, _>>();
+            environment.extend(command.environment);
+            command.environment = environment;
+            if !combined.materialization_commands.contains(&command) {
+                combined.materialization_commands.push(command);
+            }
+        }
+    }
+    combined.outputs = crate::preparation::unique_outputs(plans);
+    Ok(combined)
 }
 
 fn materialize_cache(
@@ -332,7 +387,11 @@ fn run_preparation_for_outputs(
     let workspace_parent = state_root.join("workspaces");
     create_contained_directory_tree(root, &workspace_parent)?;
     let workspace = StagingDirectory::create(&root.join(&workspace_parent))?;
-    crate::preparation::stage_inputs(root, workspace.path(), std::slice::from_ref(preparation))?;
+    crate::preparation::stage_workspace(
+        root,
+        &workspace.path().join("repository"),
+        std::slice::from_ref(preparation),
+    )?;
     let output_states = outputs
         .iter()
         .map(|output| {

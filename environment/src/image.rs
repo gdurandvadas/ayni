@@ -16,7 +16,7 @@ pub(crate) const IMAGE_PLATFORM_LABEL: &str = "dev.ayni.environment.platform";
 pub(crate) const IMAGE_PREPARATION_LABEL: &str = "dev.ayni.environment.preparation-digest";
 pub(crate) const IMAGE_OWNER_LABEL: &str = "dev.ayni.environment.owner";
 pub(crate) const IMAGE_OWNER_VALUE: &str = "ayni";
-pub(crate) const IMAGE_SCHEMA_VERSION: &str = "0.6.0";
+pub(crate) const IMAGE_SCHEMA_VERSION: &str = "0.7.0";
 pub(crate) const MISE_GITHUB_TOKEN_SECRET: &str = "MISE_GITHUB_TOKEN";
 
 const MISE_GITHUB_TOKEN_SECRET_MOUNT: &str =
@@ -32,11 +32,14 @@ pub struct ImagePlan {
     pub tag: String,
     pub dockerfile: String,
     pub mise_toml: String,
+    pub runtime_mise_toml: String,
+    pub installation_digest: String,
+    pub preparation_groups: BTreeMap<ayni_core::TargetIdentity, String>,
     pub platform: String,
     pub preparation_digest: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct ProvisioningInventory {
     tools: BTreeMap<String, BTreeSet<String>>,
     node_package_managers: BTreeMap<(String, String), BTreeSet<String>>,
@@ -58,7 +61,20 @@ pub fn image_plan_with_preparation(
     let architecture = host_architecture()?;
     let platform = format!("linux/{}", platform_architecture(architecture));
     let inventory = provisioning_inventory(lock)?;
-    let preparation_digest = crate::preparation::preparation_digest(preparations)?;
+    let runtime_inventory = runtime_inventory(&inventory);
+    let installation_digest = installation_digest(lock, &platform, &inventory)?;
+    let preparation_digest = ayni_core::sha256_fingerprint(format!(
+        "{}:{}",
+        installation_digest,
+        crate::preparation::preparation_digest(preparations)?
+    ));
+    let mut preparation_groups = BTreeMap::new();
+    for group in crate::preparation_groups::groups(preparations)? {
+        let digest = ayni_core::sha256_fingerprint(format!("{}:{}", installation_digest, group.id));
+        for plan in group.plans {
+            preparation_groups.insert(plan.target, digest.clone());
+        }
+    }
     Ok(ImagePlan {
         tag: image_tag(lock, &preparation_digest, architecture),
         dockerfile: dockerfile(
@@ -68,10 +84,40 @@ pub fn image_plan_with_preparation(
             preparations,
             &preparation_digest,
         )?,
+        runtime_mise_toml: mise_toml(runtime_inventory.tools),
+        installation_digest,
+        preparation_groups,
         mise_toml: mise_toml(inventory.tools),
         platform,
         preparation_digest,
     })
+}
+
+fn runtime_inventory(inventory: &ProvisioningInventory) -> ProvisioningInventory {
+    let mut runtime = inventory.clone();
+    runtime.tools.retain(|tool, _| !tool.contains(':'));
+    runtime
+}
+
+fn installation_digest(
+    lock: &EnvironmentLock,
+    platform: &str,
+    inventory: &ProvisioningInventory,
+) -> Result<String, BackendError> {
+    let inputs = serde_json::to_vec(&(
+        "installation-2",
+        platform,
+        lock.provisioning_base(),
+        lock.debian_packages(),
+        &inventory.tools,
+        inventory.node_package_managers.iter().collect::<Vec<_>>(),
+        &inventory.rust_components,
+        &inventory.rust_targets,
+    ))
+    .map_err(|error| {
+        BackendError::environment(format!("cannot identify installation inputs: {error}"))
+    })?;
+    Ok(ayni_core::sha256_fingerprint(inputs))
 }
 
 fn image_tag(
@@ -279,14 +325,25 @@ fn dockerfile(
     preparations: &[DependencyPreparationPlan],
     preparation_digest: &str,
 ) -> Result<String, BackendError> {
-    let mise_provisioning = mise_install_provisioning(inventory);
+    let runtime = runtime_inventory(inventory);
+    let mise_provisioning = mise_install_provisioning(&runtime);
+    let providers = ProvisioningInventory {
+        tools: inventory
+            .tools
+            .iter()
+            .filter(|(tool, _)| tool.contains(':'))
+            .map(|(tool, versions)| (tool.clone(), versions.clone()))
+            .collect(),
+        ..ProvisioningInventory::default()
+    };
+    let provider_provisioning = mise_install_provisioning(&providers);
     let node_package_manager_provisioning = node_package_manager_provisioning(inventory);
     let rustup_provisioning = rustup_provisioning(inventory);
     let debian_provisioning = debian_provisioning(lock.debian_packages());
     let base = lock.provisioning_base();
     let preparation = crate::preparation::dockerfile_fragment(lock, preparations)?;
     Ok(format!(
-        "FROM {}@{} AS ayni-runtime\n{debian_provisioning}USER ayni\nCOPY --chown=10001:10001 mise.toml /etc/ayni/mise.toml\nRUN chmod 0444 /etc/ayni/mise.toml\nENV MISE_CONFIG_FILE=/etc/ayni/mise.toml MISE_TRUSTED_CONFIG_PATHS=/etc/ayni\nRUN mise trust /etc/ayni/mise.toml\n{mise_provisioning}{node_package_manager_provisioning}RUN mise reshim\n{rustup_provisioning}ENV MISE_AUTO_INSTALL=0 MISE_CONFIG_FILE=/etc/ayni/mise.toml\n{preparation}LABEL {IMAGE_OWNER_LABEL}=\"{IMAGE_OWNER_VALUE}\" {IMAGE_SCHEMA_LABEL}=\"{IMAGE_SCHEMA_VERSION}\" {IMAGE_LOCK_LABEL}=\"{}\" {IMAGE_BASE_LABEL}=\"{}\" {IMAGE_AYNI_LABEL}=\"{}\" {IMAGE_MISE_LABEL}=\"{}\" {IMAGE_PLATFORM_LABEL}=\"{}\" {IMAGE_PREPARATION_LABEL}=\"{}\"\nWORKDIR {WORKSPACE}\n",
+        "FROM {}@{} AS ayni-runtime\n{debian_provisioning}USER ayni\nCOPY --chown=10001:10001 runtime-mise.toml /etc/ayni/mise.toml\nRUN chmod 0444 /etc/ayni/mise.toml\nENV MISE_CONFIG_FILE=/etc/ayni/mise.toml MISE_TRUSTED_CONFIG_PATHS=/etc/ayni\nRUN mise trust /etc/ayni/mise.toml\n{mise_provisioning}{node_package_manager_provisioning}RUN mise reshim\n{rustup_provisioning}ENV MISE_AUTO_INSTALL=0 MISE_CONFIG_FILE=/etc/ayni/mise.toml\nFROM ayni-runtime AS ayni-tools\n{provider_provisioning}RUN mise reshim\n{preparation}COPY --chown=10001:10001 mise.toml /etc/ayni/mise.toml\nRUN chmod 0444 /etc/ayni/mise.toml && mise trust /etc/ayni/mise.toml && mise reshim\nLABEL {IMAGE_OWNER_LABEL}=\"{IMAGE_OWNER_VALUE}\" {IMAGE_SCHEMA_LABEL}=\"{IMAGE_SCHEMA_VERSION}\" {IMAGE_LOCK_LABEL}=\"{}\" {IMAGE_BASE_LABEL}=\"{}\" {IMAGE_AYNI_LABEL}=\"{}\" {IMAGE_MISE_LABEL}=\"{}\" {IMAGE_PLATFORM_LABEL}=\"{}\" {IMAGE_PREPARATION_LABEL}=\"{}\"\nWORKDIR {WORKSPACE}\n",
         base.reference,
         base.digest,
         lock.fingerprint(),
@@ -445,6 +502,59 @@ mod tests {
     use ayni_core::{
         LockedRequirementSource, RequirementConfidence, SignalKind, ToolInstallationScope,
     };
+
+    #[test]
+    fn installation_identity_excludes_policy_but_retains_abi_tools_and_platform() {
+        let lock: EnvironmentLock = serde_json::from_str(include_str!("../../.ayni.lock")).unwrap();
+        let inventory = provisioning_inventory(&lock).unwrap();
+        let original = installation_digest(&lock, "linux/amd64", &inventory).unwrap();
+        let canonical = lock.canonical_json().unwrap();
+        let updated = canonical.replace(
+            &lock.repository().contract_digest,
+            &format!("sha256:{}", "c".repeat(64)),
+        );
+        let document = format!("{}}}", updated.split(",\"fingerprint\":").next().unwrap()).replace(
+            ",\"capabilities\":",
+            ",\"tools\":[],\"debian_packages\":[],\"capabilities\":",
+        );
+        let fingerprint = ayni_core::sha256_fingerprint(document.as_bytes());
+        let updated: EnvironmentLock =
+            serde_json::from_str(&updated.replace(lock.fingerprint(), &fingerprint)).unwrap();
+        assert_ne!(lock.fingerprint(), updated.fingerprint());
+        assert_eq!(
+            original,
+            installation_digest(&updated, "linux/amd64", &inventory).unwrap()
+        );
+        assert_ne!(
+            original,
+            installation_digest(&lock, "linux/arm64", &inventory).unwrap()
+        );
+        let mut changed = inventory.clone();
+        changed
+            .tools
+            .entry("node".into())
+            .or_default()
+            .insert("24.14.0".into());
+        assert_ne!(
+            original,
+            installation_digest(&lock, "linux/amd64", &changed).unwrap()
+        );
+        let updated = canonical.replace(
+            &lock.provisioning_base().digest,
+            &format!("sha256:{}", "d".repeat(64)),
+        );
+        let document = format!("{}}}", updated.split(",\"fingerprint\":").next().unwrap()).replace(
+            ",\"capabilities\":",
+            ",\"tools\":[],\"debian_packages\":[],\"capabilities\":",
+        );
+        let fingerprint = ayni_core::sha256_fingerprint(document.as_bytes());
+        let updated: EnvironmentLock =
+            serde_json::from_str(&updated.replace(lock.fingerprint(), &fingerprint)).unwrap();
+        assert_ne!(
+            original,
+            installation_digest(&updated, "linux/amd64", &inventory).unwrap()
+        );
+    }
 
     fn source() -> LockedRequirementSource {
         LockedRequirementSource {

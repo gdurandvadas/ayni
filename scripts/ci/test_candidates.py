@@ -87,7 +87,7 @@ class CompletionTests(unittest.TestCase):
     def test_explicit_rust_independent_of_repository(self):
         self.assertIn({"id": "repository", "arch": "amd64"}, self.plan["evidence"])
         self.assertIn({"id": "rust", "arch": "amd64"}, self.plan["evidence"])
-        self.assertEqual(len(self.plan["evidence"]), 6)
+        self.assertEqual(len(self.plan["evidence"]), 9)
 
     def test_cancelled_failed_and_skipped_jobs(self):
         for job in JOBS:
@@ -118,7 +118,13 @@ class CompletionTests(unittest.TestCase):
                     "executor": {"source_revision": SOURCE, "platform": "linux/amd64"},
                     "environment_fingerprint": "fingerprint",
                 }
-                (folder / "signals.json").write_text("{}")
+                signals = {}
+                if entry['id'] in ('all-five', 'rust-node', 'kotlin-go'):
+                    from test_delivery import composed_artifact
+                    from composition import expected_targets
+                    signals = composed_artifact(entry['id'])
+                    (folder / 'composition.json').write_text(json.dumps({'targets': expected_targets(entry['id']), 'quality_launches': 1}))
+                (folder / "signals.json").write_text(json.dumps(signals))
                 (folder / "build.json").write_text(json.dumps(build))
                 (folder / "lock.json").write_text('{"fingerprint": "fingerprint"}')
                 (folder / "timings.jsonl").write_text("{}\n")

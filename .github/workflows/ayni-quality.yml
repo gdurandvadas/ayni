@@ -47,6 +47,9 @@ jobs:
       - name: Test candidate handoff and completion contracts
         run: python3 scripts/ci/test_candidates.py
 
+      - name: Test composition and publication recovery
+        run: python3 scripts/ci/test_delivery.py
+
       - name: Test release installer
         run: scripts/ci/test_install_sh.sh
 
