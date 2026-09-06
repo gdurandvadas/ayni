@@ -274,7 +274,10 @@ fn workspace_rust_version(
     })
 }
 
-fn workspace_root(repo_root: &Path, target_root: &Path) -> Result<PathBuf, AdapterError> {
+pub(crate) fn workspace_root(
+    repo_root: &Path,
+    target_root: &Path,
+) -> Result<PathBuf, AdapterError> {
     if let Some(root) = explicit_workspace_root(repo_root, target_root)? {
         return Ok(root);
     }

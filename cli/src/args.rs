@@ -37,6 +37,11 @@ enum Commands {
         #[command(subcommand)]
         command: EnvCommands,
     },
+    /// Preview signal-tool declarations, baseline drift, and blockers.
+    Tools {
+        #[command(subcommand)]
+        command: ToolsCommands,
+    },
     /// Inspect the repository quality contract.
     Contract {
         #[command(subcommand)]
@@ -73,6 +78,14 @@ impl Commands {
         match self {
             Self::Init(options) => Operation::Init(options.into_operation()),
             Self::Env { command } => command.into_operation(),
+            Self::Tools {
+                command: ToolsCommands::Reconcile(options),
+            } => Operation::ToolsReconcile(crate::application::ToolsReconcileOperation {
+                config: options.config,
+                repo_root: options.repo_root,
+                output: options.output.into(),
+                check: options.check,
+            }),
             Self::Contract { command } => command.into_operation(),
             Self::Verify { command } => command.into_operation(),
             Self::Impact { command } => command.into_operation(),
@@ -692,7 +705,8 @@ mod tests {
         assert_eq!(
             names,
             [
-                "init", "env", "contract", "verify", "impact", "check", "agents", "results"
+                "init", "env", "tools", "contract", "verify", "impact", "check", "agents",
+                "results"
             ]
         );
     }
@@ -710,6 +724,7 @@ mod tests {
             (vec!["ayni", "env", "shell"], "EnvShell"),
             (vec!["ayni", "env", "run", "--", "cargo", "test"], "EnvRun"),
             (vec!["ayni", "contract", "show"], "ContractShow"),
+            (vec!["ayni", "tools", "reconcile"], "ToolsReconcile"),
             (vec!["ayni", "verify", "list"], "VerifyList"),
             (vec!["ayni", "verify", "test"], "Verify"),
             (
@@ -952,4 +967,22 @@ mod tests {
         }
         assert!(Cli::try_parse_from(["ayni", "contract", "display"]).is_err());
     }
+}
+
+#[derive(Subcommand, Debug)]
+enum ToolsCommands {
+    /// Inspect native tooling without changing files or executing package managers.
+    Reconcile(ToolsReconcileOptions),
+}
+#[derive(Args, Debug)]
+struct ToolsReconcileOptions {
+    #[arg(long, default_value = DEFAULT_CONFIG)]
+    config: PathBuf,
+    #[arg(long, default_value = ".")]
+    repo_root: PathBuf,
+    #[arg(long, value_enum, default_value_t)]
+    output: DataOutputArg,
+    /// Fail when reconciliation is required or inspection is blocked.
+    #[arg(long)]
+    check: bool,
 }

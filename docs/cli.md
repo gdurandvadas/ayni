@@ -19,6 +19,8 @@ This document contains the help content for the `ayni` command-line program.
 * [`ayni env prune`↴](#ayni-env-prune)
 * [`ayni env shell`↴](#ayni-env-shell)
 * [`ayni env run`↴](#ayni-env-run)
+* [`ayni tools`↴](#ayni-tools)
+* [`ayni tools reconcile`↴](#ayni-tools-reconcile)
 * [`ayni contract`↴](#ayni-contract)
 * [`ayni contract show`↴](#ayni-contract-show)
 * [`ayni verify`↴](#ayni-verify)
@@ -48,6 +50,7 @@ Reproducible environments, focused feedback, explicit completion evidence
 
 * `init` — Preview or write a minimal policy from adapter-owned project discovery
 * `env` — Inspect and manage the repository code environment
+* `tools` — Preview signal-tool declarations, baseline drift, and blockers
 * `contract` — Inspect the repository quality contract
 * `verify` — Run focused signals or list exact commands from saved evidence
 * `impact` — Explain or run the checks affected by an explicit change
@@ -260,6 +263,46 @@ Run an arbitrary command inside the managed environment
 * `--root <ROOT>` — Select one normalized locked root
 * `--allow-network` — Authorize bridge networking requested by the locked policy for this managed launch
 * `--allow-docker-socket` — Authorize host Docker-socket access requested by the locked policy for this managed launch
+
+
+
+## `ayni tools`
+
+Preview signal-tool declarations, baseline drift, and blockers
+
+**Usage:** `ayni tools <COMMAND>`
+
+###### **Subcommands:**
+
+* `reconcile` — Inspect native tooling without changing files or executing package managers
+
+
+
+## `ayni tools reconcile`
+
+Inspect native tooling without changing files or executing package managers
+
+**Usage:** `ayni tools reconcile [OPTIONS]`
+
+###### **Options:**
+
+* `--config <CONFIG>`
+
+  Default value: `./.ayni.toml`
+* `--repo-root <REPO_ROOT>`
+
+  Default value: `.`
+* `--output <OUTPUT>`
+
+  Default value: `human`
+
+  Possible values:
+  - `human`:
+    Human-readable terminal output
+  - `json`:
+    One deterministic JSON document on stdout
+
+* `--check` — Fail when reconciliation is required or inspection is blocked
 
 
 

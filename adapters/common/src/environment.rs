@@ -47,7 +47,7 @@ pub fn environment_discovery_request(
     )
 }
 
-fn validate_environment_target_containment(
+pub fn validate_environment_target_containment(
     canonical_repo_root: &Path,
     target: &ayni_core::TargetIdentity,
 ) -> Result<(), AdapterError> {

@@ -145,7 +145,11 @@ fn owner(repo: &Path, target: &Path) -> Result<PathBuf, AdapterError> {
     Ok(target.to_path_buf())
 }
 
-fn uv_workspace_contains(repo: &Path, root: &Path, target: &Path) -> Result<bool, AdapterError> {
+pub(crate) fn uv_workspace_contains(
+    repo: &Path,
+    root: &Path,
+    target: &Path,
+) -> Result<bool, AdapterError> {
     let manifest = read_toml(repo, &root.join("pyproject.toml"))?;
     let Some(workspace) = manifest
         .get("tool")
@@ -716,7 +720,7 @@ fn requirement_array(value: &toml::Value, field: &str) -> Result<Vec<String>, Ad
         .collect()
 }
 
-fn requirement_name(requirement: String) -> Result<String, AdapterError> {
+pub(crate) fn requirement_name(requirement: String) -> Result<String, AdapterError> {
     let name = requirement
         .split(['[', '<', '>', '=', '!', '~', ';', ' '])
         .next()
@@ -737,7 +741,10 @@ fn requirement_name(requirement: String) -> Result<String, AdapterError> {
     }
 }
 
-fn locked<'a>(value: &'a toml::Value, name: &str) -> Result<Option<&'a str>, AdapterError> {
+pub(crate) fn locked<'a>(
+    value: &'a toml::Value,
+    name: &str,
+) -> Result<Option<&'a str>, AdapterError> {
     let versions = value
         .get("package")
         .and_then(toml::Value::as_array)
@@ -755,7 +762,7 @@ fn locked<'a>(value: &'a toml::Value, name: &str) -> Result<Option<&'a str>, Ada
     }
 }
 
-fn read_toml(repo: &Path, p: &Path) -> Result<toml::Value, AdapterError> {
+pub(crate) fn read_toml(repo: &Path, p: &Path) -> Result<toml::Value, AdapterError> {
     toml::from_str(&read_contained_string(repo, p).map_err(error)?)
         .map_err(|e| error(format!("failed to parse {}: {e}", p.display())))
 }

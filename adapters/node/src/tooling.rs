@@ -9,6 +9,19 @@ pub static NODE_TOOLS: &[ManagedToolSpec] = &[
     ManagedToolSpec::project("@typescript-eslint/parser", "8.67.0"),
 ];
 
+pub(crate) struct Reconciliation;
+impl ayni_core::ToolingReconciliationCapability for Reconciliation {
+    fn language(&self) -> ayni_core::Language {
+        ayni_core::Language::Node
+    }
+    fn plan(
+        &self,
+        request: &ayni_core::ToolingRequest,
+    ) -> Result<ayni_core::ToolingPlan, ayni_core::AdapterError> {
+        crate::tooling_reconcile::plan(request)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -246,10 +246,8 @@ coverage_satisfies_test = true
         let SignalResult::Coverage(result) = coverage.result else {
             panic!("coverage row")
         };
-        assert_eq!(
-            result.failure.expect("ambiguity failure").classification,
-            "missing_report"
-        );
+        let failure = result.failure.expect("ambiguity failure");
+        assert_eq!(failure.classification, "missing_report", "{failure:?}");
     }
 
     #[cfg(unix)]

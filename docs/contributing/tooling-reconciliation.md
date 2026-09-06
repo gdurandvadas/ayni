@@ -1,10 +1,10 @@
-# Tooling reconciliation — foundations and baselines
+# Tooling reconciliation — preview and baselines
 
 The intended lifecycle is: reconciliation establishes native declarations and
 locks, `env lock` snapshots exact requirements, and `env build` installs them.
-Milestones 1 and 2 implement the core boundary and adapter-owned baseline inventories.
-They do not implement `tools reconcile`, manifest editing, package-manager
-execution, or changes to `init`.
+Milestones 1–3 implement the core boundary, adapter-owned baseline inventories,
+and read-only `tools reconcile` preview/check. Manifest editing, package-manager
+execution, and changes to `init` remain later milestones.
 
 ## Ownership and version authority
 
@@ -76,7 +76,7 @@ The apply design still needs a recovery journal, rollback policy, and concurrent
 writer exclusion for publication failures or process crashes. Expected digests
 are necessary but do not close races between a final check and rename.
 
-The next milestone adds read-only adapter reconciliation planning and CLI preview/check.
+The next milestone adds the staged apply engine.
 Keep new ownership out of generated init policies until the adapter planners
 and staged apply engine are available and verified.
 
@@ -125,3 +125,45 @@ mutmut, JaCoCo, and PIT, with their actual XML outputs retained in adapter parse
 tests. See [baseline fixture validation](tooling-baseline-fixtures.md) for commands,
 versions, and the limits of this evidence. Full native managed-environment runs
 across all five adapters remain a later milestone.
+
+## Read-only CLI (milestone 3)
+
+```sh
+cargo run -p ayni-cli -- tools reconcile
+cargo run -p ayni-cli -- tools reconcile --check --output json
+```
+
+Use `--repo-root` and `--config` to select another repository policy. Preview
+returns 0 with drift or inspection blockers; `--check` returns 1 for required
+reconciliation, unsupported metadata, or a stale/invalid existing Ayni lock.
+Invalid policy or escaping configured targets return 2. No package manager is
+executed and no files, including `.ayni/`, are created or changed.
+
+JSON projection `0.1.0` includes ownership, normalized targets and governing
+roots, tested baselines, current native declarations/resolutions, diagnostics,
+and environment-lock state. Targets and diagnostics are sorted. Missing native
+locks still produce baseline requirements and actionable blockers. Custom
+command overrides exclude their default tool requirements.
+
+Node checks npm/pnpm native versions and member constraints against the governing
+baseline. Python checks uv declarations and unambiguous lock versions; unsupported
+requirement syntax or included dependency groups require manual review. Kotlin
+supports direct literal plugin declarations, preserves JaCoCo or Kover, and reports
+ambiguous providers and missing lock/integrity metadata. Plugin aliases require
+manual reconciliation. Native manifest editing and executable mutation proposals
+remain milestone 5: `edits`, `commands`, and `outputs` are currently empty, and
+required native changes are described in diagnostics. The preview is not an
+executable transaction or proof that a package manager can complete an update.
+
+Rust and Go inventory validation requires no application dependency edits and
+makes no claims about tools installed on the host. Toolchain components follow
+the selected runtime. A missing `.ayni.lock` is reported as `absent` and is not
+itself tooling drift: environment locking follows reconciliation. An existing
+lock is checked for its policy and recorded native-input digests. The state
+`recorded_inputs_match` is deliberately narrower than environment readiness;
+`env doctor` remains the environment validation command. Proposed reconciliation
+reports `refresh_after_reconciliation` when those recorded inputs still match.
+
+Contract projection `0.5.0` includes `environment.signal_tool_ownership`.
+Ayni ownership remains unavailable in environment lifecycle commands until the
+apply and lifecycle integration milestones land.

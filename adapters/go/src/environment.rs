@@ -826,6 +826,13 @@ fn plan_error(cause: ayni_core::EnvironmentPlanError) -> AdapterError {
     error(cause.to_string())
 }
 
+pub(crate) fn tooling_owner(repo: &Path, target: &Path) -> Result<PathBuf, AdapterError> {
+    read_contained_string(repo, &target.join("go.mod")).map_err(error)?;
+    Ok(find_workspace(repo, target)?
+        .filter(|workspace| workspace.modules.iter().any(|module| module == target))
+        .map_or_else(|| target.to_path_buf(), |workspace| workspace.root))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
