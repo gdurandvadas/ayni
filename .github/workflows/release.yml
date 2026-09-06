@@ -886,6 +886,20 @@ jobs:
             --check-exit-code "$check_code" \
             --expected-root .
 
+      - name: Retain released managed execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: released-managed-${{ matrix.language }}
+          path: |
+            examples/${{ matrix.language }}/mono/.ayni.lock
+            examples/${{ matrix.language }}/mono/.ayni/last/signals.json
+            examples/${{ matrix.language }}/mono/.ayni/last/execution.json
+            examples/${{ matrix.language }}/mono/.ayni/environment/build.json
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Remove ephemeral environment state
         if: always()
         env:
