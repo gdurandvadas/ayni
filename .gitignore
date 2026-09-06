@@ -33,3 +33,6 @@ docs/.vitepress/dist/
 .projects/**
 **/node_modules/
 ayni
+
+# Local Python validation caches
+__pycache__/

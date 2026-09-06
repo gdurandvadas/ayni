@@ -4,7 +4,8 @@ use std::path::Path;
 #[test]
 fn published_base_metadata_matches_the_backend_contract() {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let versions = fs::read_to_string(repository.join(".github/docker/ayni-env.versions")).unwrap();
+    let versions =
+        fs::read_to_string(repository.join(".github/docker/provisioning.versions")).unwrap();
     assert!(versions.contains(&format!(
         "MISE_VERSION={}",
         ayni_environment::BASE_MISE_VERSION

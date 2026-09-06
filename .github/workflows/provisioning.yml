@@ -1,0 +1,247 @@
+name: publish provisioning substrate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/docker/provisioning.versions
+      - .github/docker/ayni-provisioning.Dockerfile
+      - .github/workflows/provisioning.yml
+      - scripts/ci/provisioning.py
+      - LICENSE
+      - NOTICE
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provisioning-publication
+  cancel-in-progress: false
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      recipe: ${{ steps.source.outputs.recipe }}
+    steps:
+      - name: Require trusted main
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: test "$WORKFLOW_REF" = refs/heads/main
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Identify immutable source and recipe
+        id: source
+        run: |
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "recipe=$(python3 scripts/ci/provisioning.py recipe)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: source
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            os: ubuntu-latest
+            uname: x86_64
+          - arch: arm64
+            os: ubuntu-24.04-arm
+            uname: aarch64
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          persist-credentials: false
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare minimal build context
+        id: inputs
+        run: |
+          set -euo pipefail
+          source .github/docker/provisioning.versions
+          mkdir -p "$RUNNER_TEMP/provisioning"
+          cp LICENSE NOTICE .github/docker/ayni-provisioning.Dockerfile "$RUNNER_TEMP/provisioning/"
+          {
+            echo "debian=$DEBIAN_IMAGE"
+            echo "mise=$MISE_VERSION"
+            echo "amd64=$MISE_SHA256_AMD64"
+            echo "arm64=$MISE_SHA256_ARM64"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build immutable architecture image
+        id: image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ${{ runner.temp }}/provisioning
+          file: ${{ runner.temp }}/provisioning/ayni-provisioning.Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=ghcr.io/gdurandvadas/ayni-provisioning,push-by-digest=true,name-canonical=true,push=true
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            DEBIAN_IMAGE=${{ steps.inputs.outputs.debian }}
+            MISE_VERSION=${{ steps.inputs.outputs.mise }}
+            MISE_SHA256_AMD64=${{ steps.inputs.outputs.amd64 }}
+            MISE_SHA256_ARM64=${{ steps.inputs.outputs.arm64 }}
+            SOURCE_REVISION=${{ needs.source.outputs.commit }}
+            RECIPE_DIGEST=${{ needs.source.outputs.recipe }}
+      - name: Verify native substrate contract
+        env:
+          IMAGE: ghcr.io/gdurandvadas/ayni-provisioning@${{ steps.image.outputs.digest }}
+          EXPECTED_UNAME: ${{ matrix.uname }}
+          EXPECTED_COMMIT: ${{ needs.source.outputs.commit }}
+          EXPECTED_RECIPE: ${{ needs.source.outputs.recipe }}
+          EXPECTED_MISE: ${{ steps.inputs.outputs.mise }}
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+          test "$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$EXPECTED_COMMIT"
+          test "$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "dev.ayni.provisioning.recipe" }}')" = "$EXPECTED_RECIPE"
+          test "$(docker run --rm "$IMAGE" uname -m)" = "$EXPECTED_UNAME"
+          docker run --rm "$IMAGE" sh -eu -c 'test "$(id -u)" = 10001; test -w /workspace; ! command -v ayni; test -f /usr/share/doc/ayni/LICENSE; test -f /usr/share/doc/ayni/NOTICE'
+          test "$(docker run --rm "$IMAGE" mise --version | cut -d ' ' -f 1)" = "$EXPECTED_MISE"
+      - name: Scan architecture image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: ghcr.io/gdurandvadas/ayni-provisioning@${{ steps.image.outputs.digest }}
+          format: table
+          exit-code: 1
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL
+      - name: Record successfully verified digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/digests/$ARCH"
+      - name: Upload scanned digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provisioning-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 14
+          if-no-files-found: error
+
+  publish:
+    needs: [source, build]
+    runs-on: ubuntu-latest
+    outputs:
+      reference: ${{ steps.publication.outputs.reference }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          persist-credentials: false
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Download both scanned digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: provisioning-digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - name: Assemble and sign immutable substrate
+        id: publication
+        env:
+          RECIPE: ${{ needs.source.outputs.recipe }}
+        run: |
+          set -euo pipefail
+          repository=ghcr.io/gdurandvadas/ayni-provisioning
+          sources=()
+          for arch in amd64 arm64; do
+            digest="$(cat "$RUNNER_TEMP/digests/$arch")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            sources+=("$repository@$digest")
+          done
+          staging="$repository:staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker buildx imagetools create --tag "$staging" "${sources[@]}"
+          digest="$(docker buildx imagetools inspect "$staging" --format '{{json .Manifest}}' | jq -r .digest)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          immutable="$repository@$digest"
+          docker buildx imagetools inspect "$immutable" --raw > "$RUNNER_TEMP/manifest.json"
+          python3 scripts/ci/provisioning.py manifest "$RUNNER_TEMP/manifest.json"
+          cosign sign --yes "$immutable"
+          cosign verify --certificate-identity 'https://github.com/gdurandvadas/ayni/.github/workflows/provisioning.yml@refs/heads/main' --certificate-oidc-issuer https://token.actions.githubusercontent.com "$immutable"
+          docker buildx imagetools create --tag "$repository:recipe-${RECIPE#sha256:}" "$immutable"
+          printf '%s\n' "$immutable" > "$RUNNER_TEMP/provisioning-reference.txt"
+          echo "reference=$immutable" >> "$GITHUB_OUTPUT"
+          printf 'Verified provisioning substrate: `%s`\n' "$immutable" >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain immutable adoption reference
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provisioning-reference
+          path: |
+            ${{ runner.temp }}/provisioning-reference.txt
+            ${{ runner.temp }}/manifest.json
+          retention-days: 14
+          if-no-files-found: error
+
+  consume:
+    needs: [source, publish]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            uname: x86_64
+          - os: ubuntu-24.04-arm
+            uname: aarch64
+    steps:
+      # No registry credentials: a committed substrate must be publicly pullable.
+      - name: Pull and exercise public substrate on a clean native runner
+        env:
+          IMAGE: ${{ needs.publish.outputs.reference }}
+          EXPECTED_UNAME: ${{ matrix.uname }}
+          EXPECTED_RECIPE: ${{ needs.source.outputs.recipe }}
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+          test "$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "dev.ayni.provisioning.recipe" }}')" = "$EXPECTED_RECIPE"
+          test "$(docker run --rm "$IMAGE" uname -m)" = "$EXPECTED_UNAME"
+          docker run --rm "$IMAGE" sh -eu -c 'test "$(id -u)" = 10001; test -w /workspace; ! command -v ayni; mise --version'
+
+  completion:
+    if: always()
+    needs: [source, build, publish, consume]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require complete publication
+        env:
+          SOURCE: ${{ needs.source.result }}
+          BUILD: ${{ needs.build.result }}
+          PUBLISH: ${{ needs.publish.result }}
+          CONSUME: ${{ needs.consume.result }}
+        run: test "$SOURCE" = success && test "$BUILD" = success && test "$PUBLISH" = success && test "$CONSUME" = success
