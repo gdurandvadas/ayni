@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.12.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.6...ayni-v0.12.0) (2026-09-06)
+
+
+### Features
+
+* **adapters:** define tested signal tool baselines ([#101](https://github.com/gdurandvadas/ayni/issues/101)) ([1ba15c1](https://github.com/gdurandvadas/ayni/commit/1ba15c19b9207edbf878fcc34253a57320d0d021))
+* **ci:** establish durable provisioning and required validation ([#105](https://github.com/gdurandvadas/ayni/issues/105)) ([61e7ef2](https://github.com/gdurandvadas/ayni/commit/61e7ef25f9a037aa8557e7656b553899b6cdd40c))
+* **tooling:** add read-only reconciliation preview ([#103](https://github.com/gdurandvadas/ayni/issues/103)) ([0757b1a](https://github.com/gdurandvadas/ayni/commit/0757b1a678f6488c78728cff5ff4df916b2fd152))
+
 ## [0.11.6](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.5...ayni-v0.11.6) (2026-09-05)
 
 
