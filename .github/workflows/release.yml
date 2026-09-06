@@ -849,7 +849,27 @@ jobs:
           install: false
           cache: false
 
+      - name: Run shared fixture contract against public artifacts
+        if: ${{ hashFiles('scripts/ci/run_fixture.py') != '' }}
+        env:
+          AYNI: ${{ steps.binary.outputs.path }}
+          EXECUTOR: ${{ needs.environment-manifest.outputs.base }}
+          SOURCE: ${{ needs.release.outputs.release_commit }}
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          set -euo pipefail
+          fixture="$(jq -er --arg id "$LANGUAGE" '.fixtures[] | select(.id == $id) | .root' scripts/ci/fixtures.json)"
+          expected="$(jq -er --arg id "$LANGUAGE" '.fixtures[] | select(.id == $id) | .expected_exit_code' scripts/ci/fixtures.json)"
+          mapfile -t roots < <(jq -er --arg id "$LANGUAGE" '.fixtures[] | select(.id == $id) | .expected_roots[]' scripts/ci/fixtures.json)
+          args=()
+          for root in "${roots[@]}"; do args+=(--expected-root "$root"); done
+          python3 scripts/ci/run_fixture.py --cli "$AYNI" --executor-image "$EXECUTOR" \
+            --fixture-root "$fixture" --language "$LANGUAGE" --id "$LANGUAGE" \
+            --expected-exit-code "$expected" "${args[@]}" --source "$SOURCE" --platform linux/amd64 \
+            --artifact-directory "$RUNNER_TEMP/released-managed-$LANGUAGE"
+
       - name: Lock and build released managed fixture
+        if: ${{ hashFiles('scripts/ci/run_fixture.py') == '' }}
         env:
           AYNI: ${{ steps.binary.outputs.path }}
           BASE: ${{ needs.environment-manifest.outputs.base }}
@@ -869,6 +889,7 @@ jobs:
           "$AYNI" env doctor --repo-root "$FIXTURE"
 
       - name: Validate released managed evidence
+        if: ${{ hashFiles('scripts/ci/run_fixture.py') == '' }}
         env:
           AYNI: ${{ steps.binary.outputs.path }}
           FIXTURE: examples/${{ matrix.language }}/mono
@@ -892,6 +913,7 @@ jobs:
         with:
           name: released-managed-${{ matrix.language }}
           path: |
+            ${{ runner.temp }}/released-managed-${{ matrix.language }}/
             examples/${{ matrix.language }}/mono/.ayni.lock
             examples/${{ matrix.language }}/mono/.ayni/last/signals.json
             examples/${{ matrix.language }}/mono/.ayni/last/execution.json

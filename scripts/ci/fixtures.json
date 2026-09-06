@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "platforms": [{"arch": "amd64", "runner": "ubuntu-latest"}],
+  "fixtures": [
+    {"id": "rust", "root": "examples/rust/mono", "language": "rust", "expected_roots": ["."], "expected_exit_code": 1},
+    {"id": "go", "root": "examples/go/mono", "language": "go", "expected_roots": ["."], "expected_exit_code": 1},
+    {"id": "node", "root": "examples/node/mono", "language": "node", "expected_roots": ["."], "expected_exit_code": 1},
+    {"id": "python", "root": "examples/python/mono", "language": "python", "expected_roots": ["."], "expected_exit_code": 0},
+    {"id": "kotlin", "root": "examples/kotlin/mono", "language": "kotlin", "expected_roots": ["."], "expected_exit_code": 0}
+  ]
+}
