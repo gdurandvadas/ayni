@@ -51,6 +51,19 @@ pub fn coverage_baseline(existing: Option<&str>) -> Result<&'static ManagedToolS
     }
 }
 
+pub(crate) struct Reconciliation;
+impl ayni_core::ToolingReconciliationCapability for Reconciliation {
+    fn language(&self) -> ayni_core::Language {
+        ayni_core::Language::Kotlin
+    }
+    fn plan(
+        &self,
+        request: &ayni_core::ToolingRequest,
+    ) -> Result<ayni_core::ToolingPlan, ayni_core::AdapterError> {
+        crate::tooling_reconcile::plan(request)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -333,7 +333,7 @@ fn engines_node(manifest: &serde_json::Value) -> Result<Option<&str>, AdapterErr
         .ok_or_else(|| adapter_error("package.json engines.node must be a string"))
 }
 
-fn package_manager_owner(
+pub(crate) fn package_manager_owner(
     repo_root: &Path,
     target_root: &Path,
     target_manifest: &serde_json::Value,
@@ -632,7 +632,10 @@ fn signal_tools(
     .collect()
 }
 
-fn workspace_owner(repo_root: &Path, target_root: &Path) -> Result<PathBuf, AdapterError> {
+pub(crate) fn workspace_owner(
+    repo_root: &Path,
+    target_root: &Path,
+) -> Result<PathBuf, AdapterError> {
     let mut current = target_root.parent();
     while let Some(root) = current.filter(|root| root.starts_with(repo_root)) {
         let Some(manifest) = read_manifest(repo_root, &root.join("package.json"), false)? else {
@@ -668,7 +671,7 @@ fn workspace_patterns(
     WorkspacePatterns::parse(manifest, path).map_err(adapter_error)
 }
 
-fn node_manifest_inputs(
+pub(crate) fn node_manifest_inputs(
     repo_root: &Path,
     owner: &Path,
     target_root: &Path,
@@ -939,7 +942,7 @@ fn normalize_corepack_integrity(version: &str) -> &str {
     }
 }
 
-fn dependency<'a>(
+pub(crate) fn dependency<'a>(
     manifest: &'a serde_json::Value,
     name: &str,
 ) -> Result<Option<&'a str>, AdapterError> {
@@ -993,7 +996,7 @@ fn is_exact_semver(value: &str) -> bool {
             .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-fn read_manifest(
+pub(crate) fn read_manifest(
     repo_root: &Path,
     path: &Path,
     required: bool,

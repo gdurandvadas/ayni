@@ -87,7 +87,7 @@ fn debian_package_warnings(
         .collect()
 }
 
-fn load_context(
+pub(crate) fn load_context(
     operation: &EnvShowOperation,
 ) -> Result<(PathBuf, PathBuf, Vec<u8>, AyniPolicy), ShowError> {
     let repo_root = operation.repo_root.canonicalize().map_err(|error| {

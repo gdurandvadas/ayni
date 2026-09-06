@@ -73,7 +73,7 @@ fn discover(
     .map_err(error)
 }
 
-fn gradle_owner(repo_root: &Path, target_root: &Path) -> Result<PathBuf, AdapterError> {
+pub(crate) fn gradle_owner(repo_root: &Path, target_root: &Path) -> Result<PathBuf, AdapterError> {
     let mut current = target_root;
     loop {
         if settings_path(current).is_some() {
@@ -627,7 +627,7 @@ fn mutation_signal_tool(
     gradle_plugin_tool(request, "pitest", &path, &version, SignalKind::Mutation).map(Some)
 }
 
-fn find_plugin(
+pub(crate) fn find_plugin(
     scripts: &[(String, String)],
     plugin_ids: &[&str],
 ) -> Result<Option<(String, String)>, AdapterError> {
@@ -675,7 +675,9 @@ fn find_plugin(
     }
 }
 
-fn find_jacoco(scripts: &[(String, String)]) -> Result<Option<(String, String)>, AdapterError> {
+pub(crate) fn find_jacoco(
+    scripts: &[(String, String)],
+) -> Result<Option<(String, String)>, AdapterError> {
     let plugin = regex::Regex::new(r#"(?:id\(\s*["']jacoco["']\s*\)|id\s+["']jacoco["'])"#)
         .expect("static JaCoCo plugin pattern");
     let version = regex::Regex::new(r#"toolVersion\s*=\s*["']([^"']+)["']"#)

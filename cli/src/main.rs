@@ -17,6 +17,7 @@ mod impact;
 mod init;
 mod policy;
 mod registry;
+mod tooling;
 mod ui;
 mod verification_command;
 mod verification_list;
@@ -49,6 +50,7 @@ fn dispatch(operation: application::Operation) -> ExitCode {
         | Operation::EnvShell(_)
         | Operation::EnvRun(_)) => dispatch_environment(operation),
         Operation::ContractShow(operation) => dispatch_contract(operation),
+        Operation::ToolsReconcile(operation) => tooling::run(operation, &build_registry()),
         Operation::AgentsSync(operation) => agents_sync(&operation.repo_root),
         Operation::VerifyList(operation) => verification_list::run(&operation.artifact),
         Operation::ResultsCompare(operation) => artifact_compare::run(

@@ -27,6 +27,43 @@ pub static RUST_TOOLS: &[ManagedToolSpec] = &[
     },
 ];
 
+pub(crate) struct Reconciliation;
+impl ayni_core::ToolingReconciliationCapability for Reconciliation {
+    fn language(&self) -> ayni_core::Language {
+        ayni_core::Language::Rust
+    }
+    fn plan(
+        &self,
+        request: &ayni_core::ToolingRequest,
+    ) -> Result<ayni_core::ToolingPlan, ayni_core::AdapterError> {
+        let mut plan = ayni_adapters_common::tooling::baseline_plan(
+            request,
+            crate::catalog::RUST_CATALOG,
+            RUST_TOOLS,
+        )?;
+        match crate::environment::workspace_root(
+            request.repo_root(),
+            &request.repo_root().join(&request.target().root),
+        ) {
+            Ok(owner) => {
+                plan.owner_root = ayni_adapters_common::repository::repository_relative(
+                    request.repo_root(),
+                    &owner,
+                )
+                .map_err(|cause| ayni_core::AdapterError::new(self.language(), cause))?
+            }
+            Err(cause) => plan
+                .conflicts
+                .push(ayni_adapters_common::tooling::diagnostic(
+                    "tooling.native_metadata",
+                    cause.to_string(),
+                    None,
+                )),
+        }
+        Ok(plan)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,6 +12,19 @@ pub static PYTHON_TOOLS: &[ManagedToolSpec] = &[
     ManagedToolSpec::project("mutmut", "2.5.1"),
 ];
 
+pub(crate) struct Reconciliation;
+impl ayni_core::ToolingReconciliationCapability for Reconciliation {
+    fn language(&self) -> ayni_core::Language {
+        ayni_core::Language::Python
+    }
+    fn plan(
+        &self,
+        request: &ayni_core::ToolingRequest,
+    ) -> Result<ayni_core::ToolingPlan, ayni_core::AdapterError> {
+        crate::tooling_reconcile::plan(request)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

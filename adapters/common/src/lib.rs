@@ -20,3 +20,5 @@ pub mod repository;
 pub mod size;
 pub mod workspace;
 pub mod xml;
+
+pub mod tooling;

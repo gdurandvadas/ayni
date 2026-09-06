@@ -11,7 +11,7 @@ and tool command overrides.
 Use `ayni contract show` to print a concise, deterministic projection of the
 validated configured policy. Pass `--config <path>` to select a policy other
 than `./.ayni.toml`, or `--output json` for a machine-readable, deterministic
-projection. JSON output has a `projection_version` field (currently `0.4.0`),
+projection. JSON output has a `projection_version` field (currently `0.5.0`),
 ordered `languages` and `signals` arrays, and structured `warnings`. The
 command shows every signal's enabled state for each enabled language,
 normalized roots, configured thresholds, size rules,

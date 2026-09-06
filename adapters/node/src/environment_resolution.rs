@@ -223,7 +223,7 @@ fn project_lock_tool_version(
     })
 }
 
-fn lockfile_target_root(owner: &str, target: &str) -> Result<String, AdapterError> {
+pub(crate) fn lockfile_target_root(owner: &str, target: &str) -> Result<String, AdapterError> {
     if owner == "." {
         return Ok(target.to_owned());
     }
@@ -242,7 +242,7 @@ fn lockfile_target_root(owner: &str, target: &str) -> Result<String, AdapterErro
     })
 }
 
-fn locked_tool_version<'a>(
+pub(crate) fn locked_tool_version<'a>(
     lock: &'a serde_json::Value,
     target_root: &str,
     tool: &str,
@@ -274,7 +274,11 @@ fn meaningful_yaml_line(line: &&str) -> bool {
     !value.is_empty() && !value.starts_with('#')
 }
 
-fn pnpm_locked_tool_version(content: &str, target_root: &str, tool: &str) -> Option<String> {
+pub(crate) fn pnpm_locked_tool_version(
+    content: &str,
+    target_root: &str,
+    tool: &str,
+) -> Option<String> {
     pnpm_importer_tool_version(content, target_root, tool)
         .or_else(|| {
             (target_root != ".")
@@ -411,7 +415,7 @@ fn normalize_pnpm_version(value: &str) -> Option<String> {
     (!version.is_empty()).then(|| version.to_owned())
 }
 
-fn ensure_locked_version_matches(
+pub(crate) fn ensure_locked_version_matches(
     tool: &str,
     version: &str,
     requirement: &VersionRequirement,

@@ -78,6 +78,12 @@ impl LanguageAdapter for KotlinAdapter {
         }
     }
 
+    fn tooling_reconciliation_capability(
+        &self,
+    ) -> Option<&dyn ayni_core::ToolingReconciliationCapability> {
+        Some(&crate::tooling::Reconciliation)
+    }
+
     fn managed_tool_specs(&self) -> &'static [ayni_core::ManagedToolSpec] {
         crate::tooling::KOTLIN_TOOLS
     }

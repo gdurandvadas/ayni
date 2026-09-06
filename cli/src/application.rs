@@ -32,6 +32,7 @@ pub(crate) enum Operation {
     EnvShell(EnvShellOperation),
     EnvRun(EnvRunOperation),
     ContractShow(ContractOperation),
+    ToolsReconcile(ToolsReconcileOperation),
     Verify(VerifyOperation),
     VerifyList(VerifyListOperation),
     ImpactShow(ImpactOperation),
@@ -152,4 +153,12 @@ pub(crate) struct ResultsCompareOperation {
     pub baseline: PathBuf,
     pub candidate: PathBuf,
     pub output: OutputFormat,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ToolsReconcileOperation {
+    pub config: PathBuf,
+    pub repo_root: PathBuf,
+    pub output: OutputFormat,
+    pub check: bool,
 }
