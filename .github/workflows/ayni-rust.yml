@@ -38,29 +38,12 @@ jobs:
         id: base
         uses: ./.github/actions/build-local-environment-base
 
-      - name: Verify committed lock inputs against an ephemeral checkout base
-        env:
-          BASE: ${{ steps.base.outputs.reference }}
-        run: |
-          set -euo pipefail
-          cp .ayni.lock "$RUNNER_TEMP/ayni-lock.committed.json"
-          ./target/debug/ayni env lock --config ./.ayni.toml --base "$BASE"
-          jq --sort-keys \
-            'del(.provisioning_base.reference, .provisioning_base.digest, .fingerprint)' \
-            "$RUNNER_TEMP/ayni-lock.committed.json" \
-            > "$RUNNER_TEMP/ayni-lock.committed.normalized.json"
-          jq --sort-keys \
-            'del(.provisioning_base.reference, .provisioning_base.digest, .fingerprint)' \
-            .ayni.lock \
-            > "$RUNNER_TEMP/ayni-lock.generated.normalized.json"
-          diff --unified \
-            "$RUNNER_TEMP/ayni-lock.committed.normalized.json" \
-            "$RUNNER_TEMP/ayni-lock.generated.normalized.json"
-
       - name: Build and diagnose the committed managed environment
+        env:
+          EXECUTOR: ${{ steps.base.outputs.reference }}
         run: |
           set -euo pipefail
-          python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-repository/timings.jsonl" --stage build-and-prepare -- ./target/debug/ayni env build
+          python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-repository/timings.jsonl" --stage build-and-prepare -- ./target/debug/ayni env build --executor-image "$EXECUTOR"
           python3 scripts/ci/timed.py --output "$RUNNER_TEMP/ayni-repository/timings.jsonl" --stage doctor -- ./target/debug/ayni env doctor
 
       - name: Run Ayni through the managed path
@@ -93,6 +76,8 @@ jobs:
           path: |
             .ayni.lock
             .ayni/last/signals.json
+            .ayni/last/execution.json
+            .ayni/environment/build.json
             ${{ runner.temp }}/ayni-lock.committed.json
             ${{ runner.temp }}/ayni-repository/timings.jsonl
             ${{ runner.temp }}/ayni-summary.md

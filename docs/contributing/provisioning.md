@@ -21,11 +21,20 @@ recovery path; previously adopted immutable digests remain addressable even if
 the recipe tag points at a recovered build.
 
 The `provisioning-reference` artifact retains the verified immutable reference
-and manifest for 14 days. After the first publication, adopt that exact reference
-in the environment migration PR. Do not invent a digest, commit a job-local
-registry reference, or resolve a mutable recipe tag during normal execution.
-This first milestone publishes the substrate; existing environment locks still
-use the release base until the lock/executor migration is implemented.
+and manifest for 14 days. `environment/provisioning.json` is the authoritative
+adopted substrate definition embedded in Ayni. The initial digest was built,
+scanned, signed and publicly consumed on both architectures by
+[publication run 34032769817](https://github.com/gdurandvadas/ayni/actions/runs/34032769817).
+Adopt updates only after the same gates succeed. Never commit a job-local
+registry reference as the provisioning base.
+
+Environment lock schema `0.7.0` separates that substrate from executor identity.
+CI passes its checkout image to `env build --executor-image`, and compares the
+complete committed lock without deleting or substituting any base fields.
+Release-lock synchronization uses the checkout CLI and retains the committed
+base, requiring two identical regenerations. Older public release images retain their original contracts for tagged-release
+recovery. Migrated executors advertise their lock schema and recipe; only their
+executable is copied into the final prepared environment.
 
 ## Required validation
 

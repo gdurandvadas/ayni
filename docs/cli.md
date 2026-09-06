@@ -162,9 +162,10 @@ Build the repository code-environment image from a current lock
 
 ###### **Options:**
 
-* `--repo-root <REPO_ROOT>`
+* `--repo-root <REPO_ROOT>` — Repository containing the committed environment lock
 
   Default value: `.`
+* `--executor-image <REFERENCE@sha256:DIGEST>` — Use this immutable executor image without changing the environment lock
 
 
 

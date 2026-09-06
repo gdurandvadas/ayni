@@ -34,14 +34,15 @@ execution, bridge networking, and Docker socket access, see the normative
 ## Prerequisites
 
 - Install the Ayni CLI separately by following [Installation](/getting-started/installation).
-- Use Docker with Buildx for default release-base resolution during `env lock`.
+- Use Docker with Buildx for first-build release executor resolution, or supply an exact executor image with a compatible engine.
 - Install Mise; every `env lock` records its version, and adapters may also use it to resolve runtime or tool selectors.
 - Commit the native tool declarations and dependency locks required by each adapter.
 
 Commands that consume an existing lock use Docker first and compatible Podman
-second. To create a lock without Docker Buildx base resolution, pass an explicit
-`--base <reference>@sha256:<digest>`; other resolution prerequisites still
-apply.
+second. Locking uses the durable substrate pinned in Ayni's
+`environment/provisioning.json`; it does not resolve a release image. An explicit
+`--base <reference>@sha256:<digest>` must identify a compatible language-neutral
+substrate. Mise and adapter resolution prerequisites still apply.
 
 ## Supported targets
 
@@ -73,7 +74,7 @@ one implicitly.
 | `ayni env show` | Discover and explain the environment plan | Read-only |
 | `ayni env lock` | Resolve exact requirements and write `.ayni.lock` | Updates the committed lock |
 | `ayni env doctor` | Validate the lock, engine, image, and prepared state | Read-only |
-| `ayni env build` | Build the image and prepare locked dependencies | Updates engine-managed image state |
+| `ayni env build` | Build the image and prepare locked dependencies | Updates the image and `.ayni/environment/build.json` |
 | `ayni env storage` | Report Ayni images and repository-local environment state | Read-only |
 | `ayni env prune` | Preview stale environment state and engine-wide Ayni image candidates | Dry-run by default; `--apply` removes repository state, while image removal also requires `--images` |
 | `ayni env shell` | Open an interactive shell for one locked target | May materialize `.ayni/environment/`; checkout is read-write |
@@ -118,7 +119,7 @@ ayni env show --output json
 `env lock` resolves the plan to exact versions and writes the versioned,
 fingerprinted `.ayni.lock` atomically. The lock records:
 
-- the Ayni and lock-schema versions;
+- the producer Ayni version for provenance, lock schema and recipe compatibility;
 - the quality-contract path and digest;
 - an immutable OCI provisioning base and SHA-256 digest;
 - supported target platforms;
@@ -132,39 +133,57 @@ The lock intentionally omits credentials, host-specific paths, arbitrary system
 commands, and checkout-mutating instructions. Equivalent inputs produce stable
 lock output; a failed resolution preserves the previous lock.
 
-The current environment plan schema is `0.4.0`, the committed environment lock
-schema is `0.6.0`, and the internal OCI image-label schema is `0.5.0`. These are
-separate from the current signal-artifact schema `0.4.0` (schema v4); consumers
-must not infer one version from another.
+The environment plan schema is `0.4.0`, lock schema is `0.7.0`, and OCI
+image-label schema is `0.6.0`. Lock and execution recipe version `1` is checked
+explicitly. These are separate from signal-artifact schema `0.4.0`, which is
+unchanged. Older locks are rejected: run `env lock`, then `env build` after
+upgrading. There is no legacy execution path.
 
-Plan `0.4.0` and lock `0.6.0` require `version_authority` on every signal tool.
-It records whether the adapter baseline, native project declarations and locks,
-explicit lock-time resolution, or the toolchain selects the version. Resolution
-preserves this authority even when the evidence source changes from a manifest
-to a native lock. Authority participates in lock fingerprints and staleness
-checks. Older plan and lock schemas are rejected; regenerate `.ayni.lock` with
-`env lock` and rebuild the environment after upgrading. The image-label and
-signal-artifact schemas are unchanged.
+Signal tools retain `version_authority` and exact native/provider inputs.
+The producer version is provenance; a compatible CLI can consume a lock from a
+different producer version. Lock schema, recipe, native inputs and adapter
+requirements determine compatibility.
 
-By default, locking asks Docker Buildx for the immutable digest of Ayni's
-published environment base. An exact alternative can be supplied explicitly:
+By default, locking uses the immutable language-neutral substrate from
+`environment/provisioning.json`. It contains OS prerequisites, Mise and the
+execution user, with no Ayni executable. The committed lock keeps that substrate
+unchanged across checkout and release executors.
 
 ```sh
-ayni env lock --base <reference>@sha256:<digest>
+ayni env lock
+ayni env build --executor-image <reference>@sha256:<digest>
 ```
 
-If the published base is unavailable, `scripts/build-local-environment-image.sh`
-builds a checkout-local base. It prints an `env lock --base` command when the
-engine exposes a repository digest; otherwise it explains that the image must
-first be pushed to a local registry so the lock can record a pullable
-`RepoDigest`. The checkout CI action automates that local-registry step.
+The executor override changes generated build state only. For checkout work,
+`scripts/build-local-environment-image.sh` builds a Linux executor from the
+checkout; push it to a job-local registry to obtain the pullable reference.
+A source commit identifies its checkout baseline, while the executable and OCI
+digests capture the actual bytes, including uncommitted changes.
+
+For installed releases, the first build resolves the matching published executor
+and records its immutable identity. Later builds reuse it without resolving the
+mutable release tag again. A version/platform-incompatible or invalid record
+requires an explicit executor override during rebuild. Unavailable pinned bytes
+fail rather than falling back to another executor.
+
+The build record under `.ayni/environment/build.json` contains its schema and
+recipe, executable SHA-256, source OCI reference/digest, source revision, Ayni
+version, platform, environment fingerprint, preparation digest, final image tag
+and immutable engine image ID. Doctor and every launch validate the record
+against the lock and actual image metadata. Missing or mismatched state requires
+`env build`; a mutable image tag alone never establishes readiness.
+
+Managed check, verify and impact evidence includes an `execution.json` sidecar
+containing the pre-launch build record and SHA-256 of the corresponding quality
+artifact (`signals.json`, or `impact.json`). The signal schema remains unchanged.
+Host invocations invalidate any previous execution sidecar.
 
 ## Validation and staleness
 
 Lock-consuming commands fail closed when `.ayni.lock` is missing, invalid, or
 stale. A refresh is required when, among other inputs:
 
-- the lock was produced by a different Ayni version;
+- the lock schema or recipe is incompatible;
 - `.ayni.toml` changed;
 - a locked runtime capability or resource ceiling changed;
 - a locked manifest, runtime declaration, wrapper, or dependency lock changed;
@@ -181,7 +200,9 @@ digests.
 and generated scaffolding into the build context. Application source and
 credentials are not copied into that context. The build installs the locked
 runtime and analysis tooling, warms provider caches, and retains only declared
-dependency outputs.
+dependency outputs. The exact Ayni executable is copied from the executor image
+only after this preparation, preserving reusable installation layers when the
+executor changes. Its digest is verified before committing the build record.
 
 When `MISE_GITHUB_TOKEN` is set, `env build` forwards it only as an ephemeral
 OCI build secret to the `mise install` layers. The credential is not written to

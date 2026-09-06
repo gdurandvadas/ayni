@@ -123,15 +123,15 @@ Installing the CLI does **not** install every language tool used by a repository
 
 To use managed execution:
 
-- install Docker with Buildx for `ayni env lock`'s default release-base resolution;
+- install Docker with Buildx for first-build release executor resolution;
 - keep Docker running, or use compatible Podman support for commands that consume an existing lock;
 - install [Mise](https://mise.jdx.dev/), which is required and version-recorded for every `ayni env lock`; and
 - commit the native project metadata and dependency locks required by each language adapter.
 
-You can avoid base-image resolution during locking by passing an explicit immutable base:
+Locking uses a pinned durable substrate. For a checkout-built executor, supply its immutable identity at build time:
 
 ```sh
-ayni env lock --base '<image-reference>@sha256:<digest>'
+ayni env build --executor-image '<image-reference>@sha256:<digest>'
 ```
 
 See [Managed environments](/product/environments) for the complete lifecycle and per-language readiness requirements.

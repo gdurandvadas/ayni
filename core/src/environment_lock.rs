@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 /// Version of the committed, deterministic environment lock document.
-pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.6.0";
+pub const ENVIRONMENT_LOCK_SCHEMA_VERSION: &str = "0.7.0";
+/// Provisioning and execution recipe contract accepted by this lock schema.
+pub const ENVIRONMENT_LOCK_RECIPE_VERSION: &str = "1";
 
 /// Immutable OCI base selected by the environment backend. The reference is
 /// human-readable while the digest is the authoritative image identity.
@@ -135,6 +137,7 @@ pub struct LockedRepositoryIdentity {
 #[serde(deny_unknown_fields)]
 pub struct EnvironmentLock {
     schema_version: String,
+    recipe_version: String,
     repository: LockedRepositoryIdentity,
     ayni_version: String,
     mise_version: String,
@@ -161,6 +164,7 @@ impl<'de> Deserialize<'de> for EnvironmentLock {
         #[serde(deny_unknown_fields)]
         struct Wire {
             schema_version: String,
+            recipe_version: String,
             repository: LockedRepositoryIdentity,
             ayni_version: String,
             mise_version: String,
@@ -178,6 +182,11 @@ impl<'de> Deserialize<'de> for EnvironmentLock {
             fingerprint: String,
         }
         let wire = Wire::deserialize(deserializer)?;
+        if wire.recipe_version != ENVIRONMENT_LOCK_RECIPE_VERSION {
+            return Err(serde::de::Error::custom(
+                "unsupported environment recipe; regenerate the lock and rebuild",
+            ));
+        }
         Self::from_parts(EnvironmentLockParts {
             repository: wire.repository,
             ayni_version: wire.ayni_version,
@@ -363,6 +372,7 @@ impl EnvironmentLock {
             .map_err(EnvironmentPlanError::InvalidResourceLimits)?;
         let mut lock = Self {
             schema_version: ENVIRONMENT_LOCK_SCHEMA_VERSION.to_owned(),
+            recipe_version: ENVIRONMENT_LOCK_RECIPE_VERSION.to_owned(),
             repository,
             ayni_version,
             mise_version,
@@ -398,6 +408,7 @@ impl EnvironmentLock {
         #[derive(Serialize)]
         struct FingerprintDocument<'a> {
             schema_version: &'a str,
+            recipe_version: &'a str,
             repository: &'a LockedRepositoryIdentity,
             ayni_version: &'a str,
             mise_version: &'a str,
@@ -411,6 +422,7 @@ impl EnvironmentLock {
         }
         let document = FingerprintDocument {
             schema_version: &self.schema_version,
+            recipe_version: &self.recipe_version,
             repository: &self.repository,
             ayni_version: &self.ayni_version,
             mise_version: &self.mise_version,

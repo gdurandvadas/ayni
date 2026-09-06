@@ -1,0 +1,6 @@
+{
+  "reference": "ghcr.io/gdurandvadas/ayni-provisioning",
+  "digest": "sha256:30453fcd751acff069c7b16a1cd2eba01051bd94b64cd9d333c4ce82a9ff0961",
+  "variant": "debian",
+  "mise_version": "2025.2.4"
+}

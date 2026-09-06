@@ -86,9 +86,8 @@ pub fn doctor_prepared(
 ) -> Result<String, BackendError> {
     let root = canonical_root(repo_root)?;
     let lock = read_lock(&root)?;
-    let plan = image_plan_with_preparation(&lock, preparations)?;
     let engine = detect_engine()?;
-    validate_image(engine, &plan, &lock)?;
+    let plan = current_image_plan(&root, engine, &lock, preparations)?;
     super::validate_runtime_capabilities(engine, lock.capabilities())?;
     let security = engine_security_posture(&root, engine);
     let resources = lock.resource_limits();
@@ -199,14 +198,47 @@ pub fn build_prepared(
     repo_root: &Path,
     preparations: &[DependencyPreparationPlan],
 ) -> Result<String, BackendError> {
+    build_prepared_with_executor(repo_root, preparations, None)
+}
+
+pub fn build_prepared_with_executor(
+    repo_root: &Path,
+    preparations: &[DependencyPreparationPlan],
+    executor_image: Option<&str>,
+) -> Result<String, BackendError> {
     let root = canonical_root(repo_root)?;
     let lock = read_lock(&root)?;
-    let plan = image_plan_with_preparation(&lock, preparations)?;
+    let mut plan = image_plan_with_preparation(&lock, preparations)?;
     let engine = detect_engine()?;
-    if validate_image(engine, &plan, &lock).is_ok() {
+    let executor = crate::executor::resolve(&root, engine, &plan.platform, executor_image)?;
+    crate::executor::bind(&mut plan, &executor);
+    if current_image_plan(&root, engine, &lock, preparations)
+        .is_ok_and(|current| current.dockerfile == plan.dockerfile)
+    {
         return Ok(format!("current {}", plan.tag));
     }
-    let input = BuildInput::create(&root, &plan, preparations)?;
+    crate::executor::validate_substrate(&root, engine, &lock)?;
+    build_image(&root, engine, &plan, &lock, preparations)?;
+    if crate::executor::executable_digest(&root, engine, &plan.tag)? != executor.executable_digest {
+        return Err(crate::executor::rebuild(
+            "assembled executable differs from its source image",
+        ));
+    }
+    let metadata = crate::executor::inspect(&root, engine, &plan.tag)?;
+    let image_id = metadata["Id"].as_str().unwrap_or("").to_owned();
+    crate::executor::persist(&root, &lock, &plan, executor, image_id)?;
+    current_image_plan(&root, engine, &lock, preparations)?;
+    Ok(format!("built {}", plan.tag))
+}
+
+fn build_image(
+    root: &Path,
+    engine: Engine,
+    plan: &ImagePlan,
+    lock: &EnvironmentLock,
+    preparations: &[DependencyPreparationPlan],
+) -> Result<(), BackendError> {
+    let input = BuildInput::create(root, plan, preparations)?;
     let mut args = vec![
         "build".to_owned(),
         "--tag".to_owned(),
@@ -247,8 +279,8 @@ pub fn build_prepared(
             concise_output(&output.stderr)
         )));
     }
-    validate_image(engine, &plan, &lock)?;
-    Ok(format!("built {}", plan.tag))
+    validate_image(engine, plan, lock)?;
+    Ok(())
 }
 
 fn mise_github_token_secret_args() -> Vec<String> {
@@ -391,7 +423,7 @@ pub(super) fn validate_image(
             .is_some_and(|value| value == IMAGE_SCHEMA_VERSION)
         && labels
             .get(IMAGE_AYNI_LABEL)
-            .is_some_and(|value| value == lock.ayni_version())
+            .is_some_and(|value| value == env!("CARGO_PKG_VERSION"))
         && labels
             .get(IMAGE_MISE_LABEL)
             .is_some_and(|value| value == &lock.provisioning_base().mise_version)
@@ -409,4 +441,20 @@ pub(super) fn validate_image(
             plan.tag
         )))
     }
+}
+
+/// Require the exact build record and engine image before every managed launch.
+pub(super) fn current_image_plan(
+    root: &Path,
+    engine: Engine,
+    lock: &EnvironmentLock,
+    preparations: &[DependencyPreparationPlan],
+) -> Result<ImagePlan, BackendError> {
+    let plan = image_plan_with_preparation(lock, preparations)?;
+    let (mut plan, record) = crate::executor::recorded_plan(root, lock, plan)?;
+    validate_image(engine, &plan, lock)?;
+    crate::executor::validate_record_image(root, engine, &plan, &record)?;
+    // Launch by immutable engine identity, even if a tag moves after validation.
+    plan.tag = record.image_id;
+    Ok(plan)
 }

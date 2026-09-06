@@ -108,7 +108,7 @@ enum EnvCommands {
     /// Resolve exact environment requirements into the committed lock.
     Lock(EnvLockOptions),
     /// Build the repository code-environment image from a current lock.
-    Build(RepositoryOptions),
+    Build(EnvBuildOptions),
     /// Report Ayni-managed OCI images and repository-local environment state.
     Storage(EnvStorageOptions),
     /// Preview or remove stale repository state and explicitly selected images.
@@ -125,7 +125,10 @@ impl EnvCommands {
             Self::Show(options) => Operation::EnvShow(options.into_operation()),
             Self::Doctor(options) => Operation::EnvDoctor(options.into()),
             Self::Lock(options) => Operation::EnvLock(options.into_operation()),
-            Self::Build(options) => Operation::EnvBuild(options.into()),
+            Self::Build(options) => Operation::EnvBuild(crate::application::EnvBuildOperation {
+                repo_root: options.repo_root,
+                executor_image: options.executor_image,
+            }),
             Self::Storage(options) => Operation::EnvStorage(options.into_operation()),
             Self::Prune(options) => Operation::EnvPrune(options.into_operation()),
             Self::Shell(options) => Operation::EnvShell(EnvShellOperation {
@@ -684,6 +687,16 @@ fn execution_mode(host: bool) -> ExecutionMode {
     } else {
         ExecutionMode::Managed
     }
+}
+
+#[derive(Args, Debug)]
+struct EnvBuildOptions {
+    /// Repository containing the committed environment lock.
+    #[arg(long, default_value = ".")]
+    repo_root: PathBuf,
+    /// Use this immutable executor image without changing the environment lock.
+    #[arg(long, value_name = "REFERENCE@sha256:DIGEST")]
+    executor_image: Option<String>,
 }
 
 #[cfg(test)]

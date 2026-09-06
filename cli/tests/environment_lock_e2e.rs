@@ -517,3 +517,22 @@ exit 1"#,
         serde_json::from_slice(&fs::read(root.path().join(".ayni.lock")).unwrap()).unwrap();
     assert_eq!(lock["targets"][0]["runtimes"][0]["version"], "3.12.8");
 }
+
+#[test]
+fn old_lock_consumption_requires_regeneration_and_rebuild() {
+    let root = fixture();
+    fs::write(
+        root.path().join(".ayni.lock"),
+        "{\"schema_version\":\"0.6.0\"}\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_ayni"))
+        .args(["env", "doctor", "--repo-root"])
+        .arg(root.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("ayni env lock"));
+    assert!(error.contains("ayni env build"));
+}

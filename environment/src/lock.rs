@@ -14,37 +14,34 @@ pub const BASE_VARIANT: &str = "debian";
 pub const BASE_MISE_VERSION: &str = "2025.2.4";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Resolve the published base to an immutable manifest digest. An explicit
+/// Read the pinned durable substrate definition. An explicit
 /// value must use `<reference>@sha256:<digest>`.
 pub fn resolve_provisioning_base(
-    ayni_version: &str,
+    _ayni_version: &str,
     explicit: Option<&str>,
 ) -> Result<ProvisioningBase, BackendError> {
-    let (reference, digest) = if let Some(explicit) = explicit {
-        parse_exact_base(explicit)?
-    } else {
-        let reference = format!("ghcr.io/gdurandvadas/ayni-env:{ayni_version}-{BASE_VARIANT}");
-        let digest = inspect_remote_digest(&reference)?;
-        (reference, digest)
-    };
-    Ok(ProvisioningBase {
-        reference,
-        digest,
-        variant: BASE_VARIANT.to_owned(),
-        mise_version: BASE_MISE_VERSION.to_owned(),
-    })
+    let mut base: ProvisioningBase = serde_json::from_str(include_str!("../provisioning.json"))
+        .map_err(|error| {
+            BackendError::input(format!("invalid built-in provisioning definition: {error}"))
+        })?;
+    if let Some(explicit) = explicit {
+        let (reference, digest) = parse_exact_base(explicit)?;
+        base.reference = reference;
+        base.digest = digest;
+    }
+    Ok(base)
 }
 
-fn parse_exact_base(value: &str) -> Result<(String, String), BackendError> {
-    let (reference, digest) = value
-        .rsplit_once('@')
-        .ok_or_else(|| BackendError::input("--base must use <reference>@sha256:<digest>"))?;
+pub(crate) fn parse_exact_base(value: &str) -> Result<(String, String), BackendError> {
+    let (reference, digest) = value.rsplit_once('@').ok_or_else(|| {
+        BackendError::input("image reference must use <reference>@sha256:<digest>")
+    })?;
     validate_reference(reference)?;
     validate_digest(digest)?;
     Ok((reference.to_owned(), digest.to_ascii_lowercase()))
 }
 
-fn inspect_remote_digest(reference: &str) -> Result<String, BackendError> {
+pub(crate) fn inspect_remote_digest(reference: &str) -> Result<String, BackendError> {
     validate_reference(reference)?;
     let cwd = env::current_dir().map_err(|error| {
         BackendError::execution(format!("failed to establish current directory: {error}"))
@@ -59,12 +56,12 @@ fn inspect_remote_digest(reference: &str) -> Result<String, BackendError> {
     ];
     let output = run_command(&cwd, "docker", &args, COMMAND_TIMEOUT).map_err(|error| {
         BackendError::environment(format!(
-            "failed to resolve immutable environment base {reference}: {error}; install Docker Buildx or pass `--base <reference>@sha256:<digest>`"
+            "failed to resolve immutable executor image {reference}: {error}; install Docker Buildx or pass `--executor-image <reference>@sha256:<digest>`"
         ))
     })?;
     if !output.status.success() {
         return Err(BackendError::environment(format!(
-            "failed to resolve immutable environment base {reference}: {}; pass an available exact image with `--base`",
+            "failed to resolve immutable executor image {reference}: {}; pass an available exact image with `--executor-image`",
             concise_output(&output.stderr)
         )));
     }
@@ -78,7 +75,7 @@ fn inspect_remote_digest(reference: &str) -> Result<String, BackendError> {
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| {
             BackendError::environment(format!(
-                "Docker returned no manifest digest for environment base {reference}"
+                "Docker returned no manifest digest for executor image {reference}"
             ))
         })?;
     validate_digest(digest)?;
@@ -158,7 +155,7 @@ pub fn read_lock(repo_root: &Path) -> Result<EnvironmentLock, BackendError> {
     let path = repo_root.join(LOCK_FILE);
     let metadata = fs::symlink_metadata(&path).map_err(|error| {
         BackendError::environment(format!(
-            "environment lock {} is required: {error}; run `ayni env lock`",
+            "environment lock {} is required: {error}; run `ayni env lock` and `ayni env build`",
             path.display()
         ))
     })?;
@@ -176,7 +173,7 @@ pub fn read_lock(repo_root: &Path) -> Result<EnvironmentLock, BackendError> {
     })?;
     let lock: EnvironmentLock = serde_json::from_slice(&bytes).map_err(|error| {
         BackendError::environment(format!(
-            "environment lock {} is invalid: {error}; run `ayni env lock`",
+            "environment lock {} is invalid: {error}; run `ayni env lock` and `ayni env build`",
             path.display()
         ))
     })?;
@@ -185,13 +182,6 @@ pub fn read_lock(repo_root: &Path) -> Result<EnvironmentLock, BackendError> {
 }
 
 fn validate_lock(repo_root: &Path, lock: &EnvironmentLock) -> Result<(), BackendError> {
-    if lock.ayni_version() != env!("CARGO_PKG_VERSION") {
-        return Err(BackendError::environment(format!(
-            "environment lock was created by Ayni {}, but this binary is {}; run `ayni env lock`",
-            lock.ayni_version(),
-            env!("CARGO_PKG_VERSION")
-        )));
-    }
     let contract_path = &lock.repository().contract_path;
     let contract_digest = digest_contained_file(repo_root, &repo_root.join(contract_path))?;
     if contract_digest != lock.repository().contract_digest {
@@ -250,7 +240,7 @@ fn ensure_digest(repo_root: &Path, relative: &str, expected: &str) -> Result<(),
 fn digest_contained_file(repo_root: &Path, path: &Path) -> Result<String, BackendError> {
     let canonical = path.canonicalize().map_err(|error| {
         BackendError::environment(format!(
-            "failed to inspect locked environment input {}: {error}; run `ayni env lock`",
+            "failed to inspect locked environment input {}: {error}; run `ayni env lock` and `ayni env build`",
             path.display()
         ))
     })?;
