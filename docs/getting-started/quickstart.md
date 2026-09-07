@@ -81,6 +81,7 @@ Review and commit that guidance with the policy. Quality commands never modify a
 The owning language adapters derive an environment plan from the configured roots, enabled signals, and native project metadata:
 
 ```sh
+ayni tools reconcile --check
 ayni env show
 ```
 
@@ -127,6 +128,21 @@ ayni impact run --base origin/main
 
 Use the narrowest adapter-supported selectors and copy exact rerun commands from artifact findings. Impact success never replaces the final unscoped `ayni check`.
 
+## 8. Confirm the failure and repair loop
+
+Once `check` passes, deliberately change one test assertion to expect an
+incorrect result. Run `ayni verify test`: it should exit nonzero and report the
+failed test in `.ayni/last/signals.json`. Restore the assertion and rerun the
+same verification command. It should now pass. Finish with `ayni check` to
+confirm the complete repository contract.
+
+This workflow applies to all five adapters. A failed test is a code failure;
+missing tools, unreadable reports, or incomplete targets are setup/evidence
+failures. Read the reported diagnostic before changing code or thresholds.
+`tools reconcile` checks native tool metadata, `env doctor` checks environment
+readiness, and `verify`/`check` execute quality checks. None repairs source or
+native dependency declarations automatically.
+
 ## Evaluation-only host path
 
 When a repository cannot yet satisfy managed prerequisites, `--host` can demonstrate the policy and artifact loop with user-installed tools:
@@ -140,7 +156,7 @@ This is an **evaluation and compatibility path**, not equivalent evidence. Host 
 
 ## Advanced development access
 
-`env shell` and `env run` expose one locked target for arbitrary development commands. They add no quality semantics and mount the host checkout read-write, so they are intentionally outside the first-run workflow. See [Managed environments](/product/environments#advanced-development-access).
+`env shell` and `env run` expose the composed environment, or a selected target for arbitrary development commands. They add no quality semantics and mount the host checkout read-write, so they are intentionally outside the first-run workflow. See [Managed environments](/product/environments#advanced-development-access).
 
 ## What to read next
 

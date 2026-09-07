@@ -1,6 +1,4 @@
-use crate::environment::{
-    dependency, node_manifest_inputs, package_manager_owner, read_manifest, workspace_owner,
-};
+use crate::environment::{dependency, package_manager_owner, read_manifest, workspace_owner};
 use crate::environment_resolution::{
     ensure_locked_version_matches, locked_tool_version, lockfile_target_root,
     pnpm_locked_tool_version,
@@ -9,9 +7,7 @@ use ayni_adapters_common::{
     repository::{read_optional_contained_string, repository_relative},
     tooling::{baseline_plan, diagnostic, finish},
 };
-use ayni_core::{
-    AdapterError, Language, SignalToolOwnership, ToolingPlan, ToolingRequest, VersionRequirement,
-};
+use ayni_core::{AdapterError, Language, ToolingPlan, ToolingRequest, VersionRequirement};
 
 pub(crate) fn plan(request: &ToolingRequest) -> Result<ToolingPlan, AdapterError> {
     let mut plan = baseline_plan(
@@ -29,7 +25,7 @@ pub(crate) fn plan(request: &ToolingRequest) -> Result<ToolingPlan, AdapterError
             None,
         ))
     });
-    finish(&mut plan, request);
+    finish(&mut plan);
     Ok(plan)
 }
 fn error(cause: impl std::fmt::Display) -> AdapterError {
@@ -56,9 +52,6 @@ fn inspect(request: &ToolingRequest, plan: &mut ToolingPlan) -> Result<(), Adapt
             resolved_version(npm.as_ref(), pnpm.as_deref(), &relative_target, &tool.tool);
         check_resolution(tool, &mut plan.conflicts)?;
     }
-    if request.ownership() == SignalToolOwnership::Ayni {
-        check_owner(request, plan, &owner, &owner_manifest, &target)?;
-    }
     Ok(())
 }
 
@@ -83,69 +76,6 @@ fn check_resolution(
     }
     Ok(())
 }
-fn check_owner(
-    request: &ToolingRequest,
-    plan: &mut ToolingPlan,
-    owner: &std::path::Path,
-    owner_manifest: &serde_json::Value,
-    target: &std::path::Path,
-) -> Result<(), AdapterError> {
-    let repo = request.repo_root();
-    let members = node_manifest_inputs(repo, owner, target)?
-        .into_iter()
-        .filter(|path| *path != owner.join("package.json"))
-        .map(|path| {
-            let manifest = read_manifest(repo, &path, true)?.expect("required member");
-            Ok((repository_relative(repo, &path).map_err(error)?, manifest))
-        })
-        .collect::<Result<Vec<_>, AdapterError>>()?;
-    for tool in &plan.tools {
-        let VersionRequirement::Exact { version: baseline } = &tool.baseline else {
-            continue;
-        };
-        let dev = owner_manifest
-            .get("devDependencies")
-            .and_then(|v| v.get(&tool.tool))
-            .and_then(serde_json::Value::as_str);
-        if dev != Some(baseline.as_str()) {
-            plan.conflicts.push(diagnostic(
-                "tooling.owner_declaration_required",
-                format!(
-                    "declare {} = {baseline} in governing devDependencies",
-                    tool.tool
-                ),
-                Some(repository_relative(repo, &owner.join("package.json")).map_err(error)?),
-            ));
-        }
-        check_members(tool, baseline, &members, &mut plan.conflicts)?;
-    }
-    Ok(())
-}
-fn check_members(
-    tool: &ayni_core::ToolingRequirement,
-    baseline: &str,
-    members: &[(String, serde_json::Value)],
-    conflicts: &mut Vec<ayni_core::ToolingDiagnostic>,
-) -> Result<(), AdapterError> {
-    for (path, member) in members {
-        if let Some(declaration) = dependency(member, &tool.tool)?
-            && let Err(cause) = ensure_locked_version_matches(
-                &tool.tool,
-                baseline,
-                &VersionRequirement::selector(declaration).map_err(error)?,
-                "adapter baseline",
-            )
-        {
-            conflicts.push(diagnostic(
-                "tooling.member_constraint",
-                cause.to_string(),
-                Some(path.clone()),
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn read_locks(
     repo: &std::path::Path,
     owner: &std::path::Path,

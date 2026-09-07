@@ -135,7 +135,7 @@ args = ["mutation"]
         !stdout.trim_start().starts_with('{'),
         "display must not emit JSON"
     );
-    assert!(stdout.contains("projection version 0.5.0"));
+    assert!(stdout.contains("projection version 0.6.0"));
     assert!(stdout.contains("warnings:"));
     assert!(stdout.contains("policy.effectiveness.size.no_rules"));
 }
@@ -178,7 +178,7 @@ fn_cognitive = { warn = 10, fail = 20 }
     );
 
     let value: serde_json::Value = serde_json::from_slice(&first.stdout).expect("JSON projection");
-    assert_eq!(value["projection_version"], "0.5.0");
+    assert_eq!(value["projection_version"], "0.6.0");
     assert_eq!(value["environment"]["tools"], serde_json::json!([]));
     assert_eq!(
         value["environment"]["debian_packages"],

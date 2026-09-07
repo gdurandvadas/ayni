@@ -1,16 +1,13 @@
 use crate::application::{EnvShowOperation, OutputFormat, ToolsReconcileOperation};
 use crate::application_error::{ApplicationError, render_error};
 use ayni_adapters_common::environment::validate_environment_target_containment;
-use ayni_core::{
-    AdapterRegistry, SignalToolOwnership, TargetIdentity, ToolingPlan, ToolingRequest,
-};
+use ayni_core::{AdapterRegistry, TargetIdentity, ToolingPlan, ToolingRequest};
 use serde::Serialize;
 use std::process::ExitCode;
 
 #[derive(Serialize)]
 struct Projection {
     projection_version: &'static str,
-    ownership: SignalToolOwnership,
     reconciliation_required: bool,
     environment_lock: &'static str,
     targets: Vec<ToolingPlan>,
@@ -75,14 +72,8 @@ fn project(
             .copied()
             .filter(|s| policy.tool_override_for(identity.language, *s).is_none())
             .collect::<Vec<_>>();
-        let request = ToolingRequest::new(
-            repo.clone(),
-            identity.clone(),
-            enabled,
-            policy.environment.signal_tools.ownership,
-            defaults,
-        )
-        .map_err(|e| ApplicationError::input(e.to_string()))?;
+        let request = ToolingRequest::new(repo.clone(), identity.clone(), enabled, defaults)
+            .map_err(|e| ApplicationError::input(e.to_string()))?;
         let plan = adapter.plan_tooling(&request).unwrap_or_else(|cause| {
             let mut plan = ToolingPlan::empty(identity);
             plan.conflicts
@@ -98,8 +89,7 @@ fn project(
     let required = targets.iter().any(|p| !p.conflicts.is_empty());
     let environment_lock = lock_status(&repo, &config, required);
     Ok(Projection {
-        projection_version: "0.1.0",
-        ownership: policy.environment.signal_tools.ownership,
+        projection_version: "0.2.0",
         reconciliation_required: required || matches!(environment_lock, "stale" | "invalid"),
         environment_lock,
         targets,
@@ -139,10 +129,7 @@ fn render(projection: &Projection) {
         "Signal tooling reconciliation (preview {})",
         projection.projection_version
     );
-    println!(
-        "Ownership: {:?}\nEnvironment lock: {}",
-        projection.ownership, projection.environment_lock
-    );
+    println!("Environment lock: {}", projection.environment_lock);
     for plan in &projection.targets {
         println!(
             "\n{}:{} (owner {})",

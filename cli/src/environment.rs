@@ -39,11 +39,6 @@ pub(crate) fn build_plan(
     registry: &AdapterRegistry,
 ) -> Result<EnvironmentPlan, ShowError> {
     let (repo_root, config, config_bytes, policy) = load_context(operation)?;
-    if policy.environment.signal_tools.ownership == ayni_core::SignalToolOwnership::Ayni {
-        return Err(ShowError::environment(
-            "Ayni-owned signal tooling is not available yet; use project ownership until tooling reconciliation is implemented",
-        ));
-    }
     let platforms = default_platforms();
     let (targets, mut warnings, mut conflicts) =
         discover_targets(&repo_root, &policy, &platforms, registry)?;

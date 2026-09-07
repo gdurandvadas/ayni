@@ -75,20 +75,17 @@ Before proposing edits:
 - [ ] Ran `cargo check --workspace --all-features`
 - [ ] Ran `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 
-## Tooling reconciliation foundation
+## Tooling inspection
 
-Adapters own catalog-linked baseline inventories exposed through
-`managed_tool_specs`; core provides language-neutral inventory validation and
-signal selection. Native metadata interpretation stays in each adapter.
+All five adapters expose read-only native tooling inspection through
+`ToolingReconciliationCapability`. Each adapter owns native metadata discovery,
+lock resolution, and catalog-linked baselines. Core validates target identity,
+version authority, signal selection, and repository-relative paths. The CLI
+orchestrates inspection and reports diagnostics through `tools reconcile`.
 
-Core defines read-only tooling requests and validated proposals through
-`ToolingReconciliationCapability`. Adapters will own native metadata discovery
-and edits; a later CLI executor will stage and publish only approved outputs.
-Core does not read files or execute the proposed commands. No adapter provides
-this capability yet, and Ayni-owned environment planning remains disabled.
-
-See [the milestone contract](docs/contributing/tooling-reconciliation.md) for
-preimages, output allowlists, version authority, and remaining execution work.
+Project declarations and native locks choose project-local tool versions.
+Adapter baselines choose isolated tool versions. Inspection has no edit model
+or package-manager executor. See the [inspection contract](docs/contributing/tooling-reconciliation.md).
 
 ## See Also
 

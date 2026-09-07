@@ -36,10 +36,10 @@ cgo system libraries absent from the base image.
 ## Reconciliation baselines
 
 The adapter owns a catalog-complete baseline inventory in `tooling.rs`.
-See [adapter-owned baselines](../contributing/tooling-reconciliation.md#adapter-owned-baselines-milestone-2)
-for exact versions and integration choices. This foundation does not enable
-Ayni ownership or edit project manifests. Custom commands remain project-owned,
-and optional mutation tooling is only selected for an enabled default signal.
+Use `ayni tools reconcile --check` to inspect required tools and native lock
+resolutions. [Version selection](../contributing/tooling-reconciliation.md#version-selection)
+explains how project versions and adapter baselines are used. Custom command
+overrides exclude their default tools from inspection.
 
 ## Focused verification
 
