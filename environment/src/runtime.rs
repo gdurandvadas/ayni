@@ -75,8 +75,8 @@ fn managed_workspace_init() -> String {
 
 mod engine;
 pub use engine::{
-    Engine, TargetSelection, build, build_prepared, build_prepared_with_executor, detect_engine,
-    doctor, doctor_prepared,
+    BuildCache, Engine, TargetSelection, build, build_prepared, build_prepared_with_cache,
+    build_prepared_with_executor, detect_engine, doctor, doctor_prepared,
 };
 use engine::{current_image_plan, engine_name};
 
@@ -276,18 +276,31 @@ pub fn launch_prepared(
     let root = canonical_root(repo_root)?;
     let lock = read_lock(&root)?;
     validate_launch_authorization(lock.capabilities(), authorization)?;
+    let target = if selection.language.is_none() && selection.root.is_none() {
+        None
+    } else {
+        Some(select_target(&lock, selection)?)
+    };
+    // Resolve ambiguity before inspecting an engine or materializing any state.
+    let repository_environment = target
+        .is_none()
+        .then(|| composition::repository_environment(&lock))
+        .transpose()?;
     let engine = detect_engine()?;
     let plan = current_image_plan(&root, engine, &lock, preparations)?;
-    let target = select_target(&lock, selection)?;
     let state_home = execution_state(&root, lock.fingerprint())?;
     let mounts = materialize_outputs(&root, engine, &lock, &plan, preparations)?;
-    let execution_environment = preparations
-        .iter()
-        .find(|preparation| preparation.target == target.target)
-        .map(|preparation| {
-            crate::preparation::resolved_execution_environment(preparation, &state_home)
-        })
-        .unwrap_or_default();
+    let execution_environment = if let Some(environment) = repository_environment {
+        environment
+    } else {
+        preparations
+            .iter()
+            .find(|preparation| Some(&preparation.target) == target.map(|target| &target.target))
+            .map(|preparation| {
+                crate::preparation::resolved_execution_environment(preparation, &state_home)
+            })
+            .unwrap_or_default()
+    };
     let args = launch_args(TargetLaunch {
         root: &root,
         engine,
@@ -304,6 +317,7 @@ pub fn launch_prepared(
     execute_launch(engine, &args)
 }
 
+mod composition;
 mod materialization;
 use materialization::materialize_outputs;
 
@@ -500,7 +514,7 @@ fn append_prepared_mounts(
 struct TargetLaunch<'a> {
     root: &'a Path,
     engine: Engine,
-    target: &'a LockedTargetEnvironment,
+    target: Option<&'a LockedTargetEnvironment>,
     state_home: &'a str,
     image_tag: &'a str,
     command: &'a [String],
@@ -513,9 +527,13 @@ struct TargetLaunch<'a> {
 
 fn launch_args(request: TargetLaunch<'_>) -> Result<Vec<String>, BackendError> {
     let mut args = base_launch_args(request.engine, request.capabilities, request.resources)?;
-    append_workspace_args(&mut args, request.root, request.target, request.state_home);
+    if let Some(target) = request.target {
+        append_workspace_args(&mut args, request.root, target, request.state_home);
+        append_target_environment(&mut args, target)?;
+    } else {
+        append_workspace_state_args(&mut args, request.root, WORKSPACE, request.state_home);
+    }
     append_prepared_mounts(&mut args, request.mounts)?;
-    append_target_environment(&mut args, request.target)?;
     for (name, value) in request.execution_environment {
         args.extend(["--env".into(), format!("{name}={value}")]);
     }

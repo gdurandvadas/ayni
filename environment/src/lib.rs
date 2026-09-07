@@ -10,6 +10,7 @@ pub use executor::execution_build_record;
 mod image;
 mod lock;
 mod preparation;
+mod preparation_groups;
 mod runtime;
 mod storage;
 
@@ -19,9 +20,9 @@ pub use lock::{
     resolve_provisioning_base,
 };
 pub use runtime::{
-    CapturedLaunch, Engine, LaunchAuthorization, ReadOnlyInput, TargetSelection, build,
-    build_prepared, build_prepared_with_executor, detect_engine, doctor, doctor_prepared, launch,
-    launch_prepared, launch_repository, launch_repository_prepared,
+    BuildCache, CapturedLaunch, Engine, LaunchAuthorization, ReadOnlyInput, TargetSelection, build,
+    build_prepared, build_prepared_with_cache, build_prepared_with_executor, detect_engine, doctor,
+    doctor_prepared, launch, launch_prepared, launch_repository, launch_repository_prepared,
     launch_repository_prepared_with_inputs, launch_repository_prepared_with_inputs_captured,
 };
 pub use storage::{

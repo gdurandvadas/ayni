@@ -1,0 +1,862 @@
+name: publish release artifacts
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      commit:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.metadata.outputs.release_created }}
+      release_tag: ${{ inputs.tag }}
+      release_version: ${{ inputs.version }}
+      release_commit: ${{ inputs.commit }}
+    steps:
+      - id: metadata
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$TAG" = "ayni-v${VERSION}"
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          echo 'release_created=true' >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: release
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.release_commit }}
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build and verify tagged Ayni version
+        env:
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(cargo metadata --locked --no-deps --format-version 1 | jq --raw-output '.packages[] | select(.name == "ayni-cli") | .version')"
+          test "$package_version" = "$EXPECTED_VERSION"
+          if [[ "$TARGET" == *linux-gnu ]]; then
+            source .github/docker/ayni-env.versions
+            docker run --rm --user "$(id -u):$(id -g)" \
+              --env CARGO_HOME=/tmp/cargo --volume "$PWD:/workspace" --workdir /workspace \
+              "$RUST_BUILDER_IMAGE" cargo build --locked -p ayni-cli --release --target "$TARGET"
+          else
+            cargo build --locked -p ayni-cli --release --target "$TARGET"
+          fi
+          test "$("target/${TARGET}/release/ayni" --version)" = "ayni ${EXPECTED_VERSION}"
+
+      - name: Package binary
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          mkdir -p "dist/ayni-${TAG}-${TARGET}"
+          cp "target/${TARGET}/release/ayni" "dist/ayni-${TAG}-${TARGET}/"
+          cp LICENSE NOTICE "dist/ayni-${TAG}-${TARGET}/"
+          ARCHIVE="ayni-${TAG}-${TARGET}.tar.gz"
+          tar -C dist -czf "dist/${ARCHIVE}" "ayni-${TAG}-${TARGET}"
+          shasum -a 256 "dist/${ARCHIVE}" > "dist/${ARCHIVE}.sha256"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    runs-on: ubuntu-latest
+    # Release Please creates the public release before downstream jobs run.
+    # Existing-tag recovery overwrites the same assets without creating a release.
+    needs:
+      - release
+      - build
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify release tag still identifies the resolved source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(python3 scripts/ci/release_artifacts.py source --tag "$TAG")"
+          test "$sha" = "$EXPECTED_COMMIT"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: dist
+
+      - name: Build checksum manifest
+        env:
+          TAG: ${{ needs.release.outputs.release_tag }}
+        run: |
+          python3 scripts/ci/release_artifacts.py checksums --tag "$TAG" --directory dist
+
+      - name: Re-verify release tag immediately before asset promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(python3 scripts/ci/release_artifacts.py source --tag "$TAG")"
+          test "$sha" = "$EXPECTED_COMMIT"
+
+      - name: Create publication app token
+        id: publication-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Upload release artifacts with overwrite recovery
+        env:
+          GH_TOKEN: ${{ steps.publication-token.outputs.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+        run: python3 scripts/ci/release_artifacts.py upload --tag "$TAG" --expected-source "$EXPECTED_COMMIT" --directory dist
+
+  environment-image:
+    name: environment image (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    needs:
+      - release
+      - build
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            os: ubuntu-latest
+            platform: linux/amd64
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            os: ubuntu-24.04-arm
+            platform: linux/arm64
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.release_commit }}
+          persist-credentials: false
+
+      - name: Download same-run release executable
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ matrix.target }}
+          path: release-binary
+      - name: Verify and extract the downloadable executor bytes
+        env:
+          TAG: ${{ needs.release.outputs.release_tag }}
+          TARGET: ${{ matrix.target }}
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          archive="ayni-${TAG}-${TARGET}.tar.gz"
+          digest="$(awk '{print $1}' "release-binary/$archive.sha256")"
+          test "$(sha256sum "release-binary/$archive" | awk '{print $1}')" = "$digest"
+          tar -xzf "release-binary/$archive" -C release-binary
+          binary="release-binary/ayni-${TAG}-${TARGET}/ayni"
+          test "$("$binary" --version)" = "ayni ${EXPECTED_VERSION}"
+          cp "$binary" .github/docker/ayni
+
+      - name: Prepare image context
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE .github/docker/
+          source .github/docker/ayni-env.versions
+          {
+            echo "mise_version=$MISE_VERSION"
+            echo "mise_sha256_amd64=$MISE_SHA256_AMD64"
+            echo "mise_sha256_arm64=$MISE_SHA256_ARM64"
+            echo "debian_image=$DEBIAN_IMAGE"
+            echo "source_revision=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push architecture image
+        id: build-image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .github/docker
+          file: .github/docker/ayni-env.Dockerfile
+          platforms: ${{ matrix.platform }}
+          sbom: true
+          provenance: mode=max
+          outputs: type=image,name=ghcr.io/gdurandvadas/ayni-env,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,version=2,scope=release-executor-${{ matrix.arch }}
+          cache-to: type=gha,version=2,scope=release-executor-${{ matrix.arch }},mode=max
+          build-args: |
+            DEBIAN_IMAGE=${{ steps.versions.outputs.debian_image }}
+            AYNI_VERSION=${{ needs.release.outputs.release_version }}
+            SOURCE_REVISION=${{ steps.versions.outputs.source_revision }}
+            MISE_VERSION=${{ steps.versions.outputs.mise_version }}
+            MISE_SHA256_AMD64=${{ steps.versions.outputs.mise_sha256_amd64 }}
+            MISE_SHA256_ARM64=${{ steps.versions.outputs.mise_sha256_arm64 }}
+
+      - name: Verify architecture image version and source revision
+        env:
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
+          IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/gdurandvadas/ayni-env@${IMAGE_DIGEST}"
+          docker pull --platform "$PLATFORM" "$image"
+          revision="$(docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          version="$(docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+          test "$revision" = "$EXPECTED_COMMIT"
+          test "$version" = "$EXPECTED_VERSION"
+          test "$(docker run --rm --platform "$PLATFORM" "$image" --version)" = "ayni ${EXPECTED_VERSION}"
+          expected_digest="$(sha256sum .github/docker/ayni | awk '{print $1}')"
+          actual_digest="$(docker run --rm --platform "$PLATFORM" --entrypoint sha256sum "$image" /usr/local/bin/ayni | awk '{print $1}')"
+          test "$actual_digest" = "$expected_digest"
+
+      - name: Record immutable architecture digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build-image.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${IMAGE_DIGEST#sha256:}" != "$IMAGE_DIGEST"
+          mkdir -p "$RUNNER_TEMP/environment-image-digest"
+          touch "$RUNNER_TEMP/environment-image-digest/${IMAGE_DIGEST#sha256:}"
+
+      - name: Upload immutable architecture digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: environment-image-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/environment-image-digest/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Scan architecture image for fixable critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: ${{ matrix.platform }}
+        with:
+          image-ref: ghcr.io/gdurandvadas/ayni-env@${{ steps.build-image.outputs.digest }}
+          format: table
+          exit-code: 1
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL
+
+  environment-manifest:
+    name: environment image manifest
+    runs-on: ubuntu-latest
+    outputs:
+      base: ${{ steps.promote-manifest.outputs.base }}
+    needs:
+      - release
+      - environment-image
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify release tag still identifies the resolved source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(python3 scripts/ci/release_artifacts.py source --tag "$TAG")"
+          test "$sha" = "$EXPECTED_COMMIT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Download scanned architecture digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: environment-image-digest-*
+          path: ${{ runner.temp }}/environment-image-digests
+          merge-multiple: true
+
+      - name: Assemble immutable multi-architecture staging image
+        id: assemble-manifest
+        env:
+          VERSION: ${{ needs.release.outputs.release_version }}
+          DIGEST_DIRECTORY: ${{ runner.temp }}/environment-image-digests
+        run: |
+          set -euo pipefail
+          repository="ghcr.io/gdurandvadas/ayni-env"
+          staging="${repository}:${VERSION}-debian-staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mapfile -t digest_files < <(find "$DIGEST_DIRECTORY" -maxdepth 1 -type f -print | sort)
+          test "${#digest_files[@]}" -eq 2
+          sources=()
+          for digest_file in "${digest_files[@]}"; do
+            digest="sha256:$(basename "$digest_file")"
+            sources+=("${repository}@${digest}")
+          done
+          docker buildx imagetools create \
+            --tag "$staging" \
+            "${sources[@]}"
+          inspection="$(docker buildx imagetools inspect "$staging")"
+          printf '%s\n' "$inspection"
+          digest="$(printf '%s\n' "$inspection" | sed -n 's/^Digest:[[:space:]]*//p' | head -n1)"
+          test -n "$digest"
+          {
+            echo "repository=$repository"
+            echo "digest=$digest"
+            echo "immutable=${repository}@${digest}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Sign immutable multi-architecture image
+        env:
+          IMAGE: ${{ steps.assemble-manifest.outputs.immutable }}
+        run: cosign sign --yes "$IMAGE"
+
+      - name: Promote signed image to the release tag
+        id: promote-manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+          VERSION: ${{ needs.release.outputs.release_version }}
+          REPOSITORY: ${{ steps.assemble-manifest.outputs.repository }}
+          IMMUTABLE_IMAGE: ${{ steps.assemble-manifest.outputs.immutable }}
+          SIGNED_DIGEST: ${{ steps.assemble-manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          sha="$(python3 scripts/ci/release_artifacts.py source --tag "$TAG")"
+          test "$sha" = "$EXPECTED_COMMIT"
+          image="${REPOSITORY}:${VERSION}-debian"
+          docker buildx imagetools create --tag "$image" "$IMMUTABLE_IMAGE"
+          inspection="$(docker buildx imagetools inspect "$image")"
+          printf '%s\n' "$inspection"
+          digest="$(printf '%s\n' "$inspection" | sed -n 's/^Digest:[[:space:]]*//p' | head -n1)"
+          test "$digest" = "$SIGNED_DIGEST"
+          cosign verify \
+            --certificate-identity 'https://github.com/gdurandvadas/ayni/.github/workflows/release-publication.yml@refs/heads/main' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "${REPOSITORY}@${digest}"
+          echo "base=${image}@${digest}" >> "$GITHUB_OUTPUT"
+
+  release-assets:
+    name: validate public release assets
+    runs-on: ubuntu-latest
+    needs:
+      - release
+      - publish
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify public asset inventory and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+        shell: bash
+        run: |
+          python3 scripts/ci/release_artifacts.py verify --tag "$TAG" --expected-source "$EXPECTED_COMMIT" --directory release-assets
+
+      - name: Checkout installer from the workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the latest public release without a version override
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSTALL_DIR: ${{ runner.temp }}/latest-bin
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          expected_version="${latest_tag#ayni-v}"
+          ./install.sh
+          test "$("$INSTALL_DIR/ayni" --version)" = "ayni ${expected_version}"
+
+  release-smoke:
+    name: smoke public release binary (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs:
+      - release
+      - release-assets
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout tagged installer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.release_commit }}
+          persist-credentials: false
+
+      - name: Install and smoke-test matching public binary
+        env:
+          VERSION: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
+          INSTALL_DIR: ${{ runner.temp }}/released-bin
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./install.sh
+          test "$("$INSTALL_DIR/ayni" --version)" = "ayni ${EXPECTED_VERSION}"
+
+  environment-image-smoke:
+    name: smoke public environment image (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    needs:
+      - release
+      - environment-manifest
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            os: ubuntu-latest
+            platform: linux/amd64
+            uname: x86_64
+          - arch: arm64
+            os: ubuntu-24.04-arm
+            platform: linux/arm64
+            uname: aarch64
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Exercise native architecture image
+        env:
+          BASE: ${{ needs.environment-manifest.outputs.base }}
+          PLATFORM: ${{ matrix.platform }}
+          EXPECTED_UNAME: ${{ matrix.uname }}
+          EXPECTED_COMMIT: ${{ needs.release.outputs.release_commit }}
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull --platform "$PLATFORM" "$BASE"
+          revision="$(docker image inspect "$BASE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          version="$(docker image inspect "$BASE" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+          test "$revision" = "$EXPECTED_COMMIT"
+          test "$version" = "$EXPECTED_VERSION"
+          actual="$(docker run --rm --platform "$PLATFORM" --entrypoint uname "$BASE" -m)"
+          test "$actual" = "$EXPECTED_UNAME"
+          test "$(docker run --rm --platform "$PLATFORM" "$BASE" --version)" = "ayni ${EXPECTED_VERSION}"
+          docker run --rm --platform "$PLATFORM" --entrypoint mise "$BASE" --version
+
+  fixture-plan:
+    needs: release
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      fixtures: ${{ steps.plan.outputs.fixtures }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.release_commit }}
+          persist-credentials: false
+      - id: plan
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          path = Path('scripts/ci/fixtures.json')
+          fixtures = json.loads(path.read_text())['fixtures'] if path.exists() else [{'id': name} for name in ['rust', 'go', 'node', 'python', 'kotlin']]
+          matrix = [dict(language=fixture['id'], arch=arch, runner=runner) for fixture in fixtures for arch, runner in [('amd64', 'ubuntu-latest'), ('arm64', 'ubuntu-24.04-arm')]]
+          assert matrix and len({(item['language'], item['arch']) for item in matrix}) == len(matrix)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('fixtures=' + json.dumps(matrix) + '\n')
+          PYTHON
+
+  release-validation:
+    name: validate public evidence (${{ matrix.language }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs:
+      - release
+      - fixture-plan
+      - build
+      - publish
+      - release-assets
+      - release-smoke
+      - environment-manifest
+      - environment-image-smoke
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.fixture-plan.outputs.fixtures) }}
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.release_commit }}
+          persist-credentials: false
+
+      - name: Install released Linux binary from public assets
+        id: binary
+        env:
+          VERSION: ${{ needs.release.outputs.release_tag }}
+          EXPECTED_VERSION: ${{ needs.release.outputs.release_version }}
+          INSTALL_DIR: ${{ runner.temp }}/released-bin
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./install.sh
+          binary="$INSTALL_DIR/ayni"
+          test -x "$binary"
+          test "$("$binary" --version)" = "ayni ${EXPECTED_VERSION}"
+          echo "path=$binary" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned Mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.6.14
+          install: false
+          cache: false
+
+      - name: Configure trusted release environment cache
+        if: ${{ hashFiles('.github/actions/setup-environment-cache/action.yml') != '' }}
+        id: cache
+        uses: ./.github/actions/setup-environment-cache
+        with:
+          scope: release-${{ matrix.language }}-${{ matrix.arch }}
+      - name: Run declared fixture against public artifacts
+        if: ${{ hashFiles('scripts/ci/run_declared_fixture.py') != '' }}
+        env:
+          AYNI: ${{ steps.binary.outputs.path }}
+          EXECUTOR: ${{ needs.environment-manifest.outputs.base }}
+          SOURCE: ${{ needs.release.outputs.release_commit }}
+          FIXTURE_ID: ${{ matrix.language }}
+          PLATFORM: linux/${{ matrix.arch }}
+          CACHE_FROM: ${{ steps.cache.outputs.from }}
+          CACHE_TO: ${{ steps.cache.outputs.to }}
+        run: |
+          python3 scripts/ci/run_declared_fixture.py --cli "$AYNI" --executor "$EXECUTOR" \
+            --id "$FIXTURE_ID" --source "$SOURCE" --platform "$PLATFORM" \
+            --artifacts "$RUNNER_TEMP/released-managed-$FIXTURE_ID"
+      - name: Run shared fixture contract against public artifacts
+        if: ${{ hashFiles('scripts/ci/run_fixture.py') != '' && hashFiles('scripts/ci/run_declared_fixture.py') == '' }}
+        env:
+          AYNI: ${{ steps.binary.outputs.path }}
+          EXECUTOR: ${{ needs.environment-manifest.outputs.base }}
+          SOURCE: ${{ needs.release.outputs.release_commit }}
+          LANGUAGE: ${{ matrix.language }}
+          PLATFORM: linux/${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          fixture="$(jq -er --arg id "$LANGUAGE" '.fixtures[] | select(.id == $id) | .root' scripts/ci/fixtures.json)"
+          expected="$(jq -er --arg id "$LANGUAGE" '.fixtures[] | select(.id == $id) | .expected_exit_code' scripts/ci/fixtures.json)"
+          mapfile -t roots < <(jq -er --arg id "$LANGUAGE" '.fixtures[] | select(.id == $id) | .expected_roots[]' scripts/ci/fixtures.json)
+          args=()
+          for root in "${roots[@]}"; do args+=(--expected-root "$root"); done
+          python3 scripts/ci/run_fixture.py --cli "$AYNI" --executor-image "$EXECUTOR" \
+            --fixture-root "$fixture" --language "$LANGUAGE" --id "$LANGUAGE" \
+            --expected-exit-code "$expected" "${args[@]}" --source "$SOURCE" --platform "$PLATFORM" \
+            --artifact-directory "$RUNNER_TEMP/released-managed-$LANGUAGE"
+
+      - name: Lock and build released managed fixture
+        if: ${{ hashFiles('scripts/ci/run_fixture.py') == '' }}
+        env:
+          AYNI: ${{ steps.binary.outputs.path }}
+          BASE: ${{ needs.environment-manifest.outputs.base }}
+          FIXTURE: examples/${{ matrix.language }}/mono
+        run: |
+          set -euo pipefail
+          rm -rf "$FIXTURE/.ayni" "$FIXTURE/.ayni.lock"
+          # Recovery checks out tagged source. Old public binaries retain their
+          # original publication protocol; the current CLI rejects old locks.
+          if [[ -f environment/provisioning.json ]]; then
+            "$AYNI" env lock --repo-root "$FIXTURE" --config .ayni.toml
+            "$AYNI" env build --repo-root "$FIXTURE" --executor-image "$BASE"
+          else
+            "$AYNI" env lock --repo-root "$FIXTURE" --config .ayni.toml --base "$BASE"
+            "$AYNI" env build --repo-root "$FIXTURE"
+          fi
+          "$AYNI" env doctor --repo-root "$FIXTURE"
+
+      - name: Validate released managed evidence
+        if: ${{ hashFiles('scripts/ci/run_fixture.py') == '' }}
+        env:
+          AYNI: ${{ steps.binary.outputs.path }}
+          FIXTURE: examples/${{ matrix.language }}/mono
+          LANGUAGE: ${{ matrix.language }}
+          PLATFORM: linux/${{ matrix.arch }}
+        run: |
+          set +e
+          "$AYNI" check --config "$FIXTURE/.ayni.toml"
+          check_code=$?
+          set -e
+          echo "Released managed check exit code: $check_code"
+          python3 scripts/ci/validate_example_artifact.py \
+            --artifact "$FIXTURE/.ayni/last/signals.json" \
+            --language "$LANGUAGE" \
+            --repository-root /workspace \
+            --check-exit-code "$check_code" \
+            --expected-root .
+
+      - name: Retain released managed execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: released-managed-${{ matrix.language }}-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/released-managed-${{ matrix.language }}/
+            examples/${{ matrix.language }}/mono/.ayni.lock
+            examples/${{ matrix.language }}/mono/.ayni/last/signals.json
+            examples/${{ matrix.language }}/mono/.ayni/last/execution.json
+            examples/${{ matrix.language }}/mono/.ayni/environment/build.json
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Remove ephemeral environment state
+        if: always()
+        env:
+          FIXTURE: examples/${{ matrix.language }}/mono
+        run: rm -rf "$FIXTURE/.ayni" "$FIXTURE/.ayni.lock"
+
+  release-completion:
+    name: require complete public release
+    runs-on: ubuntu-latest
+    needs:
+      - release
+      - build
+      - publish
+      - environment-image
+      - environment-manifest
+      - release-assets
+      - release-smoke
+      - environment-image-smoke
+      - release-validation
+      - fixture-plan
+    if: ${{ always() }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout completion helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fail closed when publication is incomplete
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          RELEASE_CREATED: ${{ needs.release.outputs.release_created }}
+          RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.release.outputs.release_version }}
+          RELEASE_COMMIT: ${{ needs.release.outputs.release_commit }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          ENVIRONMENT_IMAGE_RESULT: ${{ needs.environment-image.result }}
+          ENVIRONMENT_MANIFEST_RESULT: ${{ needs.environment-manifest.result }}
+          RELEASE_ASSETS_RESULT: ${{ needs.release-assets.result }}
+          RELEASE_SMOKE_RESULT: ${{ needs.release-smoke.result }}
+          ENVIRONMENT_IMAGE_SMOKE_RESULT: ${{ needs.environment-image-smoke.result }}
+          FIXTURE_PLAN_RESULT: ${{ needs.fixture-plan.result }}
+          RELEASE_VALIDATION_RESULT: ${{ needs.release-validation.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RELEASE_RESULT" = "success"
+
+          resolve_tag_commit() {
+            python3 scripts/ci/release_artifacts.py source --tag "$1"
+          }
+
+          publication_required=false
+          detected_tag=""
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$RELEASE_CREATED" == "true" ]]; then
+            publication_required=true
+          fi
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            encoded_version="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/contents/version.txt?ref=${GITHUB_SHA}" \
+              --jq '.content')"
+            source_version="$(printf '%s' "$encoded_version" | base64 --decode | tr -d '\r\n')"
+            [[ "$source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
+            candidate_tag="ayni-v${source_version}"
+            set +e
+            lookup="$(gh api --include \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${candidate_tag}" 2>&1)"
+            lookup_code=$?
+            set -e
+            if [[ "$lookup_code" -eq 0 ]]; then
+              candidate_commit="$(resolve_tag_commit "$candidate_tag")"
+              if [[ "$candidate_commit" == "$GITHUB_SHA" ]]; then
+                detected_tag="$candidate_tag"
+                publication_required=true
+              fi
+            elif grep -Eq '^HTTP/[^ ]+ 404 ' <<< "$lookup"; then
+              : # An authoritative 404 means this ordinary push created no release.
+            else
+              printf '%s\n' "$lookup" >&2
+              exit "$lookup_code"
+            fi
+          fi
+
+          if [[ "$publication_required" != "true" ]]; then
+            echo "No release was created; publication jobs are not required."
+            exit 0
+          fi
+
+          if [[ -n "$detected_tag" && "$RELEASE_CREATED" != "true" ]]; then
+            echo "Public release $detected_tag exists for $GITHUB_SHA, but release metadata did not propagate." >&2
+          fi
+          test "$RELEASE_CREATED" = "true"
+          test -n "$RELEASE_TAG"
+          test "$RELEASE_TAG" = "ayni-v${RELEASE_VERSION}"
+          if [[ -n "$detected_tag" ]]; then
+            test "$RELEASE_TAG" = "$detected_tag"
+          fi
+          test -n "$RELEASE_COMMIT"
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            test "$RELEASE_COMMIT" = "$GITHUB_SHA"
+          fi
+          while read -r job result; do
+            if [[ "$result" != "success" ]]; then
+              echo "Required release job '$job' concluded '$result'." >&2
+              exit 1
+            fi
+          done <<EOF
+          build $BUILD_RESULT
+          publish $PUBLISH_RESULT
+          environment-image $ENVIRONMENT_IMAGE_RESULT
+          environment-manifest $ENVIRONMENT_MANIFEST_RESULT
+          release-assets $RELEASE_ASSETS_RESULT
+          release-smoke $RELEASE_SMOKE_RESULT
+          environment-image-smoke $ENVIRONMENT_IMAGE_SMOKE_RESULT
+          release-validation $RELEASE_VALIDATION_RESULT
+          fixture-plan $FIXTURE_PLAN_RESULT
+          EOF
+
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          test "$(jq --raw-output '.draft' <<< "$release")" = "false"
+          test "$(jq --raw-output '.tag_name' <<< "$release")" = "$RELEASE_TAG"
+          test "$(resolve_tag_commit "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          test "$(jq '.assets | length' <<< "$release")" -eq 5

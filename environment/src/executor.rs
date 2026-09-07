@@ -428,6 +428,9 @@ mod tests {
             tag: "ayni-env:lock-test".into(),
             dockerfile: "FROM substrate AS ayni-runtime\nRUN prepare-native-dependencies\n".into(),
             mise_toml: "[tools]\n".into(),
+            runtime_mise_toml: "[tools]\n".into(),
+            installation_digest: "sha256:installation".into(),
+            preparation_groups: std::collections::BTreeMap::new(),
             platform: "linux/amd64".into(),
             preparation_digest: format!("sha256:{}", "d".repeat(64)),
         };

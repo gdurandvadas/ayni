@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const INPUT_ROOT: &str = "/tmp/ayni/repository";
 pub(crate) const SEED_ROOT: &str = "/opt/ayni/dependencies";
-const PREPARATION_IMPLEMENTATION_VERSION: &str = "8";
-const PREPARED_CACHE_COPY_FRAGMENT: &str = concat!(
-    "FROM ayni-runtime\n",
-    "COPY --from=ayni-preparation --chown=10001:10001 --chmod=0755 ",
-    "/home/ayni/.cache /home/ayni/.cache\n",
-);
+const PREPARATION_IMPLEMENTATION_VERSION: &str = "9";
+fn prepared_cache_copy(stage: &str) -> String {
+    format!(
+        "COPY --from={stage} --chown=10001:10001 --chmod=0755 /home/ayni/.cache /home/ayni/.cache\n"
+    )
+}
 
 pub(crate) fn dockerfile_fragment(
     lock: &EnvironmentLock,
@@ -24,39 +24,41 @@ pub(crate) fn dockerfile_fragment(
     if plans.is_empty() {
         return Ok(String::new());
     }
-    let mut output = String::from(
-        "FROM ayni-runtime AS ayni-preparation\nCOPY --chown=10001:10001 repository /tmp/ayni/repository\n",
-    );
-    for plan in ordered_plans(plans) {
-        let target = lock
-            .targets()
-            .iter()
-            .find(|target| target.target == plan.target)
-            .ok_or_else(|| {
-                BackendError::environment(format!(
-                    "dependency preparation target {}:{} is absent from the lock",
-                    plan.target.language, plan.target.root
-                ))
-            })?;
-        let activation = target_environment(target)?;
-        for command in &plan.commands {
-            output.push_str(&preparation_run_instruction(command, &activation));
-            output.push('\n');
+    let groups = crate::preparation_groups::groups(plans)?;
+    let mut output = String::new();
+    for group in &groups {
+        output.push_str(&format!("FROM ayni-runtime AS preparation-{}\nCOPY --chown=10001:10001 groups/{} /tmp/ayni/repository\n", group.id, group.id));
+        let mut commands = Vec::new();
+        for plan in &group.plans {
+            let target = lock
+                .targets()
+                .iter()
+                .find(|target| target.target == plan.target)
+                .ok_or_else(|| {
+                    BackendError::environment("dependency preparation target is absent from lock")
+                })?;
+            let activation = target_environment(target)?;
+            for command in &plan.commands {
+                let instruction = preparation_run_instruction(command, &activation);
+                if !commands.contains(&instruction) {
+                    output.push_str(&instruction);
+                    output.push('\n');
+                    commands.push(instruction);
+                }
+            }
         }
     }
-    // Prepared tools sometimes create owner-only files. Materialization runs
-    // as the host identity, so make the seed tree readable and owner-writable
-    // in the COPY layer itself. Use the portable octal form supported by both
-    // Dockerfile and Containerfile builders; this cache intentionally contains
-    // executable tools as well as package data.
-    output.push_str(PREPARED_CACHE_COPY_FRAGMENT);
-    for plan in ordered_plans(plans) {
-        for prepared in &plan.outputs {
-            if prepared.mode == PreparationOutputMode::Fresh {
-                continue;
+    output.push_str("FROM ayni-tools\n");
+    for group in &groups {
+        output.push_str(&prepared_cache_copy(&format!("preparation-{}", group.id)));
+        for prepared in unique_outputs(&group.plans) {
+            if prepared.mode != PreparationOutputMode::Fresh {
+                output.push_str(&prepared_output_copy_instruction(&prepared).replace(
+                    "--from=ayni-preparation",
+                    &format!("--from=preparation-{}", group.id),
+                ));
+                output.push('\n');
             }
-            output.push_str(&prepared_output_copy_instruction(prepared));
-            output.push('\n');
         }
     }
     Ok(output)
@@ -67,12 +69,27 @@ pub(crate) fn stage_inputs(
     context_root: &Path,
     plans: &[DependencyPreparationPlan],
 ) -> Result<(), BackendError> {
-    let destination_root = context_root.join("repository");
-    fs::create_dir(&destination_root).map_err(|error| {
-        BackendError::execution(format!("failed to create staged dependency input: {error}"))
+    let groups_root = context_root.join("groups");
+    fs::create_dir(&groups_root).map_err(|error| {
+        BackendError::execution(format!("failed to create preparation groups: {error}"))
     })?;
-    stage_locked_inputs(repo_root, &destination_root, plans)?;
-    stage_scaffolds(&destination_root, plans)
+    for group in crate::preparation_groups::groups(plans)? {
+        let destination_root = groups_root.join(&group.id);
+        stage_workspace(repo_root, &destination_root, &group.plans)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn stage_workspace(
+    repo_root: &Path,
+    destination_root: &Path,
+    plans: &[DependencyPreparationPlan],
+) -> Result<(), BackendError> {
+    fs::create_dir(destination_root).map_err(|error| {
+        BackendError::execution(format!("failed to stage preparation workspace: {error}"))
+    })?;
+    stage_locked_inputs(repo_root, destination_root, plans)?;
+    stage_scaffolds(destination_root, plans)
 }
 
 fn stage_locked_inputs(
@@ -381,10 +398,11 @@ mod tests {
 
     #[test]
     fn prepared_cache_copy_is_readable_and_writable_without_a_metadata_layer() {
-        assert!(PREPARED_CACHE_COPY_FRAGMENT.contains("--chown=10001:10001"));
-        assert!(PREPARED_CACHE_COPY_FRAGMENT.contains("--chmod=0755"));
-        assert!(!PREPARED_CACHE_COPY_FRAGMENT.contains("RUN chmod"));
-        assert!(!PREPARED_CACHE_COPY_FRAGMENT.contains("USER root"));
+        let fragment = prepared_cache_copy("preparation-group");
+        assert!(fragment.contains("--chown=10001:10001"));
+        assert!(fragment.contains("--chmod=0755"));
+        assert!(!fragment.contains("RUN chmod"));
+        assert!(!fragment.contains("USER root"));
     }
 
     #[test]

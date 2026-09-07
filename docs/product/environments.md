@@ -134,7 +134,7 @@ commands, and checkout-mutating instructions. Equivalent inputs produce stable
 lock output; a failed resolution preserves the previous lock.
 
 The environment plan schema is `0.4.0`, lock schema is `0.7.0`, and OCI
-image-label schema is `0.6.0`. Lock and execution recipe version `1` is checked
+image-label schema is `0.7.0`. Lock and execution recipe version `1` is checked
 explicitly. These are separate from signal-artifact schema `0.4.0`, which is
 unchanged. Older locks are rejected: run `env lock`, then `env build` after
 upgrading. There is no legacy execution path.
@@ -203,6 +203,32 @@ runtime and analysis tooling, warms provider caches, and retains only declared
 dependency outputs. The exact Ayni executable is copied from the executor image
 only after this preparation, preserving reusable installation layers when the
 executor changes. Its digest is verified before committing the build record.
+
+Installation and preparation use separate stages. Runtime installation uses a
+runtime-only Mise inventory; provider tools install independently, and the final
+combined inventory is copied after reusable preparation. Targets that share a
+native workspace owner, input, or output are prepared together. Independent
+workspace groups have separate input contexts and prepared-output identities.
+
+Prepared state is keyed by installation and preparation identities, including
+platform, durable base, native packages, exact tool versions and preparation
+recipe. Quality-policy edits still require a valid regenerated lock, but do not
+invalidate unchanged dependency state. Native ABI or tool changes invalidate it
+conservatively. `env storage` and repository-scoped `env prune` account for these
+groups without pruning shared engine build caches.
+
+Docker Buildx users can opt into external cache transport:
+
+```sh
+ayni env build --cache-from type=local,src=/tmp/ayni-cache \
+  --cache-to type=local,dest=/tmp/ayni-cache-next,mode=max
+```
+
+Repeat either flag for multiple cache locations. Cache transport is generated
+build state, never part of the committed lock. Omitting these flags preserves
+the ordinary Docker/Podman build path. CI uses separate `pr-` and `release-`
+scopes; publication never imports the PR scope. A cold build retains the same
+lock, executor and runtime validation requirements.
 
 When `MISE_GITHUB_TOKEN` is set, `env build` forwards it only as an ephemeral
 OCI build secret to the `mise install` layers. The credential is not written to
@@ -351,19 +377,23 @@ the corresponding per-invocation authorization described above.
 
 ## Advanced development access
 
-`env shell` and `env run` expose one target for intentional, arbitrary
-development work. They are not part of setup or the quality loop, do not
-normalize evidence, and do not apply quality thresholds. When a lock
-contains one target, they can select it implicitly:
+`env shell` and `env run` without selectors open the composed environment at
+`/workspace`, the repository root. All declared prepared outputs are mounted.
+Uniquely resolved runtimes and repository-wide tools are available together, so
+one program can launch a program in another supported language. These development
+commands do not normalize evidence or apply quality thresholds.
 
 ```sh
 ayni env shell
-ayni env run -- cargo test
+ayni env run -- sh -c 'rustc --version && node --version'
 ```
 
-When selection is ambiguous, pass `--language`; add `--root` with the language
-when that language still has multiple locked roots. `--root` is never accepted
-without `--language`.
+Project-local tools remain scoped to their native roots: Ayni does not merge
+all `node_modules/.bin` or virtual-environment directories into a global PATH.
+Select a target when you need its local activation. If repository activation
+requires conflicting versions, launch fails before preparation or container
+creation and lists the conflicting targets. Align those requirements or pass
+`--language` and, when needed, `--root`. `--root` requires `--language`.
 
 ```sh
 ayni env run --language node --root apps/web -- npm test

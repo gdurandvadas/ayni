@@ -242,9 +242,13 @@ fn report_for_context(
         total.saturating_add(image.cumulative_size_bytes)
     });
     let fingerprint = fingerprint_segment(lock.fingerprint());
-    let preparation = fingerprint_segment(&plan.preparation_digest);
+    let installation = fingerprint_segment(&plan.installation_digest);
+    let preparations = std::iter::once(&plan.preparation_digest)
+        .chain(plan.preparation_groups.values())
+        .map(|digest| fingerprint_segment(digest).to_owned())
+        .collect::<BTreeSet<_>>();
     let (state_generations, state_root_logical_size_bytes, classified_state_bytes) =
-        inspect_state(root, fingerprint, preparation)?;
+        inspect_state(root, fingerprint, installation, &preparations)?;
     let current_image_present = images.iter().any(|image| image.current);
 
     Ok(StorageReport {
@@ -416,14 +420,19 @@ fn image_labels_are_current(
 fn inspect_state(
     root: &Path,
     current_fingerprint: &str,
-    current_preparation: &str,
+    current_installation: &str,
+    current_preparations: &BTreeSet<String>,
 ) -> Result<(Vec<StorageStateGeneration>, u64, u64), BackendError> {
     let Some(canonical_state) = validated_state_root(root)? else {
         return Ok((Vec::new(), 0, 0));
     };
     let total = logical_tree_size(&canonical_state)?;
-    let mut generations =
-        collect_state_generations(&canonical_state, current_fingerprint, current_preparation)?;
+    let mut generations = collect_state_generations(
+        &canonical_state,
+        current_fingerprint,
+        current_installation,
+        current_preparations,
+    )?;
     generations.sort_by(|left, right| left.path.cmp(&right.path));
     let classified = generations.iter().fold(0_u64, |sum, generation| {
         sum.saturating_add(generation.logical_size_bytes)
@@ -467,7 +476,8 @@ fn validated_state_root(root: &Path) -> Result<Option<PathBuf>, BackendError> {
 fn collect_state_generations(
     state_root: &Path,
     current_fingerprint: &str,
-    current_preparation: &str,
+    current_installation: &str,
+    current_preparations: &BTreeSet<String>,
 ) -> Result<Vec<StorageStateGeneration>, BackendError> {
     let mut generations = Vec::new();
     for fingerprint in sorted_directory_entries(state_root)? {
@@ -481,7 +491,8 @@ fn collect_state_generations(
             let current = if state_name == "home" {
                 fingerprint_name == current_fingerprint
             } else if generation_name(state_name) {
-                fingerprint_name == current_fingerprint && state_name == current_preparation
+                fingerprint_name == current_installation
+                    && current_preparations.contains(state_name)
             } else {
                 continue;
             };
@@ -724,8 +735,13 @@ mod tests {
         fs::write(root.join(STATE_ROOT).join("unclassified/file"), b"12345678")
             .expect("unclassified bytes");
 
-        let (generations, total, classified) =
-            inspect_state(&root, "aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb").expect("state");
+        let (generations, total, classified) = inspect_state(
+            &root,
+            "aaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaaaaaaa",
+            &BTreeSet::from(["bbbbbbbbbbbbbbbb".into()]),
+        )
+        .expect("state");
         assert_eq!(generations.len(), 4);
         assert_eq!(generations.iter().filter(|entry| entry.current).count(), 2);
         assert_eq!(

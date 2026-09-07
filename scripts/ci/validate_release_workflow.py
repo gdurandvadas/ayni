@@ -34,11 +34,12 @@ def require(errors: list[str], condition: bool, message: str) -> None:
 
 def main() -> int:
     source = WORKFLOW.read_text()
+    publication = (WORKFLOW.parent / "release-publication.yml").read_text()
     errors: list[str] = []
 
     try:
         release = job_block(source, "release")
-        completion = job_block(source, "release-completion")
+        completion = job_block(publication, "release-completion")
     except ValueError as error:
         print(error, file=sys.stderr)
         return 1
@@ -112,7 +113,7 @@ def main() -> int:
     )
     for name in publication_jobs:
         try:
-            block = job_block(source, name)
+            block = job_block(publication, name)
         except ValueError as error:
             errors.append(str(error))
             continue
@@ -127,38 +128,36 @@ def main() -> int:
             f"release-completion must depend on {name}",
         )
 
-    publish = job_block(source, "publish")
-    delete_position = publish.find("Remove obsolete release assets before recovery upload")
-    upload_position = publish.find("Upload release artifacts")
-    expected_asset_patterns = (
-        "SHA256SUMS|",
-        '"ayni-${TAG}-aarch64-apple-darwin.tar.gz"',
-        '"ayni-${TAG}-x86_64-apple-darwin.tar.gz"',
-        '"ayni-${TAG}-x86_64-unknown-linux-gnu.tar.gz"',
-        '"ayni-${TAG}-aarch64-unknown-linux-gnu.tar.gz"',
-    )
-    require(
-        errors,
-        delete_position >= 0
-        and upload_position > delete_position
-        and "releases/assets/${asset_id}" in publish
-        and "--method DELETE" in publish
-        and all(pattern in publish for pattern in expected_asset_patterns)
-        and "id: publication-token" in publish
-        and "permission-contents: write" in publish
-        and "GH_TOKEN: ${{ steps.publication-token.outputs.token }}" in publish
-        and 'gh release upload "$TAG"' in publish
-        and "--clobber --repo \"$GITHUB_REPOSITORY\"" in publish,
-        "publish must use a contents-write app token, preserve expected names, delete "
-        "obsolete assets before upload, and overwrite expected assets",
-    )
+    publish = job_block(publication, "publish")
+    require(errors,
+            "id: publication-token" in publish
+            and "permission-contents: write" in publish
+            and "GH_TOKEN: ${{ steps.publication-token.outputs.token }}" in publish
+            and 'release_artifacts.py upload --tag "$TAG" --expected-source "$EXPECTED_COMMIT"' in publish,
+            "publication must use a fresh app token and the source-bound overwrite helper")
+    require(errors,
+            'release-publication-${{ needs.release.outputs.release_tag }}' in source
+            and 'cancel-in-progress: false' in job_block(source, 'publication')
+            and 'release-pr-maintenance' in job_block(source, 'sync-release-lock')
+            and 'if: ${{ always() }}' in job_block(source, 'release-completion')
+            and 'publication $PUBLICATION_RESULT' in job_block(source, 'release-completion'),
+            "publication must serialize each release identity and retain an independent parent completion gate")
+    require(errors,
+            'cargo build' not in job_block(publication, 'environment-image')
+            and 'Download same-run release executable' in job_block(publication, 'environment-image')
+            and 'source .github/docker/ayni-env.versions' in job_block(publication, 'build'),
+            "Linux archives and executor images must share one compatible compilation")
+    require(errors,
+            'ubuntu-24.04-arm' in job_block(publication, 'fixture-plan')
+            and 'Run declared fixture against public artifacts' in job_block(publication, 'release-validation'),
+            "public evidence must exercise the tagged fixture inventory on both Linux architectures")
 
-    release_assets = job_block(source, "release-assets")
+    release_assets = job_block(publication, "release-assets")
     require(
         errors,
         "Install the latest public release without a version override" in release_assets
         and 'releases/latest" --jq' in release_assets
-        and '--repo "$GITHUB_REPOSITORY"' in release_assets
+        and 'release_artifacts.py verify --tag "$TAG" --expected-source "$EXPECTED_COMMIT"' in release_assets
         and "./install.sh" in release_assets,
         "release-assets must exercise default latest-release installer resolution",
     )

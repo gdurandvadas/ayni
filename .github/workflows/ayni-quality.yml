@@ -47,6 +47,9 @@ jobs:
       - name: Test candidate handoff and completion contracts
         run: python3 scripts/ci/test_candidates.py
 
+      - name: Test composition and publication recovery
+        run: python3 scripts/ci/test_delivery.py
+
       - name: Test release installer
         run: scripts/ci/test_install_sh.sh
 
@@ -115,9 +118,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust 1.93
-        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
-        with:
-          toolchain: 1.93.0
+        run: rustup toolchain install 1.93.0 --profile minimal --no-self-update
 
       - name: Check MSRV
-        run: cargo check --locked --workspace --all-features
+        run: |
+          rustc +1.93.0 --version
+          cargo +1.93.0 check --locked --workspace --all-features

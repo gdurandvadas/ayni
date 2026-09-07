@@ -30,6 +30,45 @@ pub struct TargetSelection {
     pub root: Option<String>,
 }
 
+/// Operator-selected cache transport. Cache locations are never lock inputs.
+#[derive(Debug, Default)]
+pub struct BuildCache {
+    pub from: Vec<String>,
+    pub to: Vec<String>,
+}
+
+impl BuildCache {
+    fn build_args(&self, engine: Engine) -> Result<Vec<String>, BackendError> {
+        if self.from.is_empty() && self.to.is_empty() {
+            return Ok(vec!["build".into()]);
+        }
+        if engine != Engine::Docker
+            || self
+                .from
+                .iter()
+                .chain(&self.to)
+                .any(|value| value.trim().is_empty())
+        {
+            return Err(BackendError::input(
+                "external build caches require Docker Buildx and non-empty cache specifications",
+            ));
+        }
+        let mut args = vec![
+            "buildx".into(),
+            "build".into(),
+            "--load".into(),
+            "--provenance=false".into(),
+        ];
+        for source in &self.from {
+            args.extend(["--cache-from".into(), source.clone()]);
+        }
+        for destination in &self.to {
+            args.extend(["--cache-to".into(), destination.clone()]);
+        }
+        Ok(args)
+    }
+}
+
 pub fn detect_engine() -> Result<Engine, BackendError> {
     if let Ok(requested) = env::var("AYNI_OCI_RUNTIME") {
         return match requested.as_str() {
@@ -206,29 +245,55 @@ pub fn build_prepared_with_executor(
     preparations: &[DependencyPreparationPlan],
     executor_image: Option<&str>,
 ) -> Result<String, BackendError> {
+    build_prepared_with_cache(
+        repo_root,
+        preparations,
+        executor_image,
+        &BuildCache::default(),
+    )
+}
+
+pub fn build_prepared_with_cache(
+    repo_root: &Path,
+    preparations: &[DependencyPreparationPlan],
+    executor_image: Option<&str>,
+    cache: &BuildCache,
+) -> Result<String, BackendError> {
     let root = canonical_root(repo_root)?;
     let lock = read_lock(&root)?;
     let mut plan = image_plan_with_preparation(&lock, preparations)?;
     let engine = detect_engine()?;
+    cache.build_args(engine)?;
     let executor = crate::executor::resolve(&root, engine, &plan.platform, executor_image)?;
     crate::executor::bind(&mut plan, &executor);
-    if current_image_plan(&root, engine, &lock, preparations)
-        .is_ok_and(|current| current.dockerfile == plan.dockerfile)
+    if cache.to.is_empty()
+        && current_image_plan(&root, engine, &lock, preparations)
+            .is_ok_and(|current| current.dockerfile == plan.dockerfile)
     {
         return Ok(format!("current {}", plan.tag));
     }
     crate::executor::validate_substrate(&root, engine, &lock)?;
-    build_image(&root, engine, &plan, &lock, preparations)?;
-    if crate::executor::executable_digest(&root, engine, &plan.tag)? != executor.executable_digest {
+    build_image(&root, engine, &plan, &lock, preparations, cache)?;
+    validate_assembly(&root, engine, &lock, &plan, executor)?;
+    current_image_plan(&root, engine, &lock, preparations)?;
+    Ok(format!("built {}", plan.tag))
+}
+
+fn validate_assembly(
+    root: &Path,
+    engine: Engine,
+    lock: &EnvironmentLock,
+    plan: &ImagePlan,
+    executor: crate::executor::ExecutorIdentity,
+) -> Result<(), BackendError> {
+    if crate::executor::executable_digest(root, engine, &plan.tag)? != executor.executable_digest {
         return Err(crate::executor::rebuild(
             "assembled executable differs from its source image",
         ));
     }
-    let metadata = crate::executor::inspect(&root, engine, &plan.tag)?;
+    let metadata = crate::executor::inspect(root, engine, &plan.tag)?;
     let image_id = metadata["Id"].as_str().unwrap_or("").to_owned();
-    crate::executor::persist(&root, &lock, &plan, executor, image_id)?;
-    current_image_plan(&root, engine, &lock, preparations)?;
-    Ok(format!("built {}", plan.tag))
+    crate::executor::persist(root, lock, plan, executor, image_id)
 }
 
 fn build_image(
@@ -237,15 +302,16 @@ fn build_image(
     plan: &ImagePlan,
     lock: &EnvironmentLock,
     preparations: &[DependencyPreparationPlan],
+    cache: &BuildCache,
 ) -> Result<(), BackendError> {
     let input = BuildInput::create(root, plan, preparations)?;
-    let mut args = vec![
-        "build".to_owned(),
+    let mut args = cache.build_args(engine)?;
+    args.extend([
         "--tag".to_owned(),
         plan.tag.clone(),
         "--platform".to_owned(),
         plan.platform.clone(),
-    ];
+    ]);
     args.extend(mise_github_token_secret_args());
     args.extend([
         "--file".to_owned(),
@@ -314,6 +380,9 @@ impl BuildInput {
                     if let Err(error) = restrict_directory(&path)
                         .and_then(|()| write_new_file(&path.join("Dockerfile"), &plan.dockerfile))
                         .and_then(|()| write_new_file(&path.join("mise.toml"), &plan.mise_toml))
+                        .and_then(|()| {
+                            write_new_file(&path.join("runtime-mise.toml"), &plan.runtime_mise_toml)
+                        })
                     {
                         let _ = fs::remove_dir_all(&path);
                         return Err(BackendError::execution(format!(
@@ -457,4 +526,37 @@ pub(super) fn current_image_plan(
     // Launch by immutable engine identity, even if a tag moves after validation.
     plan.tag = record.image_id;
     Ok(plan)
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn external_cache_requires_buildx_and_keeps_the_result_locally_loadable() {
+        assert_eq!(
+            BuildCache::default().build_args(Engine::Podman).unwrap(),
+            ["build"]
+        );
+        let cache = BuildCache {
+            from: vec!["type=local,src=/tmp/cache".into()],
+            to: vec!["type=local,dest=/tmp/new-cache,mode=max".into()],
+        };
+        assert!(cache.build_args(Engine::Podman).is_err());
+        let args = cache.build_args(Engine::Docker).unwrap();
+        assert_eq!(
+            &args[..4],
+            ["buildx", "build", "--load", "--provenance=false"]
+        );
+        assert_eq!(args[4], "--cache-from");
+        assert_eq!(args[6], "--cache-to");
+        assert!(
+            BuildCache {
+                from: vec![" ".into()],
+                ..BuildCache::default()
+            }
+            .build_args(Engine::Docker)
+            .is_err()
+        );
+    }
 }

@@ -79,7 +79,7 @@ passed to `env build --executor-image`; it never enters the committed lock.
 Candidate compilation caches have a PR-only prefix and publication never reads
 them. Cold caches use the same pinned builder, locked dependencies and validation.
 
-Lock consistency, repository self-validation and the five fixture jobs consume
+Lock consistency, repository self-validation and the selected fixture jobs consume
 the same candidate. Repository validation and the Rust fixture are independent;
 no fixture job compiles its own orchestrator or executor. Compiling a fixture's
 own tests inside its managed environment is still part of its quality contract.
@@ -106,3 +106,48 @@ some failing quality signals; their semantic validator must still succeed.
 Measure first actionable failure, elapsed run time, summed job time, candidate
 build count, transfer/import time and warm/cold cache behavior separately. The
 8–9 minute full-PR target is a comparison goal, not a reason to omit coverage.
+
+
+## Composed fixtures and proportional coverage
+
+The fixture manifest includes all-five-language, Rust+Node and Kotlin+Go cases.
+The shared runner materializes tracked canonical examples into disposable Git
+workspaces, retaining their native package locks. Rust invokes Node; a Kotlin
+test invokes Go, which invokes Java. The Rust+Node case includes a second Node
+workspace. Validation requires every declared target, the expected per-target
+policy outcomes, aggregate failure accounting, root development access, and
+exactly one quality-workload container. Setup and access launches are recorded
+separately in the retained evidence.
+
+The coordinator retains its changed-file inventory, selection reason and omitted
+fixtures. Shared core, environment, schema, Cargo, workflow or unknown changes
+run every fixture. Adapter changes retain their native fixture and all interacting
+compositions. Classic, managed repository, lock consistency and audit gates remain
+required. Documentation deployment filters its own inputs and retains manual dispatch.
+
+## Publication and recovery
+
+`release.yml` keeps Release Please and release-lock PR maintenance separate from
+`release-publication.yml`. The latter runs under a release-tag concurrency group
+with cancellation disabled. Both the caller and publication workflow retain
+unconditional completion checks; a public release cannot be considered complete
+when a publication or validation job is skipped, cancelled or missing.
+
+Linux executables build once in the pinned Bookworm builder. Downloadable archives
+and executor images consume those same bytes; macOS retains native builds.
+`release_artifacts.py` centralizes peeled-tag source checks, exact archive inventory,
+checksum generation, public verification and intentional overwrite recovery.
+Boundary checks still run before binary and image promotion. Recovery uses the
+current workflow/helpers with tagged source. Public installer and managed fixture
+evidence run on both Linux architectures; older tags retain their declared fixture
+and lock protocol rather than receiving invented compatibility claims.
+
+The signer identity is now the trusted `release-publication.yml` workflow on main,
+matching [Sigstore's reusable-workflow identity contract](https://github.com/sigstore/fulcio/blob/main/docs/oidc.md).
+Existing published images remain available during the migration.
+
+Performance comparisons must identify the source, cache state and selected work.
+The earlier full PR measured 7m16s / 22m51s summed jobs with a cold candidate cache,
+and 6m57s / 19m26s on a confirmed warm candidate rerun. Other caches were uncontrolled.
+The new composition coverage and cache transfer costs must be included in the next
+comparison; these earlier measurements are not a claim for this expanded suite.

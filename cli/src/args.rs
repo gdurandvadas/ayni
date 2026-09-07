@@ -128,6 +128,8 @@ impl EnvCommands {
             Self::Build(options) => Operation::EnvBuild(crate::application::EnvBuildOperation {
                 repo_root: options.repo_root,
                 executor_image: options.executor_image,
+                cache_from: options.cache_from,
+                cache_to: options.cache_to,
             }),
             Self::Storage(options) => Operation::EnvStorage(options.into_operation()),
             Self::Prune(options) => Operation::EnvPrune(options.into_operation()),
@@ -413,7 +415,7 @@ impl EnvPruneOptions {
 
 #[derive(Args, Debug)]
 struct EnvironmentTargetOptions {
-    /// Select a locked language target; required with --root and when otherwise ambiguous.
+    /// Activate one locked target instead of the composed repository environment; required with --root.
     #[arg(long, value_enum)]
     language: Option<LanguageArg>,
     /// Select one normalized locked root.
@@ -697,6 +699,12 @@ struct EnvBuildOptions {
     /// Use this immutable executor image without changing the environment lock.
     #[arg(long, value_name = "REFERENCE@sha256:DIGEST")]
     executor_image: Option<String>,
+    /// Import an external Buildx cache; repeat for multiple sources. Does not change the lock.
+    #[arg(long, value_name = "CACHE")]
+    cache_from: Vec<String>,
+    /// Export an external Buildx cache; repeat for multiple destinations. Does not change the lock.
+    #[arg(long, value_name = "CACHE")]
+    cache_to: Vec<String>,
 }
 
 #[cfg(test)]

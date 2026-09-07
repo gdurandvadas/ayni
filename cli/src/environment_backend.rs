@@ -37,10 +37,14 @@ pub(crate) fn build(
     result((|| {
         let (root, plan) = current_plan(&operation.repo_root, None, registry)?;
         let preparations = dependency_preparations(&root, registry, &plan)?;
-        ayni_environment::build_prepared_with_executor(
+        ayni_environment::build_prepared_with_cache(
             &root,
             &preparations,
             operation.executor_image.as_deref(),
+            &ayni_environment::BuildCache {
+                from: operation.cache_from,
+                to: operation.cache_to,
+            },
         )
     })())
 }

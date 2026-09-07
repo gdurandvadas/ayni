@@ -166,6 +166,8 @@ Build the repository code-environment image from a current lock
 
   Default value: `.`
 * `--executor-image <REFERENCE@sha256:DIGEST>` — Use this immutable executor image without changing the environment lock
+* `--cache-from <CACHE>` — Import an external Buildx cache; repeat for multiple sources. Does not change the lock
+* `--cache-to <CACHE>` — Export an external Buildx cache; repeat for multiple destinations. Does not change the lock
 
 
 
@@ -232,7 +234,7 @@ Enter the managed environment with the checkout mounted
 * `--repo-root <REPO_ROOT>`
 
   Default value: `.`
-* `--language <LANGUAGE>` — Select a locked language target; required with --root and when otherwise ambiguous
+* `--language <LANGUAGE>` — Activate one locked target instead of the composed repository environment; required with --root
 
   Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
@@ -257,7 +259,7 @@ Run an arbitrary command inside the managed environment
 * `--repo-root <REPO_ROOT>`
 
   Default value: `.`
-* `--language <LANGUAGE>` — Select a locked language target; required with --root and when otherwise ambiguous
+* `--language <LANGUAGE>` — Activate one locked target instead of the composed repository environment; required with --root
 
   Possible values: `rust`, `go`, `node`, `python`, `kotlin`
 
