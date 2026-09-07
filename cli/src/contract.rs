@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 
-const CONTRACT_PROJECTION_VERSION: &str = "0.5.0";
+const CONTRACT_PROJECTION_VERSION: &str = "0.6.0";
 const SIGNALS: [SignalKind; 6] = [
     SignalKind::Test,
     SignalKind::Coverage,
@@ -29,7 +29,6 @@ struct ContractProjection {
 
 #[derive(Debug, Serialize)]
 struct EnvironmentProjection {
-    signal_tool_ownership: ayni_core::SignalToolOwnership,
     tools: Vec<EnvironmentToolProjection>,
     debian_packages: Vec<String>,
     docker: DockerAccess,
@@ -149,7 +148,6 @@ fn project(
     Ok(ContractProjection {
         projection_version: CONTRACT_PROJECTION_VERSION,
         environment: EnvironmentProjection {
-            signal_tool_ownership: policy.environment.signal_tools.ownership,
             tools: policy
                 .environment_tools()
                 .iter()
@@ -275,12 +273,6 @@ fn render_human(projection: &ContractProjection) -> String {
         projection.environment.resources.memory_swap_mib,
         projection.environment.resources.pids,
         projection.environment.resources.nofile,
-    )
-    .expect("writing to String cannot fail");
-    writeln!(
-        output,
-        "  signal tool ownership: {:?}",
-        projection.environment.signal_tool_ownership
     )
     .expect("writing to String cannot fail");
     writeln!(output, "  tools:").expect("writing to String cannot fail");

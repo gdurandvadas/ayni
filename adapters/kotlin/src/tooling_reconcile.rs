@@ -21,7 +21,7 @@ pub(crate) fn plan(request: &ToolingRequest) -> Result<ToolingPlan, AdapterError
             None,
         ))
     });
-    finish(&mut plan, request);
+    finish(&mut plan);
     Ok(plan)
 }
 fn error(cause: impl std::fmt::Display) -> AdapterError {

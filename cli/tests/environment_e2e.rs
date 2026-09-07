@@ -243,7 +243,7 @@ fn kotlin_environment_adapter_plans_jdk_wrapper_and_locked_gradle_inputs() {
 }
 
 #[test]
-fn ayni_ownership_is_reserved_until_reconciliation_is_available() {
+fn removed_signal_tool_ownership_is_rejected() {
     let root = TempDir::new().unwrap();
     let config = "[environment.signal_tools]\nownership = 'ayni'\n";
     fs::write(root.path().join(".ayni.toml"), config).unwrap();
@@ -255,10 +255,7 @@ fn ayni_ownership_is_reserved_until_reconciliation_is_available() {
             .output()
             .unwrap();
         assert!(!output.status.success());
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("Ayni-owned signal tooling is not available yet")
-        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unknown field `signal_tools`"));
         assert_eq!(
             fs::read_to_string(root.path().join(".ayni.lock")).unwrap(),
             "existing lock"

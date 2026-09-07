@@ -1,8 +1,8 @@
 //! Shared read-only reconciliation mechanics; native metadata stays in adapters.
 use ayni_core::{
-    AdapterError, CatalogEntry, ManagedToolSpec, SignalToolOwnership, ToolBaseline,
-    ToolInstallationScope, ToolIntegration, ToolVersionAuthority, ToolingDiagnostic, ToolingPlan,
-    ToolingRequest, ToolingRequirement, VersionRequirement, select_managed_tools,
+    AdapterError, CatalogEntry, ManagedToolSpec, ToolBaseline, ToolInstallationScope,
+    ToolIntegration, ToolVersionAuthority, ToolingDiagnostic, ToolingPlan, ToolingRequest,
+    ToolingRequirement, VersionRequirement, select_managed_tools,
 };
 
 pub fn baseline_plan(
@@ -26,11 +26,7 @@ pub fn baseline_plan(
             ),
             _ => (
                 ToolInstallationScope::Project,
-                if request.ownership() == SignalToolOwnership::Ayni {
-                    ToolVersionAuthority::AdapterPinned
-                } else {
-                    ToolVersionAuthority::ProjectLocked
-                },
+                ToolVersionAuthority::ProjectLocked,
             ),
         };
         let baseline = match spec.baseline {
@@ -64,9 +60,8 @@ pub fn diagnostic(
     }
 }
 
-/// Project versions remain authoritative. Ayni ownership requires exact native
-/// declarations and resolutions at the tested baseline. This never executes tools.
-pub fn finish(plan: &mut ToolingPlan, request: &ToolingRequest) {
+/// Check native declarations and resolutions without enforcing baseline versions.
+pub fn finish(plan: &mut ToolingPlan) {
     for tool in &plan.tools {
         if tool.scope != ToolInstallationScope::Project {
             continue;
@@ -78,15 +73,6 @@ pub fn finish(plan: &mut ToolingPlan, request: &ToolingRequest) {
                 "{} requires an unambiguous native lock resolution",
                 tool.tool
             ))
-        } else if request.ownership() == SignalToolOwnership::Ayni {
-            match &tool.baseline {
-                VersionRequirement::Exact { version }
-                    if tool.current_resolution.as_ref() != Some(version) =>
-                {
-                    Some(format!("{} must resolve to baseline {version}", tool.tool))
-                }
-                _ => None,
-            }
         } else {
             None
         };

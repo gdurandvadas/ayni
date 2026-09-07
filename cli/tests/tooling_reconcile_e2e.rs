@@ -4,9 +4,9 @@ use std::{
     process::{Command, Output},
 };
 use tempfile::TempDir;
-fn fixture(language: &str, ownership: &str, signal: &str) -> TempDir {
+fn fixture(language: &str, signal: &str) -> TempDir {
     let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join(".ayni.toml"), format!("[checks]\ntest = {}\ncoverage = {}\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n[languages]\nenabled = [\"{language}\"]\n[{language}]\nroots = [\".\"]\n[environment.signal_tools]\nownership = \"{ownership}\"\n", signal == "test", signal == "coverage")).unwrap();
+    fs::write(dir.path().join(".ayni.toml"), format!("[checks]\ntest = {}\ncoverage = {}\nsize = false\ncomplexity = false\ndeps = false\nmutation = false\n[languages]\nenabled = [\"{language}\"]\n[{language}]\nroots = [\".\"]", signal == "test", signal == "coverage")).unwrap();
     dir
 }
 fn run(root: &Path, check: bool) -> Output {
@@ -24,15 +24,18 @@ fn json(output: &Output) -> serde_json::Value {
 }
 #[test]
 fn missing_node_tools_are_a_successful_read_only_preview_and_failed_check() {
-    let dir = fixture("node", "ayni", "test");
+    let dir = fixture("node", "test");
     let manifest = r#"{"name":"fixture","version":"1.0.0","packageManager":"npm@10.8.2"}"#;
     fs::write(dir.path().join("package.json"), manifest).unwrap();
     let first = run(dir.path(), false);
     assert!(first.status.success(), "{first:?}");
     assert_eq!(first.stdout, run(dir.path(), false).stdout);
     let value = json(&first);
-    assert_eq!(value["projection_version"], "0.1.0");
-    assert_eq!(value["ownership"], "ayni");
+    assert_eq!(value["projection_version"], "0.2.0");
+    assert!(value.get("ownership").is_none());
+    for removed in ["inputs", "edits", "commands", "outputs"] {
+        assert!(value["targets"][0].get(removed).is_none());
+    }
     assert_eq!(value["reconciliation_required"], true);
     assert_eq!(value["targets"][0]["tools"][0]["tool"], "vitest");
     assert_eq!(run(dir.path(), true).status.code(), Some(1));
@@ -44,28 +47,28 @@ fn missing_node_tools_are_a_successful_read_only_preview_and_failed_check() {
     assert!(!dir.path().join("package-lock.json").exists());
 }
 #[test]
-fn project_versions_are_authoritative_but_ayni_requires_baseline() {
-    for (ownership, required) in [("project", false), ("ayni", true)] {
-        let dir = fixture("node", ownership, "test");
-        fs::write(
-            dir.path().join("package.json"),
-            r#"{"name":"fixture","devDependencies":{"vitest":"^2.0.0"}}"#,
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("package-lock.json"),
-            r#"{"lockfileVersion":3,"packages":{"node_modules/vitest":{"version":"2.1.0"}}}"#,
-        )
-        .unwrap();
-        let result = run(dir.path(), false);
-        assert!(result.status.success(), "{result:?}");
-        assert_eq!(json(&result)["reconciliation_required"], required);
-        assert_eq!(run(dir.path(), true).status.success(), !required);
-    }
+fn project_versions_are_authoritative() {
+    let required = false;
+    let dir = fixture("node", "test");
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name":"fixture","devDependencies":{"vitest":"^2.0.0"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("package-lock.json"),
+        r#"{"lockfileVersion":3,"packages":{"node_modules/vitest":{"version":"2.1.0"}}}"#,
+    )
+    .unwrap();
+    let result = run(dir.path(), false);
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(json(&result)["reconciliation_required"], required);
+    assert_eq!(run(dir.path(), true).status.success(), !required);
 }
+
 #[test]
 fn node_incompatible_lock_fails_project_check() {
-    let dir = fixture("node", "project", "test");
+    let dir = fixture("node", "test");
     fs::write(
         dir.path().join("package.json"),
         r#"{"devDependencies":{"vitest":"^3.0.0"}}"#,
@@ -80,7 +83,7 @@ fn node_incompatible_lock_fails_project_check() {
 }
 #[test]
 fn python_missing_lock_still_reports_every_enabled_baseline() {
-    let dir = fixture("python", "ayni", "test");
+    let dir = fixture("python", "test");
     fs::write(
         dir.path().join("pyproject.toml"),
         "[project]\nname = 'fixture'\nversion = '1.0.0'\n",
@@ -100,7 +103,7 @@ fn python_missing_lock_still_reports_every_enabled_baseline() {
 }
 #[test]
 fn kotlin_preserves_jacoco_and_reports_missing_integrity_evidence() {
-    let dir = fixture("kotlin", "ayni", "coverage");
+    let dir = fixture("kotlin", "coverage");
     fs::write(
         dir.path().join("settings.gradle.kts"),
         "rootProject.name = \"fixture\"",
@@ -120,7 +123,7 @@ fn kotlin_preserves_jacoco_and_reports_missing_integrity_evidence() {
 }
 #[test]
 fn custom_overrides_suppress_default_tools() {
-    let dir = fixture("node", "ayni", "test");
+    let dir = fixture("node", "test");
     let path = dir.path().join(".ayni.toml");
     let mut config = fs::read_to_string(&path).unwrap();
     config.push_str("\n[node.tooling.test]\ncommand = 'custom-runner'\nargs = []\n");
@@ -145,23 +148,18 @@ fn isolated_tools_require_no_application_manifest_changes() {
         ),
         ("go", "go.mod", "module example.com/fixture\n\ngo 1.24.0\n"),
     ] {
-        let dir = fixture(language, "ayni", "coverage");
+        let dir = fixture(language, "coverage");
         fs::write(dir.path().join(name), content).unwrap();
         let result = run(dir.path(), true);
         assert!(result.status.success(), "{language}: {result:?}");
         assert_eq!(fs::read_to_string(dir.path().join(name)).unwrap(), content);
-        assert!(
-            json(&result)["targets"][0]["edits"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(json(&result)["targets"][0].get("edits").is_none());
     }
 }
 #[cfg(unix)]
 #[test]
 fn escaping_target_symlink_is_rejected() {
-    let dir = fixture("node", "project", "test");
+    let dir = fixture("node", "test");
     let outside = TempDir::new().unwrap();
     std::os::unix::fs::symlink(outside.path(), dir.path().join("outside")).unwrap();
     let config = dir.path().join(".ayni.toml");
@@ -176,8 +174,8 @@ fn escaping_target_symlink_is_rejected() {
 }
 
 #[test]
-fn ayni_exact_python_declarations_and_lock_pass_but_drift_and_ambiguity_fail() {
-    let dir = fixture("python", "ayni", "test");
+fn exact_python_declarations_and_lock_pass_but_drift_and_ambiguity_fail() {
+    let dir = fixture("python", "test");
     fs::write(dir.path().join("pyproject.toml"), "[project]\nname='fixture'\nversion='1.0.0'\n[dependency-groups]\ndev=['pytest==9.0.3','pytest-json-report==1.5.0']\n").unwrap();
     let lock = "version=1\n[[package]]\nname='pytest'\nversion='9.0.3'\n[[package]]\nname='pytest-json-report'\nversion='1.5.0'\n";
     fs::write(dir.path().join("uv.lock"), lock).unwrap();
@@ -194,7 +192,7 @@ fn ayni_exact_python_declarations_and_lock_pass_but_drift_and_ambiguity_fail() {
 }
 #[test]
 fn kotlin_missing_jacoco_version_does_not_select_kover() {
-    let dir = fixture("kotlin", "ayni", "coverage");
+    let dir = fixture("kotlin", "coverage");
     fs::write(
         dir.path().join("build.gradle.kts"),
         "plugins { id(\"jacoco\") }",
@@ -206,14 +204,14 @@ fn kotlin_missing_jacoco_version_does_not_select_kover() {
 }
 #[test]
 fn unsupported_managers_and_plugin_aliases_fail_closed() {
-    let dir = fixture("node", "ayni", "test");
+    let dir = fixture("node", "test");
     fs::write(
         dir.path().join("package.json"),
         r#"{"packageManager":"yarn@4.0.0"}"#,
     )
     .unwrap();
     assert_eq!(run(dir.path(), true).status.code(), Some(1));
-    let dir = fixture("kotlin", "ayni", "coverage");
+    let dir = fixture("kotlin", "coverage");
     fs::write(
         dir.path().join("build.gradle.kts"),
         "plugins { alias(libs.plugins.kover) }",
@@ -223,7 +221,7 @@ fn unsupported_managers_and_plugin_aliases_fail_closed() {
 }
 #[test]
 fn a_new_repository_does_not_need_an_ayni_lock_to_reconcile() {
-    let dir = fixture("node", "ayni", "test");
+    let dir = fixture("node", "test");
     fs::write(
         dir.path().join("package.json"),
         r#"{"devDependencies":{"vitest":"3.2.7"}}"#,

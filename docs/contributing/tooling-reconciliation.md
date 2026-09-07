@@ -1,169 +1,60 @@
-# Tooling reconciliation — preview and baselines
+# Signal-tool inspection
 
-The intended lifecycle is: reconciliation establishes native declarations and
-locks, `env lock` snapshots exact requirements, and `env build` installs them.
-Milestones 1–3 implement the core boundary, adapter-owned baseline inventories,
-and read-only `tools reconcile` preview/check. Manifest editing, package-manager
-execution, and changes to `init` remain later milestones.
-
-## Ownership and version authority
-
-Omitted ownership means `project`, preserving existing policy behavior. Core
-parses `[environment.signal_tools] ownership = "project" | "ayni"`. Ayni-owned
-mode is not operational yet: environment planning and locking reject it rather
-than silently consuming project-owned declarations. Host quality commands keep
-their existing execution semantics and do not reconcile tooling.
-
-`ToolVersionAuthority` identifies who chooses the version, independently of a
-`RequirementSource` describing the supporting evidence:
-
-| Authority | Meaning | Current uses |
-| --- | --- | --- |
-| `adapter_pinned` | An exact adapter baseline selects the version. | cargo-llvm-cov, rust-code-analysis-cli, and gocyclo. |
-| `project_locked` | Native project declarations and locks select the version. | Node dependencies, uv dependencies, Gradle plugins. |
-| `lock_resolved` | Explicit locking resolves a provider requirement. | Available for explicitly unpinned provider requirements; no current isolated signal-tool baseline uses it. |
-| `toolchain` | The runtime/toolchain chooses a component's version. | Reserved for signal tools represented with runtime scope; existing Rust components remain in runtime requirements. |
-
-Adapter-pinned requirements must be exact. Project-locked tools use project
-scope, toolchain tools use runtime scope, and project tools cannot claim
-lock-resolved authority. Resolution retains the authority; it does not infer it
-from a changed source-kind string. Every serialized signal tool now requires
-`version_authority`. Environment plan schema is `0.4.0`; lock schema is `0.7.0` after the environment/executor migration.
-Older documents require regeneration. Signal artifacts and OCI image labels
-retain their existing versions.
-
-## Read-only proposals
-
-`ToolingRequest` carries an absolute repository root, normalized target,
-ownership, enabled signals, and the subset using default tools. A caller must
-validate filesystem containment before constructing it. Core performs lexical
-validation only.
-
-`ToolingPlan` contains tool requirements and current declaration/resolution
-text, an owning root, digest-tracked staging inputs, declaration edits,
-structured commands, exact output files, warnings, and conflicts. Existing
-outputs require matching input digests. Missing outputs use an explicit
-`Absent` preimage. An edit must match its output's preimage. Duplicate edits,
-conflicting input/output expectations, directory/file overlaps, escaping paths,
-and repository-control paths are rejected.
-
-Commands use program/argv/cwd/environment fields and declare exactly which
-allowlisted outputs they produce. Core reuses preparation's argument and
-environment validation, with additional executable-name and path checks.
-Command order is preserved. No shell is invoked, and validating a program name
-does not authorize resolving it from ambient PATH.
-
-Project-owned plans cannot propose mutations. Requirements can only cover the
-request's default-tool signals, so custom command overrides cannot be rewritten.
-A proposal may describe edits alongside conflicts for a future preview; an apply
-engine must refuse execution while conflicts exist.
-
-`LanguageAdapter::plan_tooling` checks request/capability language and validates
-the returned target and entire plan. Public proposal fields permit adapter
-assembly, but the plan has no unchecked deserializer. Do not call the raw
-capability in an executor or treat JSON output as permission to execute.
-
-## Required before apply support
-
-A future executor must resolve exact adapter-approved runtimes and package
-managers, verify every preimage, stage only approved inputs, and enforce canonical
-containment and symlink protections at the filesystem boundary. It must validate
-outputs and rerun reconciliation before publishing them. Metadata staging alone
-is not a sandbox for native build configuration or package-manager execution.
-
-Replacing individual files atomically is not an atomic multi-file transaction.
-The apply design still needs a recovery journal, rollback policy, and concurrent
-writer exclusion for publication failures or process crashes. Expected digests
-are necessary but do not close races between a final check and rename.
-
-The next milestone adds the staged apply engine.
-Keep new ownership out of generated init policies until the adapter planners
-and staged apply engine are available and verified.
-
-## Adapter-owned baselines (milestone 2)
-
-Each adapter's `tooling.rs` owns a `ManagedToolSpec` inventory exposed by
-`LanguageAdapter::managed_tool_specs`. It references catalog names; the catalog
-remains the single source for signal mappings. `validate_managed_tools` requires
-exactly one inventory entry per catalog tool, including runtimes. External tools
-require exact baselines; runtimes and components follow the selected toolchain.
-
-`select_managed_tools` accepts only the caller's default-tool signals, excludes
-runtime entries, and returns only matching signal associations. A reconciliation
-caller must pass `ToolingRequest::default_tool_signals()`, never all enabled
-signals: custom commands suppress default-tool reconciliation. The Kotlin
-adapter must narrow the two coverage alternatives after inspecting native
-metadata. `coverage_baseline` preserves Kover or JaCoCo when explicitly selected
-and prefers Kover when no provider is declared; conflicting declarations must be
-reported before selection. Disabled tools are not removed.
-
-| Adapter | Exact external baselines | Integration |
-| --- | --- | --- |
-| Rust | cargo-llvm-cov 0.8.5; rust-code-analysis-cli 0.0.25 | Isolated Cargo tools; llvm-tools-preview follows Rust. |
-| Go | gocyclo 0.6.0 | Isolated Go module provider; never added to application go.mod. |
-| Node | vitest 3.2.7; @vitest/coverage-v8 3.2.7; eslint 9.39.5; @typescript-eslint/parser 8.67.0 | Governing project devDependencies in a future reconciliation planner. |
-| Python | pytest 9.0.3; pytest-json-report 1.5.0; pytest-cov 6.0.0; coverage 7.6.12; complexipy 7.0.1; mutmut 2.5.1 (opt-in) | Governing uv development group in a future reconciliation planner. |
-| Kotlin | Kover 0.9.8; JaCoCo 0.8.12; Detekt 1.23.8; PIT Gradle plugin 1.19.0 (opt-in) | Exact plugin declarations; JaCoCo uses the bundled plugin's `toolVersion`. |
-
-These are compatibility baselines, not a latest-version policy. Native Node,
-Python, and Kotlin versions remain project-authoritative today; inventories do
-not overwrite their declarations, change init, or enable Ayni ownership. Existing
-supported project plugin aliases remain accepted. The Detekt 1.23.8 baseline
-specifically uses `io.gitlab.arturbosch.detekt`, not the newer `dev.detekt` plugin.
-
-Rust environment planning now pins rust-code-analysis-cli to 0.0.25 with
-`adapter_pinned` authority. Existing environment locks using lock-resolved
-complexity tooling must be regenerated. Exact tool versions are also checked for
-lock staleness, so future baseline upgrades invalidate older locks even when
-authority and source files are unchanged. Schema versions remain plan 0.4.0 and
-lock 0.6.0 because no serialized shape changes in milestone 2.
-
-Baseline tests check catalog completeness, selection, opt-in mutation behavior,
-and native example declarations. Rust 0.0.25 is exercised by checkout complexity
-verification and the final repository contract. New native fixtures execute
-mutmut, JaCoCo, and PIT, with their actual XML outputs retained in adapter parser
-tests. See [baseline fixture validation](tooling-baseline-fixtures.md) for commands,
-versions, and the limits of this evidence. Full native managed-environment runs
-across all five adapters remain a later milestone.
-
-## Read-only CLI (milestone 3)
+`ayni tools reconcile` inspects the signal tools required by `.ayni.toml` across
+Rust, npm/pnpm Node, Go modules, uv Python, and locked Gradle Kotlin. It reports
+native declarations, resolved versions, adapter baselines, and setup problems.
+It is read-only: fix native metadata with your package manager, then run
+`ayni env lock` and `ayni env build`.
 
 ```sh
-cargo run -p ayni-cli -- tools reconcile
-cargo run -p ayni-cli -- tools reconcile --check --output json
+ayni tools reconcile
+ayni tools reconcile --check --output json
 ```
 
-Use `--repo-root` and `--config` to select another repository policy. Preview
-returns 0 with drift or inspection blockers; `--check` returns 1 for required
-reconciliation, unsupported metadata, or a stale/invalid existing Ayni lock.
-Invalid policy or escaping configured targets return 2. No package manager is
-executed and no files, including `.ayni/`, are created or changed.
+Use `--repo-root` and `--config` for another repository. Preview returns 0 even
+when diagnostics require action; `--check` returns 1 for missing or incompatible
+metadata or a stale/invalid existing Ayni lock. Invalid policy or escaping roots
+return 2. Inspection creates no files and runs no package-manager commands.
 
-JSON projection `0.1.0` includes ownership, normalized targets and governing
-roots, tested baselines, current native declarations/resolutions, diagnostics,
-and environment-lock state. Targets and diagnostics are sorted. Missing native
-locks still produce baseline requirements and actionable blockers. Custom
-command overrides exclude their default tool requirements.
+## Version selection
 
-Node checks npm/pnpm native versions and member constraints against the governing
-baseline. Python checks uv declarations and unambiguous lock versions; unsupported
-requirement syntax or included dependency groups require manual review. Kotlin
-supports direct literal plugin declarations, preserves JaCoCo or Kover, and reports
-ambiguous providers and missing lock/integrity metadata. Plugin aliases require
-manual reconciliation. Native manifest editing and executable mutation proposals
-remain milestone 5: `edits`, `commands`, and `outputs` are currently empty, and
-required native changes are described in diagnostics. The preview is not an
-executable transaction or proof that a package manager can complete an update.
+Project declarations and native locks choose Node, Python, and Kotlin tool
+versions. Adapter baselines are compatibility information, not mandatory
+upgrades. Rust and Go isolated tools use exact adapter baselines; runtime
+components follow their toolchain. Custom command overrides exclude the default
+tools for the overridden signal.
 
-Rust and Go inventory validation requires no application dependency edits and
-makes no claims about tools installed on the host. Toolchain components follow
-the selected runtime. A missing `.ayni.lock` is reported as `absent` and is not
-itself tooling drift: environment locking follows reconciliation. An existing
-lock is checked for its policy and recorded native-input digests. The state
-`recorded_inputs_match` is deliberately narrower than environment readiness;
-`env doctor` remains the environment validation command. Proposed reconciliation
-reports `refresh_after_reconciliation` when those recorded inputs still match.
+Each adapter owns its `ManagedToolSpec` inventory. The catalog owns signal
+mappings; core checks completeness and selects only enabled default tools.
+`ToolVersionAuthority` records version selection independently of the source
+path. Environment planning and locking preserve this authority.
 
-Contract projection `0.5.0` includes `environment.signal_tool_ownership`.
-Ayni ownership remains unavailable in environment lifecycle commands until the
-apply and lifecycle integration milestones land.
+Node checks npm/pnpm declarations against locked versions. Python checks uv
+resolutions against native requirements and reports ambiguous versions or
+unsupported requirement syntax. Kotlin preserves the declared Kover or JaCoCo
+provider and checks direct plugin versions, dependency locks, and verification
+metadata. Plugin aliases require manual inspection. Rust and Go inspection
+reports isolated tool requirements without claiming they are installed on the
+host. See each [adapter guide](/adapters/rust) for supported project shapes.
+
+## Result contract
+
+JSON projection `0.2.0` contains normalized targets, governing roots, tool
+requirements, current declarations/resolutions, diagnostics, and environment
+lock state. Targets and diagnostics are deterministic. The removed `ownership`,
+`inputs`, `edits`, `commands`, and `outputs` fields described unimplemented
+behavior and are no longer serialized. Contract projection `0.6.0` likewise
+removes `environment.signal_tool_ownership`. Remove the former
+`[environment.signal_tools]` policy table; unknown settings fail validation.
+
+A missing `.ayni.lock` is reported as `absent`, not tooling drift. Existing locks
+are checked against policy and recorded native-input digests.
+`recorded_inputs_match` means those inputs match; run `env doctor` to validate
+environment readiness. `refresh_after_reconciliation` means native setup needs
+repair even though the recorded inputs currently match.
+
+`ToolingRequest` carries an absolute repository root, normalized target, enabled
+signals, and the subset using default tools. The caller checks filesystem
+containment. `LanguageAdapter::plan_tooling` validates capability language,
+target identity, governing root, requirements, and diagnostic paths. There is no
+mutation plan, staging protocol, or apply executor.

@@ -1,23 +1,13 @@
 //! Read-only contracts for adapter-owned signal-tool reconciliation.
 //!
-//! Core validates semantic plans. It never reads repository files, executes a
-//! package manager, or applies edits. A future executor must independently check
-//! canonical containment and preimages before staging or publishing outputs.
+//! Core validates inspection results without reading files or executing tools.
 
 use crate::{
     AdapterError, Language, SignalKind, TargetIdentity, ToolInstallationScope, VersionRequirement,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SignalToolOwnership {
-    #[default]
-    Project,
-    Ayni,
-}
 
 /// Who selects the tool version, independently of the evidence source path.
 /// ProjectLocked includes declarations awaiting native-lock resolution; exact
@@ -56,7 +46,6 @@ pub struct ToolingRequest {
     repo_root: PathBuf,
     target: TargetIdentity,
     enabled_signals: BTreeSet<SignalKind>,
-    ownership: SignalToolOwnership,
     default_tool_signals: BTreeSet<SignalKind>,
 }
 
@@ -67,7 +56,6 @@ impl ToolingRequest {
         repo_root: PathBuf,
         target: TargetIdentity,
         enabled_signals: impl IntoIterator<Item = SignalKind>,
-        ownership: SignalToolOwnership,
         default_tool_signals: impl IntoIterator<Item = SignalKind>,
     ) -> Result<Self, AdapterError> {
         let error = |message| AdapterError::new(target.language, message);
@@ -85,7 +73,6 @@ impl ToolingRequest {
             repo_root,
             target,
             enabled_signals,
-            ownership,
             default_tool_signals,
         })
     }
@@ -99,57 +86,9 @@ impl ToolingRequest {
     pub fn enabled_signals(&self) -> &BTreeSet<SignalKind> {
         &self.enabled_signals
     }
-    pub fn ownership(&self) -> SignalToolOwnership {
-        self.ownership
-    }
     pub fn default_tool_signals(&self) -> &BTreeSet<SignalKind> {
         &self.default_tool_signals
     }
-}
-
-/// Absent is an explicit create-if-missing precondition, never an unchecked write.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ToolingPreimage {
-    Absent,
-    Sha256 { digest: String },
-}
-
-/// Existing metadata approved for copying into staging, including read-only inputs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ToolingInput {
-    pub path: String,
-    pub digest: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ToolingFileEdit {
-    pub path: String,
-    pub preimage: ToolingPreimage,
-    pub content: String,
-}
-
-/// A repository file approved for copy-back. Directory-wide outputs are forbidden.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ToolingOutput {
-    pub path: String,
-    pub preimage: ToolingPreimage,
-}
-
-/// Structured argv, not shell text. The future executor must resolve the exact
-/// adapter-approved executable; a bare name does not authorize ambient PATH use.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ToolingCommand {
-    pub program: String,
-    pub args: Vec<String>,
-    pub cwd: String,
-    pub environment: BTreeMap<String, String>,
-    /// Exact files this command may produce for copy-back, relative to the repo.
-    pub outputs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,18 +115,12 @@ pub struct ToolingDiagnostic {
 pub type ToolingWarning = ToolingDiagnostic;
 pub type ToolingConflict = ToolingDiagnostic;
 
-/// A proposal, not permission to execute. Public fields support adapter assembly;
-/// the LanguageAdapter wrapper revalidates the entire returned plan. There is no
-/// unchecked deserializer for this execution-sensitive boundary.
+/// Read-only inspection results. The adapter wrapper validates every result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ToolingPlan {
     pub target: TargetIdentity,
     pub owner_root: String,
     pub tools: Vec<ToolingRequirement>,
-    pub inputs: Vec<ToolingInput>,
-    pub edits: Vec<ToolingFileEdit>,
-    pub commands: Vec<ToolingCommand>,
-    pub outputs: Vec<ToolingOutput>,
     pub warnings: Vec<ToolingWarning>,
     pub conflicts: Vec<ToolingConflict>,
 }
@@ -198,10 +131,6 @@ impl ToolingPlan {
             owner_root: target.root.clone(),
             target,
             tools: Vec::new(),
-            inputs: Vec::new(),
-            edits: Vec::new(),
-            commands: Vec::new(),
-            outputs: Vec::new(),
             warnings: Vec::new(),
             conflicts: Vec::new(),
         }

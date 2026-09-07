@@ -3,7 +3,7 @@ use ayni_adapters_common::{
     repository::{read_optional_contained_string, repository_relative},
     tooling::{baseline_plan, diagnostic, finish},
 };
-use ayni_core::{AdapterError, Language, SignalToolOwnership, ToolingPlan, ToolingRequest};
+use ayni_core::{AdapterError, Language, ToolingPlan, ToolingRequest};
 
 pub(crate) fn plan(request: &ToolingRequest) -> Result<ToolingPlan, AdapterError> {
     let mut plan = baseline_plan(
@@ -21,7 +21,7 @@ pub(crate) fn plan(request: &ToolingRequest) -> Result<ToolingPlan, AdapterError
             None,
         ))
     });
-    finish(&mut plan, request);
+    finish(&mut plan);
     Ok(plan)
 }
 fn error(cause: impl std::fmt::Display) -> AdapterError {
@@ -36,10 +36,6 @@ fn inspect(request: &ToolingRequest, plan: &mut ToolingPlan) -> Result<(), Adapt
     let manifest = read_toml(repo, &path)?;
     let target_manifest = read_toml(repo, &target.join("pyproject.toml"))?;
     let lock = read_lock(repo, &owner)?;
-    let dev = manifest
-        .get("dependency-groups")
-        .and_then(|v| v.get("dev"))
-        .and_then(toml::Value::as_array);
     let mut declarations = Vec::new();
     collect_declarations(&manifest, &mut declarations)?;
     let mut members = Vec::new();
@@ -47,17 +43,6 @@ fn inspect(request: &ToolingRequest, plan: &mut ToolingPlan) -> Result<(), Adapt
     fill_requirements(request, plan, &declarations, &members, lock.as_ref())?;
     declarations.extend(members);
     check_resolutions(plan, &declarations);
-    if request.ownership() == SignalToolOwnership::Ayni {
-        check_owner(
-            plan,
-            dev,
-            &declarations,
-            (target != owner)
-                .then(|| repository_relative(repo, &target.join("pyproject.toml")))
-                .transpose()
-                .map_err(error)?,
-        )?;
-    }
     Ok(())
 }
 fn collect_declarations(
@@ -128,44 +113,6 @@ fn owner_root(
         }
     }
     Ok(owner)
-}
-
-fn check_owner(
-    plan: &mut ToolingPlan,
-    dev: Option<&Vec<toml::Value>>,
-    declarations: &[(String, String)],
-    member_path: Option<String>,
-) -> Result<(), AdapterError> {
-    for tool in &plan.tools {
-        let baseline = crate::tooling::PYTHON_TOOLS
-            .iter()
-            .find(|s| s.catalog_name == tool.tool)
-            .and_then(|s| s.exact_version())
-            .expect("project baseline");
-        let exact = format!("{}=={baseline}", tool.tool);
-        if !dev.is_some_and(|values| values.iter().any(|v| v.as_str() == Some(&exact))) {
-            plan.conflicts.push(diagnostic(
-                "tooling.owner_declaration_required",
-                format!("declare {exact} in governing dependency-groups.dev"),
-                tool.declaration_path.clone(),
-            ));
-        }
-        if member_path.is_some()
-            && declarations.iter().any(|(name, text)| {
-                name == &tool.tool && !satisfies(text, baseline).unwrap_or(false)
-            })
-        {
-            plan.conflicts.push(diagnostic(
-                "tooling.member_constraint",
-                format!(
-                    "{} has constraints requiring manual compatibility review",
-                    tool.tool
-                ),
-                member_path.clone(),
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn satisfies(declaration: &str, version: &str) -> Result<bool, AdapterError> {

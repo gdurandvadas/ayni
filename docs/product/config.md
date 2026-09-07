@@ -11,7 +11,7 @@ and tool command overrides.
 Use `ayni contract show` to print a concise, deterministic projection of the
 validated configured policy. Pass `--config <path>` to select a policy other
 than `./.ayni.toml`, or `--output json` for a machine-readable, deterministic
-projection. JSON output has a `projection_version` field (currently `0.5.0`),
+projection. JSON output has a `projection_version` field (currently `0.6.0`),
 ordered `languages` and `signals` arrays, and structured `warnings`. The
 command shows every signal's enabled state for each enabled language,
 normalized roots, configured thresholds, size rules,
@@ -50,19 +50,14 @@ Everything under a language key uses normal TOML **single-bracket** tables and i
 
 ## Managed repository environment
 
-Signal-tool ownership defaults to `project`: native project declarations and
-locks remain authoritative. It can be written explicitly as:
+Native project declarations and locks select project-local signal-tool versions.
+Use `ayni tools reconcile --check` to inspect required declarations and lock
+resolutions before building an environment. Fix diagnostics with the project's
+native package manager, then regenerate `.ayni.lock` with `ayni env lock`.
 
-```toml
-[environment.signal_tools]
-ownership = "project"
-```
-
-The core ownership contract also recognizes `ayni` for the upcoming tooling
-reconciliation capability. It is reserved in this milestone: `env show` and
-`env lock` reject Ayni ownership until reconciliation is implemented. There is
-no `tools reconcile` command yet, and `init` keeps its existing behavior. See
-the [reconciliation implementation contract](../contributing/tooling-reconciliation.md).
+The former `[environment.signal_tools]` ownership setting has been removed;
+delete that table from existing policies. Unknown settings are rejected.
+See the [tooling inspection contract](../contributing/tooling-reconciliation.md).
 
 Language adapters contribute the runtimes, package managers, and signal tools
 needed for their configured quality checks. Repositories may supplement that
