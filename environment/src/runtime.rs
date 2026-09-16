@@ -546,6 +546,33 @@ fn base_launch_args(
     capabilities: EnvironmentCapabilities,
     resources: EnvironmentResourceLimits,
 ) -> Result<Vec<String>, BackendError> {
+    base_launch_args_with_identity(engine, capabilities, resources, LaunchIdentity::Host)
+}
+
+pub(super) fn materialization_launch_args(
+    engine: Engine,
+    resources: EnvironmentResourceLimits,
+) -> Result<Vec<String>, BackendError> {
+    base_launch_args_with_identity(
+        engine,
+        EnvironmentCapabilities::default(),
+        resources,
+        LaunchIdentity::Image,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum LaunchIdentity {
+    Host,
+    Image,
+}
+
+fn base_launch_args_with_identity(
+    engine: Engine,
+    capabilities: EnvironmentCapabilities,
+    resources: EnvironmentResourceLimits,
+    identity: LaunchIdentity,
+) -> Result<Vec<String>, BackendError> {
     let network = match capabilities.network {
         NetworkAccess::None => "none",
         NetworkAccess::Bridge => "bridge",
@@ -573,9 +600,12 @@ fn base_launch_args(
         "--tmpfs".into(),
         "/tmp:rw,exec,nosuid,size=1g".into(),
     ];
-    match engine {
-        Engine::Docker => args.extend(["--user".into(), host_identity()]),
-        Engine::Podman => args.extend(["--userns".into(), "keep-id".into()]),
+    match (engine, identity) {
+        (Engine::Docker, LaunchIdentity::Host) => args.extend(["--user".into(), host_identity()]),
+        (Engine::Podman, LaunchIdentity::Host) => {
+            args.extend(["--userns".into(), "keep-id".into()]);
+        }
+        (_, LaunchIdentity::Image) => {}
     }
     append_docker_socket_args(&mut args, engine, capabilities.docker)?;
     Ok(args)
@@ -1203,6 +1233,18 @@ mod tests {
         assert!(args.windows(2).any(|pair| pair == ["--network", "bridge"]));
         assert!(!args.iter().any(|arg| arg.contains("docker.sock")));
         assert!(args.windows(2).any(|pair| pair == ["--cap-drop", "ALL"]));
+    }
+
+    #[test]
+    fn materialization_runs_as_the_image_user_without_relaxing_isolation() {
+        for engine in [Engine::Docker, Engine::Podman] {
+            let args = materialization_launch_args(engine, EnvironmentResourceLimits::default())
+                .expect("materialization args");
+            assert!(args.windows(2).any(|pair| pair == ["--network", "none"]));
+            assert!(args.windows(2).any(|pair| pair == ["--cap-drop", "ALL"]));
+            assert!(!args.iter().any(|arg| arg == "--user"));
+            assert!(!args.iter().any(|arg| arg == "--userns"));
+        }
     }
 
     #[test]

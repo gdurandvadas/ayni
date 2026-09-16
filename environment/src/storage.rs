@@ -99,6 +99,10 @@ pub struct StoragePruneResult {
     /// engine-wide across repositories. Repository-local state does not need
     /// this acknowledgement.
     pub images_requested: bool,
+    /// Whether the caller explicitly selected the currently locked
+    /// repository-local state. Removing it is safe: Ayni recreates it from
+    /// the current lock and image on the next managed command.
+    pub current_state_requested: bool,
     pub report: StorageReport,
     pub removed_images: Vec<String>,
     pub removed_state_generations: Vec<String>,
@@ -128,8 +132,9 @@ pub fn prune_storage(
     repo_root: &Path,
     apply: bool,
     images: bool,
+    current: bool,
 ) -> Result<StoragePruneResult, BackendError> {
-    prune_storage_prepared(repo_root, &[], apply, images)
+    prune_storage_prepared(repo_root, &[], apply, images, current)
 }
 
 pub fn prune_storage_prepared(
@@ -137,12 +142,19 @@ pub fn prune_storage_prepared(
     preparations: &[DependencyPreparationPlan],
     apply: bool,
     images: bool,
+    current: bool,
 ) -> Result<StoragePruneResult, BackendError> {
     let (root, engine, lock, plan) = storage_context(repo_root, preparations)?;
-    let report = report_for_context(&root, engine, &lock, &plan)?;
+    let mut report = report_for_context(&root, engine, &lock, &plan)?;
+    if current {
+        for generation in &mut report.state_generations {
+            generation.prune_candidate = true;
+        }
+    }
     let mut result = StoragePruneResult {
         applied: apply,
         images_requested: images,
+        current_state_requested: current,
         report,
         removed_images: Vec::new(),
         removed_state_generations: Vec::new(),

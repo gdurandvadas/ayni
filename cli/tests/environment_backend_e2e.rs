@@ -198,9 +198,7 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         "RUN [\"rustup\",\"component\",\"add\",\"--toolchain\",\"1.93.0\",\"llvm-tools-preview\"]"
     ));
     assert!(dockerfile.contains("FROM ayni-runtime AS preparation-"));
-    assert!(
-        dockerfile.contains("--chown=10001:10001 --chmod=0755 /home/ayni/.cache /home/ayni/.cache")
-    );
+    assert!(dockerfile.contains("--chown=10001:10001 /home/ayni/.cache /opt/ayni/cache-seed"));
     assert!(!dockerfile.contains("RUN chmod -R a+rX /home/ayni/.cache"));
     assert!(dockerfile.contains("\"cargo\",\"fetch\",\"--locked\""));
     assert!(!dockerfile.contains(&root.path().display().to_string()));
@@ -1106,6 +1104,28 @@ fn storage_prune_separates_repo_state_from_engine_wide_images() {
     assert!(!stale_state.exists());
     assert!(current_state.exists());
 
+    let current_preview = command(&root, &["env", "prune", "--repo-root"])
+        .arg(root.path())
+        .arg("--current")
+        .output()
+        .unwrap();
+    assert!(current_preview.status.success());
+    assert!(String::from_utf8_lossy(&current_preview.stdout).contains("included with --current"));
+    assert!(current_state.exists());
+
+    let current_applied = command(&root, &["env", "prune", "--repo-root"])
+        .arg(root.path())
+        .args(["--apply", "--current"])
+        .output()
+        .unwrap();
+    assert!(
+        current_applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&current_applied.stderr)
+    );
+    assert!(!current_state.exists());
+    assert!(unclassified_state.exists());
+
     let images_applied = command(&root, &["env", "prune", "--repo-root"])
         .arg(root.path())
         .args(["--apply", "--images"])
@@ -1121,7 +1141,7 @@ fn storage_prune_separates_repo_state_from_engine_wide_images() {
             .contains("explicitly selected with --images")
     );
     assert_eq!(fs::read_to_string(&removed).unwrap().trim(), "sha256:stale");
-    assert!(current_state.exists());
+    assert!(!current_state.exists());
 }
 
 fn assert_executor_build_contract(root: &TempDir) {

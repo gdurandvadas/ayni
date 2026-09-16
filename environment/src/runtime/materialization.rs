@@ -1,7 +1,7 @@
 use super::engine::write_new_file;
 use super::{
     Engine, WORKSPACE, base_launch_args, create_contained_directory_tree, engine_name,
-    target_environment,
+    materialization_launch_args, target_environment,
 };
 use crate::image::ImagePlan;
 use crate::{BackendError, concise_output};
@@ -214,7 +214,7 @@ fn materialize_cache(
         root,
         engine,
         image_tag: &image_plan.tag,
-        source: "/home/ayni/.cache/.",
+        source: &format!("{}/.", crate::preparation::CACHE_SEED_ROOT),
         destination: staging.path(),
         container_destination: "/tmp/ayni/cache",
         description: "prepared tool cache",
@@ -775,11 +775,7 @@ fn copy_image_tree(request: ImageTreeCopy<'_>) -> Result<(), BackendError> {
         description,
         resources,
     } = request;
-    let mut args = base_launch_args(
-        engine,
-        ayni_core::EnvironmentCapabilities::default(),
-        resources,
-    )?;
+    let mut args = materialization_launch_args(engine, resources)?;
     args.extend([
         "--mount".into(),
         format!(
