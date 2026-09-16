@@ -80,6 +80,7 @@ pub(crate) struct EnvPruneOperation {
     pub output: OutputFormat,
     pub apply: bool,
     pub images: bool,
+    pub current: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]

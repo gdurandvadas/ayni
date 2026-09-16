@@ -203,7 +203,7 @@ Preview or remove stale repository state and explicitly selected images
 
 ###### **Options:**
 
-* `--repo-root <REPO_ROOT>` — Repository root whose current environment is retained
+* `--repo-root <REPO_ROOT>` — Repository root whose current environment is retained unless --current is set
 
   Default value: `.`
 * `--output <OUTPUT>` — Render a human-readable report or one JSON document
@@ -220,6 +220,9 @@ Preview or remove stale repository state and explicitly selected images
 * `--images` — Include non-current Ayni-owned images across the selected engine.
 
    Images can be shared by multiple repositories. This flag explicitly acknowledges the engine-wide scope; without it, only repository-local stale state is selected for removal.
+* `--current` — Include the current repository-local environment state.
+
+   The next managed command recreates it from the locked image. Current images remain retained because they can be shared across repositories.
 
 
 

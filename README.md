@@ -107,6 +107,16 @@ ayni env doctor
 ayni check
 ```
 
+Inspect managed-environment storage before reclaiming it. Pruning is a dry run
+by default; `--current` explicitly resets the current repository's derived
+state, which Ayni recreates from the lock on the next managed command:
+
+```sh
+ayni env storage
+ayni env prune
+ayni env prune --apply --current
+```
+
 `check`, `verify`, and `impact run` launch managed execution directly. The
 explicit `--host` mode is useful for evaluation and compatibility, but its
 runtime and tool versions are not locked. Supported project shapes and the
