@@ -146,11 +146,7 @@ pub fn prune_storage_prepared(
 ) -> Result<StoragePruneResult, BackendError> {
     let (root, engine, lock, plan) = storage_context(repo_root, preparations)?;
     let mut report = report_for_context(&root, engine, &lock, &plan)?;
-    if current {
-        for generation in &mut report.state_generations {
-            generation.prune_candidate = true;
-        }
-    }
+    mark_current_state_for_pruning(&mut report, current);
     let mut result = StoragePruneResult {
         applied: apply,
         images_requested: images,
@@ -164,48 +160,78 @@ pub fn prune_storage_prepared(
         return Ok(result);
     }
 
-    if images {
-        for image in result
-            .report
-            .images
-            .iter()
-            .filter(|image| image.prune_candidate)
-        {
-            let args = [String::from("image"), String::from("rm"), image.id.clone()];
-            match run_engine(&root, engine, &args) {
-                Ok(output) if output.status.success() => {
-                    result.removed_images.push(image.id.clone());
-                }
-                Ok(output) => result.failures.push(StoragePruneFailure {
-                    target: image.id.clone(),
-                    message: concise_output(&output.stderr),
-                }),
-                Err(error) => result.failures.push(StoragePruneFailure {
-                    target: image.id.clone(),
-                    message: error.message,
-                }),
-            }
+    prune_selected_images(&root, engine, &mut result);
+    prune_selected_state_generations(&root, &mut result);
+
+    Ok(result)
+}
+
+fn mark_current_state_for_pruning(report: &mut StorageReport, current: bool) {
+    if current {
+        for generation in &mut report.state_generations {
+            generation.prune_candidate = true;
         }
     }
+}
 
-    for generation in result
+fn prune_selected_images(root: &Path, engine: crate::Engine, result: &mut StoragePruneResult) {
+    if !result.images_requested {
+        return;
+    }
+
+    let image_ids = result
+        .report
+        .images
+        .iter()
+        .filter(|image| image.prune_candidate)
+        .map(|image| image.id.clone())
+        .collect::<Vec<_>>();
+    for image_id in image_ids {
+        prune_image(root, engine, result, image_id);
+    }
+}
+
+fn prune_image(
+    root: &Path,
+    engine: crate::Engine,
+    result: &mut StoragePruneResult,
+    image_id: String,
+) {
+    let args = [String::from("image"), String::from("rm"), image_id.clone()];
+    match run_engine(root, engine, &args) {
+        Ok(output) if output.status.success() => result.removed_images.push(image_id),
+        Ok(output) => result.failures.push(StoragePruneFailure {
+            target: image_id,
+            message: concise_output(&output.stderr),
+        }),
+        Err(error) => result.failures.push(StoragePruneFailure {
+            target: image_id,
+            message: error.message,
+        }),
+    }
+}
+
+fn prune_selected_state_generations(root: &Path, result: &mut StoragePruneResult) {
+    let generation_paths = result
         .report
         .state_generations
         .iter()
         .filter(|generation| generation.prune_candidate)
-    {
-        match remove_state_generation(&root, &generation.path) {
-            Ok(()) => result
-                .removed_state_generations
-                .push(generation.path.clone()),
-            Err(error) => result.failures.push(StoragePruneFailure {
-                target: generation.path.clone(),
-                message: error.message,
-            }),
-        }
+        .map(|generation| generation.path.clone())
+        .collect::<Vec<_>>();
+    for generation_path in generation_paths {
+        prune_state_generation(root, result, generation_path);
     }
+}
 
-    Ok(result)
+fn prune_state_generation(root: &Path, result: &mut StoragePruneResult, generation_path: String) {
+    match remove_state_generation(root, &generation_path) {
+        Ok(()) => result.removed_state_generations.push(generation_path),
+        Err(error) => result.failures.push(StoragePruneFailure {
+            target: generation_path,
+            message: error.message,
+        }),
+    }
 }
 
 fn storage_context(
