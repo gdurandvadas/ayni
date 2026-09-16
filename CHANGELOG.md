@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/gdurandvadas/ayni/compare/ayni-v0.12.0...ayni-v0.12.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* **environment:** isolate managed cache seeding ([#118](https://github.com/gdurandvadas/ayni/issues/118)) ([3aaa488](https://github.com/gdurandvadas/ayni/commit/3aaa4882c500ec2b4ec2d88cd99efd52236a8c64))
+
 ## [0.12.0](https://github.com/gdurandvadas/ayni/compare/ayni-v0.11.6...ayni-v0.12.0) (2026-09-07)
 
 
