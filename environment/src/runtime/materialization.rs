@@ -1,7 +1,7 @@
 use super::engine::write_new_file;
 use super::{
     Engine, WORKSPACE, base_launch_args, create_contained_directory_tree, engine_name,
-    materialization_launch_args, target_environment,
+    target_environment,
 };
 use crate::image::ImagePlan;
 use crate::{BackendError, concise_output};
@@ -19,25 +19,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-const COPY_IMAGE_TREE: &str = concat!(
-    "set -eu\n",
-    "archive_dir=$(mktemp -d /tmp/ayni-copy.XXXXXX)\n",
-    "archive_fifo=$archive_dir/archive\n",
-    "mkfifo \"$archive_fifo\"\n",
-    "trap 'rm -rf \"$archive_dir\"' EXIT HUP INT TERM\n",
-    "tar -C \"$1\" -cf - . > \"$archive_fifo\" &\n",
-    "producer=$!\n",
-    "consumer_status=0\n",
-    "tar -C \"$2\" -xf - --no-same-owner --no-same-permissions --no-overwrite-dir ",
-    "< \"$archive_fifo\" || consumer_status=$?\n",
-    "producer_status=0\n",
-    "wait \"$producer\" || producer_status=$?\n",
-    "rm -rf \"$archive_dir\"\n",
-    "trap - EXIT HUP INT TERM\n",
-    "[ \"$producer_status\" -eq 0 ]\n",
-    "[ \"$consumer_status\" -eq 0 ]",
-);
-
 pub(super) fn materialize_outputs(
     root: &Path,
     engine: Engine,
@@ -54,13 +35,7 @@ pub(super) fn materialize_outputs(
         .join(&fingerprint[..16.min(fingerprint.len())])
         .join(&preparation[..16.min(preparation.len())]);
     validate_output_ownership(lock, preparations)?;
-    let cache_destination = materialize_cache(
-        root,
-        engine,
-        image_plan,
-        &state_root,
-        lock.resource_limits(),
-    )?;
+    let cache_destination = materialize_cache(root, engine, image_plan, &state_root)?;
     let outputs = crate::preparation::unique_outputs(preparations);
     let mut destinations = BTreeMap::new();
     let mut handled = std::collections::BTreeSet::new();
@@ -188,7 +163,6 @@ fn materialize_cache(
     engine: Engine,
     image_plan: &ImagePlan,
     state_root: &Path,
-    resources: ayni_core::EnvironmentResourceLimits,
 ) -> Result<PathBuf, BackendError> {
     let parent_relative = state_root.join("cache");
     create_contained_directory_tree(root, &parent_relative)?;
@@ -216,9 +190,7 @@ fn materialize_cache(
         image_tag: &image_plan.tag,
         source: &format!("{}/.", crate::preparation::CACHE_SEED_ROOT),
         destination: staging.path(),
-        container_destination: "/tmp/ayni/cache",
         description: "prepared tool cache",
-        resources,
     })?;
     staging.publish(&destination)?;
     write_completion_marker(root, &marker, &image_plan.preparation_digest)?;
@@ -262,13 +234,7 @@ fn materialize_preparation_outputs(
         return Ok(pending_destinations(pending));
     }
 
-    stage_pending_outputs(
-        root,
-        engine,
-        image_plan,
-        &mut pending,
-        lock.resource_limits(),
-    )?;
+    stage_pending_outputs(root, engine, image_plan, &mut pending)?;
     run_preparation_for_outputs(
         root,
         engine,
@@ -343,7 +309,6 @@ fn stage_pending_outputs(
     engine: Engine,
     image_plan: &ImagePlan,
     outputs: &mut [PendingOutput<'_>],
-    resources: ayni_core::EnvironmentResourceLimits,
 ) -> Result<(), BackendError> {
     for output in outputs {
         if !output.current {
@@ -363,9 +328,7 @@ fn stage_pending_outputs(
                 image_tag: &image_plan.tag,
                 source: &source,
                 destination: staging.path(),
-                container_destination: "/tmp/ayni/dependencies",
                 description: "locked dependencies",
-                resources,
             })?;
         }
         output.staging = Some(staging);
@@ -759,9 +722,7 @@ struct ImageTreeCopy<'a> {
     image_tag: &'a str,
     source: &'a str,
     destination: &'a Path,
-    container_destination: &'a str,
     description: &'a str,
-    resources: ayni_core::EnvironmentResourceLimits,
 }
 
 fn copy_image_tree(request: ImageTreeCopy<'_>) -> Result<(), BackendError> {
@@ -771,36 +732,96 @@ fn copy_image_tree(request: ImageTreeCopy<'_>) -> Result<(), BackendError> {
         image_tag,
         source,
         destination,
-        container_destination,
         description,
-        resources,
     } = request;
-    let mut args = materialization_launch_args(engine, resources)?;
-    args.extend([
-        "--mount".into(),
-        format!(
-            "type=bind,source={},target={container_destination}",
-            destination.display()
-        ),
-        "--entrypoint".into(),
-        "/bin/sh".into(),
-        image_tag.into(),
-        "-c".into(),
-        COPY_IMAGE_TREE.into(),
-        "copy-image-tree".into(),
-        source.into(),
-        container_destination.into(),
-    ]);
-    let copied =
-        run_command(root, engine_name(engine), &args, DEFAULT_TOOL_TIMEOUT).map_err(|error| {
-            BackendError::execution(format!("failed to materialize {description}: {error}"))
-        })?;
-    if copied.status.success() {
+    let container = create_materialization_container(root, engine, image_tag, description)?;
+    let copied = run_command(
+        root,
+        engine_name(engine),
+        &[
+            "cp".into(),
+            format!("{container}:{source}"),
+            destination.display().to_string(),
+        ],
+        DEFAULT_TOOL_TIMEOUT,
+    );
+    let removed = remove_materialization_container(root, engine, &container);
+    match copied {
+        Err(error) => Err(BackendError::execution(format!(
+            "failed to materialize {description}: {error}"
+        ))),
+        Ok(output) if !output.status.success() => Err(BackendError::execution(format!(
+            "{description} materialization failed: {}",
+            concise_output(&output.stderr)
+        ))),
+        Ok(_) => removed,
+    }
+}
+
+fn create_materialization_container(
+    root: &Path,
+    engine: Engine,
+    image_tag: &str,
+    description: &str,
+) -> Result<String, BackendError> {
+    let created = run_command(
+        root,
+        engine_name(engine),
+        &["create".into(), image_tag.into()],
+        DEFAULT_TOOL_TIMEOUT,
+    )
+    .map_err(|error| {
+        BackendError::execution(format!("failed to prepare {description} copy: {error}"))
+    })?;
+    if !created.status.success() {
+        return Err(BackendError::execution(format!(
+            "failed to prepare {description} copy: {}",
+            concise_output(&created.stderr)
+        )));
+    }
+    parse_materialization_container_id(&created.stdout).map_err(|()| {
+        BackendError::execution(format!(
+            "{} engine create returned an invalid container identifier",
+            engine_name(engine)
+        ))
+    })
+}
+
+fn parse_materialization_container_id(output: &[u8]) -> Result<String, ()> {
+    let container = String::from_utf8_lossy(output).trim().to_owned();
+    if container.is_empty()
+        || !container
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        Err(())
+    } else {
+        Ok(container)
+    }
+}
+
+fn remove_materialization_container(
+    root: &Path,
+    engine: Engine,
+    container: &str,
+) -> Result<(), BackendError> {
+    let removed = run_command(
+        root,
+        engine_name(engine),
+        &["rm".into(), container.into()],
+        DEFAULT_TOOL_TIMEOUT,
+    )
+    .map_err(|error| {
+        BackendError::execution(format!(
+            "failed to remove temporary materialization container: {error}"
+        ))
+    })?;
+    if removed.status.success() {
         Ok(())
     } else {
         Err(BackendError::execution(format!(
-            "{description} materialization failed: {}",
-            concise_output(&copied.stderr)
+            "failed to remove temporary materialization container: {}",
+            concise_output(&removed.stderr)
         )))
     }
 }
@@ -1158,12 +1179,11 @@ fn run_materialization_commands(request: MaterializationRequest<'_>) -> Result<(
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{COPY_IMAGE_TREE, relocate_output_links};
+    use super::{parse_materialization_container_id, relocate_output_links};
     use ayni_core::{PreparationOutput, PreparationOutputMode};
     use std::fs;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
 
     fn test_directory(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -1279,39 +1299,13 @@ mod tests {
     }
 
     #[test]
-    fn copy_image_tree_propagates_archive_producer_failure() {
-        let root =
-            std::env::temp_dir().join(format!("ayni-copy-image-tree-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        let bin = root.join("bin");
-        let source = root.join("source");
-        let destination = root.join("destination");
-        fs::create_dir_all(&bin).expect("fake bin");
-        fs::create_dir_all(&source).expect("source");
-        fs::create_dir_all(&destination).expect("destination");
-        let tar = bin.join("tar");
-        fs::write(
-            &tar,
-            "#!/bin/sh\ncase \" $* \" in *' -cf '*) printf archive; exit 9;; *) cat >/dev/null; exit 0;; esac\n",
-        )
-        .expect("fake tar");
-        let mut permissions = fs::metadata(&tar).expect("fake tar metadata").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&tar, permissions).expect("executable fake tar");
-
-        let path = format!("{}:/usr/bin:/bin", bin.to_str().expect("UTF-8 test path"));
-        let status = Command::new("/bin/sh")
-            .args([
-                "-c",
-                COPY_IMAGE_TREE,
-                "copy-image-tree",
-                source.to_str().expect("UTF-8 source"),
-                destination.to_str().expect("UTF-8 destination"),
-            ])
-            .env("PATH", path)
-            .status()
-            .expect("run copy script");
-        let _ = fs::remove_dir_all(&root);
-        assert!(!status.success());
+    fn materialization_container_identifier_must_be_a_single_hex_value() {
+        assert_eq!(
+            parse_materialization_container_id(b"a1b2c3\n").expect("container identifier"),
+            "a1b2c3"
+        );
+        for invalid in [b"\n".as_slice(), b"a1b2\nextra\n", b"container-name\n"] {
+            assert!(parse_materialization_container_id(invalid).is_err());
+        }
     }
 }
