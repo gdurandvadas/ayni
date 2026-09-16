@@ -104,6 +104,11 @@ Docker or Podman stores the generated OCI image; Ayni stores materialized
 caches, dependencies, and execution state below `.ayni/environment/`. Generated
 state must not be committed.
 
+When a managed command needs prepared state, Ayni reads the locked image through
+the container engine's archive interface and unpacks it itself. It does not run
+image code for that transfer, and the resulting repository-local state is owned
+by the invoking user so it can be recreated on any compatible host.
+
 ## Plan and lock
 
 `env show` reads `.ayni.toml`, asks each enabled language adapter to discover

@@ -17,7 +17,8 @@ use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
-use std::time::Duration;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 pub(super) fn materialize_outputs(
     root: &Path,
@@ -735,27 +736,111 @@ fn copy_image_tree(request: ImageTreeCopy<'_>) -> Result<(), BackendError> {
         description,
     } = request;
     let container = create_materialization_container(root, engine, image_tag, description)?;
-    let copied = run_command(
-        root,
-        engine_name(engine),
-        &[
-            "cp".into(),
-            format!("{container}:{source}"),
-            destination.display().to_string(),
-        ],
-        DEFAULT_TOOL_TIMEOUT,
-    );
+    let copied = copy_container_archive(root, engine, &container, source, destination, description);
     let removed = remove_materialization_container(root, engine, &container);
     match copied {
-        Err(error) => Err(BackendError::execution(format!(
-            "failed to materialize {description}: {error}"
-        ))),
-        Ok(output) if !output.status.success() => Err(BackendError::execution(format!(
-            "{description} materialization failed: {}",
-            concise_output(&output.stderr)
-        ))),
-        Ok(_) => removed,
+        Ok(()) => removed,
+        Err(error) => Err(error),
     }
+}
+
+fn copy_container_archive(
+    root: &Path,
+    engine: Engine,
+    container: &str,
+    source: &str,
+    destination: &Path,
+    description: &str,
+) -> Result<(), BackendError> {
+    let mut copied = Command::new(engine_name(engine))
+        .current_dir(root)
+        .args(["cp", &format!("{container}:{source}"), "-"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            BackendError::execution(format!("failed to materialize {description}: {error}"))
+        })?;
+    let stdout = copied.stdout.take().ok_or_else(|| {
+        BackendError::execution(format!(
+            "failed to materialize {description}: engine copy stream is unavailable"
+        ))
+    })?;
+    let mut stderr = copied.stderr.take().ok_or_else(|| {
+        BackendError::execution(format!(
+            "failed to materialize {description}: engine diagnostics stream is unavailable"
+        ))
+    })?;
+    let extraction_destination = destination.to_path_buf();
+    let extracted =
+        std::thread::spawn(move || unpack_container_archive(stdout, &extraction_destination));
+    let diagnostics = std::thread::spawn(move || {
+        let mut diagnostics = Vec::new();
+        stderr.read_to_end(&mut diagnostics).map(|_| diagnostics)
+    });
+    let status = wait_for_container_archive(&mut copied, DEFAULT_TOOL_TIMEOUT, description)?;
+    let extracted = extracted.join().map_err(|_| {
+        BackendError::execution(format!(
+            "failed to materialize {description}: archive reader panicked"
+        ))
+    })?;
+    let diagnostics = diagnostics
+        .join()
+        .map_err(|_| {
+            BackendError::execution(format!(
+                "failed to materialize {description}: diagnostics reader panicked"
+            ))
+        })?
+        .map_err(|error| {
+            BackendError::execution(format!("failed to materialize {description}: {error}"))
+        })?;
+    if !status.success() {
+        return Err(BackendError::execution(format!(
+            "{description} materialization failed: {}",
+            concise_output(&diagnostics)
+        )));
+    }
+    extracted.map_err(|error| {
+        BackendError::execution(format!("failed to materialize {description}: {error}"))
+    })
+}
+
+fn wait_for_container_archive(
+    child: &mut Child,
+    timeout: Duration,
+    description: &str,
+) -> Result<ExitStatus, BackendError> {
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if started.elapsed() < timeout => {
+                std::thread::sleep(Duration::from_millis(25))
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(BackendError::execution(format!(
+                    "{description} materialization timed out after {} seconds",
+                    timeout.as_secs()
+                )));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(BackendError::execution(format!(
+                    "failed to materialize {description}: {error}"
+                )));
+            }
+        }
+    }
+}
+
+fn unpack_container_archive(stream: impl Read, destination: &Path) -> std::io::Result<()> {
+    let mut archive = tar::Archive::new(stream);
+    archive.set_preserve_permissions(false);
+    archive.set_preserve_ownerships(false);
+    archive.unpack(destination)
 }
 
 fn create_materialization_container(
@@ -1179,7 +1264,9 @@ fn run_materialization_commands(request: MaterializationRequest<'_>) -> Result<(
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{parse_materialization_container_id, relocate_output_links};
+    use super::{
+        parse_materialization_container_id, relocate_output_links, unpack_container_archive,
+    };
     use ayni_core::{PreparationOutput, PreparationOutputMode};
     use std::fs;
     use std::os::unix::fs::symlink;
@@ -1209,6 +1296,29 @@ mod tests {
             mount_path: String::from("frontend/node_modules"),
             mode: PreparationOutputMode::Seeded,
         }
+    }
+
+    #[test]
+    fn unpacks_cross_workspace_node_symlink_without_following_it() {
+        let root = test_directory("node-workspace-archive");
+        let state = root.join("state");
+        let mut archive = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_mode(0o777);
+        header.set_size(0);
+        archive
+            .append_link(&mut header, "@example/greeting", "../../libs/greeting")
+            .expect("archive symlink");
+        let archive = archive.into_inner().expect("archive bytes");
+
+        unpack_container_archive(&archive[..], &state).expect("unpack archive");
+
+        assert_eq!(
+            fs::read_link(state.join("@example/greeting")).expect("workspace symlink"),
+            Path::new("../../libs/greeting")
+        );
+        fs::remove_dir_all(root).expect("remove test directory");
     }
 
     #[test]
