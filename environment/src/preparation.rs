@@ -10,11 +10,10 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const INPUT_ROOT: &str = "/tmp/ayni/repository";
 pub(crate) const SEED_ROOT: &str = "/opt/ayni/dependencies";
-const PREPARATION_IMPLEMENTATION_VERSION: &str = "9";
+pub(crate) const CACHE_SEED_ROOT: &str = "/opt/ayni/cache-seed";
+const PREPARATION_IMPLEMENTATION_VERSION: &str = "10";
 fn prepared_cache_copy(stage: &str) -> String {
-    format!(
-        "COPY --from={stage} --chown=10001:10001 --chmod=0755 /home/ayni/.cache /home/ayni/.cache\n"
-    )
+    format!("COPY --from={stage} --chown=10001:10001 /home/ayni/.cache {CACHE_SEED_ROOT}\n")
 }
 
 pub(crate) fn dockerfile_fragment(
@@ -397,10 +396,11 @@ mod tests {
     }
 
     #[test]
-    fn prepared_cache_copy_is_readable_and_writable_without_a_metadata_layer() {
+    fn prepared_cache_copy_keeps_the_immutable_seed_outside_the_runtime_cache_path() {
         let fragment = prepared_cache_copy("preparation-group");
         assert!(fragment.contains("--chown=10001:10001"));
-        assert!(fragment.contains("--chmod=0755"));
+        assert!(fragment.contains(CACHE_SEED_ROOT));
+        assert!(!fragment.contains("--chmod"));
         assert!(!fragment.contains("RUN chmod"));
         assert!(!fragment.contains("USER root"));
     }

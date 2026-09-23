@@ -149,10 +149,13 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     write_executable(
         &root.path().join("bin/docker"),
         &format!(
-            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) printf '%s\\n' \"$@\" > '{}' ; context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; cat \"$context/mise.toml\" > '{}.mise'; find \"$context/groups\" -type f | sed \"s|$context/groups/[^/]*/||\" | sort > '{}.inputs'; touch '{}.built';;\nrun) printf '%s\\n' \"$@\" > '{}.run'; printf '%s\\n' \"$@\" | grep -qx -e cp -e copy-image-tree && exit 0; exit 7;;\nesac",
+            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) printf '%s\\n' \"$@\" > '{}' ; context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; cat \"$context/mise.toml\" > '{}.mise'; find \"$context/groups\" -type f | sed \"s|$context/groups/[^/]*/||\" | sort > '{}.inputs'; touch '{}.built';;\ncreate) echo create >> '{}.materialization'; printf 'a1b2c3\\n';;\ncp) [ \"$3\" = - ] || exit 9; echo cp >> '{}.materialization';;\nrm) echo rm >> '{}.materialization'; exit 0;;\nrun) printf '%s\\n' \"$@\" > '{}.run'; exit 7;;\nesac",
             record.display(),
             record.display(),
             labels,
+            record.display(),
+            record.display(),
+            record.display(),
             record.display(),
             record.display(),
             record.display(),
@@ -198,9 +201,7 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
         "RUN [\"rustup\",\"component\",\"add\",\"--toolchain\",\"1.93.0\",\"llvm-tools-preview\"]"
     ));
     assert!(dockerfile.contains("FROM ayni-runtime AS preparation-"));
-    assert!(
-        dockerfile.contains("--chown=10001:10001 --chmod=0755 /home/ayni/.cache /home/ayni/.cache")
-    );
+    assert!(dockerfile.contains("--chown=10001:10001 /home/ayni/.cache /opt/ayni/cache-seed"));
     assert!(!dockerfile.contains("RUN chmod -R a+rX /home/ayni/.cache"));
     assert!(dockerfile.contains("\"cargo\",\"fetch\",\"--locked\""));
     assert!(!dockerfile.contains(&root.path().display().to_string()));
@@ -257,6 +258,16 @@ fn build_and_run_use_a_fake_docker_without_baking_the_checkout() {
     assert_eq!(run.status.code(), Some(7));
     assert!(String::from_utf8_lossy(&run.stderr).contains("exited with code 7"));
     let recorded = fs::read_to_string(format!("{}.run", record.display())).unwrap();
+    let materialization =
+        fs::read_to_string(format!("{}.materialization", record.display())).unwrap();
+    let operations = materialization.lines().collect::<Vec<_>>();
+    assert!(!operations.is_empty());
+    assert!(
+        operations
+            .chunks(3)
+            .all(|operations| operations == ["create", "cp", "rm"]),
+        "unexpected materialization operations: {materialization}"
+    );
     assert!(recorded.contains("--network\nnone"));
     assert!(recorded.contains("--cpus\n4"));
     assert!(recorded.contains("--memory\n8192m"));
@@ -496,7 +507,7 @@ fn npm_dependencies_are_staged_materialized_offline_and_mounted_for_managed_qual
     write_executable(
         &bin.join("docker"),
         &format!(
-            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; find \"$context/groups\" -type f | sed \"s|$context/groups/[^/]*/||\" | sort > '{}.inputs'; touch '{}.built';;\nrun) printf '%s\\n' \"$@\" >> '{}.runs'; if printf '%s\\n' \"$@\" | grep -qx npm && [ ! -f '{}.rebuild-failed' ]; then touch '{}.rebuild-failed'; exit 9; fi; printf '%s\\n' \"$@\" | grep -Eq '^(check|verify)$' && exit 1; printf '%s\\n' \"$@\" | grep -q -- '--entrypoint' && exit 0; exit 1;;\nesac",
+            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; find \"$context/groups\" -type f | sed \"s|$context/groups/[^/]*/||\" | sort > '{}.inputs'; touch '{}.built';;\ncreate) printf 'a1b2c3\\n';;\ncp) :;;\nrm) exit 0;;\nrun) printf '%s\\n' \"$@\" >> '{}.runs'; if printf '%s\\n' \"$@\" | grep -qx npm && [ ! -f '{}.rebuild-failed' ]; then touch '{}.rebuild-failed'; exit 9; fi; printf '%s\\n' \"$@\" | grep -Eq '^(check|verify)$' && exit 1; printf '%s\\n' \"$@\" | grep -q -- '--entrypoint' && exit 0; exit 1;;\nesac",
             record.display(),
             record.display(),
             labels,
@@ -629,7 +640,7 @@ fn pnpm_workspace_materializes_all_node_modules_trees_in_one_offline_run() {
     write_executable(
         &bin.join("docker"),
         &format!(
-            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; touch '{}.built';;\nrun) {{ echo BEGIN; printf '%s\\n' \"$@\"; echo END; }} >> '{}.runs'; printf '%s\\n' \"$@\" | grep -Eq '^(check|verify)$' && exit 1; printf '%s\\n' \"$@\" | grep -q -- '--entrypoint' && exit 0; exit 1;;\nesac",
+            "case \"$1\" in\nversion) echo fake;;\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\" ;;\nbuild) context=''; file=''; shift; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; touch '{}.built';;\ncreate) printf 'a1b2c3\\n';;\ncp) :;;\nrm) exit 0;;\nrun) {{ echo BEGIN; printf '%s\\n' \"$@\"; echo END; }} >> '{}.runs'; printf '%s\\n' \"$@\" | grep -Eq '^(check|verify)$' && exit 1; printf '%s\\n' \"$@\" | grep -q -- '--entrypoint' && exit 0; exit 1;;\nesac",
             record.display(),
             record.display(),
             labels,
@@ -816,7 +827,7 @@ fn five_language_build_composes_preparation_without_staging_source() {
     write_executable(
         &bin.join("docker"),
         &format!(
-            "case \"$1\" in\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\";;\nbuild) shift; file=''; context=''; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; cat \"$context/mise.toml\" > '{}.mise'; find \"$context/groups\" -type f | sed \"s|$context/groups/[^/]*/||\" | sort > '{}.inputs'; touch '{}.built';;\nrun) printf '%s\\n' \"$@\" > '{}.run';;\nesac\nexit 0",
+            "case \"$1\" in\nimage) [ -f '{}.built' ] || exit 1; preparation=$(cat '{}.preparation'); printf '%s\\n' '{}' | sed \"s|PREPARATION_DIGEST|$preparation|g\";;\nbuild) shift; file=''; context=''; while [ $# -gt 0 ]; do if [ \"$1\" = \"--file\" ]; then shift; file=$1; else context=$1; fi; shift; done; cat \"$file\" > '{}.dockerfile'; sed -n 's/.*dev.ayni.environment.preparation-digest=\"\\([^\"]*\\)\".*/\\1/p' \"$file\" > '{}.preparation'; cat \"$context/mise.toml\" > '{}.mise'; find \"$context/groups\" -type f | sed \"s|$context/groups/[^/]*/||\" | sort > '{}.inputs'; touch '{}.built';;\ncreate) printf 'a1b2c3\\n';;\ncp) :;;\nrm) exit 0;;\nrun) printf '%s\\n' \"$@\" > '{}.run';;\nesac\nexit 0",
             record.display(),
             record.display(),
             labels,
@@ -1106,6 +1117,28 @@ fn storage_prune_separates_repo_state_from_engine_wide_images() {
     assert!(!stale_state.exists());
     assert!(current_state.exists());
 
+    let current_preview = command(&root, &["env", "prune", "--repo-root"])
+        .arg(root.path())
+        .arg("--current")
+        .output()
+        .unwrap();
+    assert!(current_preview.status.success());
+    assert!(String::from_utf8_lossy(&current_preview.stdout).contains("included with --current"));
+    assert!(current_state.exists());
+
+    let current_applied = command(&root, &["env", "prune", "--repo-root"])
+        .arg(root.path())
+        .args(["--apply", "--current"])
+        .output()
+        .unwrap();
+    assert!(
+        current_applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&current_applied.stderr)
+    );
+    assert!(!current_state.exists());
+    assert!(unclassified_state.exists());
+
     let images_applied = command(&root, &["env", "prune", "--repo-root"])
         .arg(root.path())
         .args(["--apply", "--images"])
@@ -1121,7 +1154,7 @@ fn storage_prune_separates_repo_state_from_engine_wide_images() {
             .contains("explicitly selected with --images")
     );
     assert_eq!(fs::read_to_string(&removed).unwrap().trim(), "sha256:stale");
-    assert!(current_state.exists());
+    assert!(!current_state.exists());
 }
 
 fn assert_executor_build_contract(root: &TempDir) {

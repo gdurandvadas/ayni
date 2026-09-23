@@ -99,7 +99,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "ayni-adapters-common"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "ayni-core",
  "glob",
@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-go"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-kotlin"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
@@ -138,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-node"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-python"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-adapters-rust"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-cli"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "ayni-adapters-common",
  "ayni-adapters-go",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "ayni-core"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -222,13 +222,14 @@ dependencies = [
 
 [[package]]
 name = "ayni-environment"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "ayni-adapters-common",
  "ayni-core",
  "libc",
  "serde",
  "serde_json",
+ "tar",
  "tempfile",
 ]
 
@@ -646,6 +647,16 @@ dependencies = [
  "libc",
  "thiserror 1.0.69",
  "winapi",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
@@ -1709,6 +1720,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2323,6 +2345,16 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix",
 ]
 
 [[package]]

@@ -384,7 +384,7 @@ impl EnvStorageOptions {
 
 #[derive(Args, Debug)]
 struct EnvPruneOptions {
-    /// Repository root whose current environment is retained.
+    /// Repository root whose current environment is retained unless --current is set.
     #[arg(long, default_value = ".")]
     repo_root: PathBuf,
     /// Render a human-readable report or one JSON document.
@@ -400,6 +400,12 @@ struct EnvPruneOptions {
     /// stale state is selected for removal.
     #[arg(long)]
     images: bool,
+    /// Include the current repository-local environment state.
+    ///
+    /// The next managed command recreates it from the locked image. Current
+    /// images remain retained because they can be shared across repositories.
+    #[arg(long)]
+    current: bool,
 }
 
 impl EnvPruneOptions {
@@ -409,6 +415,7 @@ impl EnvPruneOptions {
             output: self.output.into(),
             apply: self.apply,
             images: self.images,
+            current: self.current,
         }
     }
 }
@@ -817,6 +824,16 @@ mod tests {
         assert_eq!(prune.output, OutputFormat::Human);
         assert!(prune.apply);
         assert!(prune.images);
+        assert!(!prune.current);
+
+        let Operation::EnvPrune(current) =
+            Cli::try_parse_from(["ayni", "env", "prune", "--current"])
+                .expect("current prune arguments")
+                .into_operation()
+        else {
+            panic!("current prune operation");
+        };
+        assert!(current.current);
 
         let Operation::EnvPrune(defaults) = Cli::try_parse_from(["ayni", "env", "prune"])
             .expect("default prune arguments")
@@ -826,6 +843,7 @@ mod tests {
         };
         assert!(!defaults.apply);
         assert!(!defaults.images);
+        assert!(!defaults.current);
     }
 
     #[test]

@@ -77,6 +77,7 @@ pub(crate) fn prune(operation: EnvPruneOperation, registry: &AdapterRegistry) ->
             &preparations,
             operation.apply,
             operation.images,
+            operation.current,
         )
     })();
     match result {
@@ -222,6 +223,16 @@ fn render_storage_prune(result: &ayni_environment::StoragePruneResult) -> String
         output,
         "Repository-local state candidates: {} managed-state path(s)",
         state_candidates.len()
+    )
+    .expect("string write");
+    writeln!(
+        output,
+        "Current repository state: {}",
+        if result.current_state_requested {
+            "included with --current; it will be recreated from the lock on the next managed command"
+        } else {
+            "retained; add --current to include it"
+        }
     )
     .expect("string write");
     writeln!(
@@ -967,6 +978,7 @@ mod tests {
         let result = StoragePruneResult {
             applied: false,
             images_requested: false,
+            current_state_requested: false,
             report: storage_fixture(),
             removed_images: Vec::new(),
             removed_state_generations: Vec::new(),
@@ -977,6 +989,7 @@ mod tests {
         assert!(rendered.contains("No data was removed"));
         assert!(rendered.contains("Rerun with --apply"));
         assert!(rendered.contains("not selected; add --images"));
+        assert!(rendered.contains("retained; add --current to include it"));
     }
 
     fn storage_fixture() -> StorageReport {

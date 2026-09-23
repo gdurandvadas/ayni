@@ -76,7 +76,7 @@ one implicitly.
 | `ayni env doctor` | Validate the lock, engine, image, and prepared state | Read-only |
 | `ayni env build` | Build the image and prepare locked dependencies | Updates the image and `.ayni/environment/build.json` |
 | `ayni env storage` | Report Ayni images and repository-local environment state | Read-only |
-| `ayni env prune` | Preview stale environment state and engine-wide Ayni image candidates | Dry-run by default; `--apply` removes repository state, while image removal also requires `--images` |
+| `ayni env prune` | Preview stale environment state and engine-wide Ayni image candidates | Dry-run by default; `--apply` removes stale repository state, `--current` also resets the current derived state, and image removal also requires `--images` |
 | `ayni env shell` | Open an interactive shell for one locked target | May materialize `.ayni/environment/`; checkout is read-write |
 | `ayni env run -- <command>` | Run an arbitrary command for one locked target | May materialize `.ayni/environment/`; checkout is read-write |
 
@@ -103,6 +103,11 @@ Commit `.ayni.lock` so humans, agents, and CI use the same resolved environment.
 Docker or Podman stores the generated OCI image; Ayni stores materialized
 caches, dependencies, and execution state below `.ayni/environment/`. Generated
 state must not be committed.
+
+When a managed command needs prepared state, Ayni reads the locked image through
+the container engine's archive interface and unpacks it itself. It does not run
+image code for that transfer, and the resulting repository-local state is owned
+by the invoking user so it can be recreated on any compatible host.
 
 ## Plan and lock
 
@@ -275,6 +280,14 @@ plus the persistent runtime `home` below a non-current lock fingerprint, as
 repository-local candidates. `ayni env prune --apply` removes that stale state,
 including old persistent compiler caches. The current state paths and
 unclassified files remain untouched.
+
+To reclaim the current repository's derived cache and persistent runtime home,
+preview `ayni env prune --current` and then run `ayni env prune --apply
+--current`. This removes only classified Ayni state below `.ayni/environment/`;
+the next managed command recreates it from the committed lock and current image.
+It never removes source files, `.ayni.lock`, result artifacts, or unclassified
+data. The current image remains retained because an exact Ayni image can be
+shared by multiple repositories.
 
 Pruning is not a synchronization boundary. Run it only while managed commands
 are stopped and no host process is mutating `.ayni/environment/`. Ayni validates
