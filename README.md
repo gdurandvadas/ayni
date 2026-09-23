@@ -1,5 +1,10 @@
 # Ayni
 
+> **This repository has moved.** Active development now lives in the
+> [`ayni-oss/ayni`](https://github.com/ayni-oss/ayni). This
+> repository is retained as a historical reference and will no longer receive
+> feature work. Please open issues and contribute changes in the new project.
+
 Ayni is a local quality protocol for repositories that use AI agents.
 Maintainers commit policy, Ayni runs repository tools in a reproducible managed
 environment, and agents receive scoped, actionable evidence.
