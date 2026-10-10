@@ -28,7 +28,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: python3 scripts/ci/coordinate.py plan --plan "$RUNNER_TEMP/required-work/plan.json" --source "$GITHUB_SHA" --base "$BASE_SHA"
       - name: Publish required job inventory
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: required-work
           path: ${{ runner.temp }}/required-work/plan.json
@@ -62,7 +62,7 @@ jobs:
         run: python3 scripts/ci/timed.py --output "$RUNNER_TEMP/candidate/timings.jsonl" --stage candidate-build -- bash scripts/ci/build-candidate.sh "$RUNNER_TEMP/candidate" "$PLATFORM"
       - name: Export candidate and failure diagnostics
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: candidate-${{ matrix.arch }}
           path: ${{ runner.temp }}/candidate/
@@ -111,7 +111,7 @@ jobs:
           cmp "$evidence/generated.json" "$evidence/regenerated.json"
       - name: Retain complete lock evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: managed-lock-${{ matrix.arch }}
           path: ${{ runner.temp }}/managed-lock-${{ matrix.arch }}/
